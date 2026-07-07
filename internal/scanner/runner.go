@@ -191,12 +191,15 @@ func buildArgs(targetsFile, out string, spec types.ScanSpec) []string {
 	return args
 }
 
-// syncTemplates pulls the community/custom template set. Best-effort: on first
-// run Nuclei fetches templates automatically, so a failure here is non-fatal.
+// syncTemplates installs/updates the community template set before a scan.
+// NOTE: we must NOT pass -disable-update-check here — that flag suppresses the
+// template install itself, so on a fresh node templates never land and the scan
+// aborts with "no templates provided for scan". Best-effort otherwise: once
+// templates exist, a failed refresh (e.g. offline) should not block scanning.
 func (r *Runner) syncTemplates() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, r.nucleiPath, "-update-templates", "-disable-update-check")
+	cmd := exec.CommandContext(ctx, r.nucleiPath, "-update-templates")
 	_ = cmd.Run()
 }
 

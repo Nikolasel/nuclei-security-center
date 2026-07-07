@@ -61,15 +61,40 @@ curl -s localhost:8080/scans/<scan_id>
 curl -s "localhost:8080/findings?scan_id=<scan_id>" | jq
 ```
 
-You can override the target/templates by POSTing a scan spec:
+You can override the target/templates with an ad-hoc spec (note the `spec` wrapper):
 
 ```sh
 curl -s -X POST localhost:8080/scans -H 'content-type: application/json' -d '{
-  "targets": ["scanme.sh"],
-  "templates": {"severities": ["info","low"], "tags": ["tech"]},
-  "options": {"rate_limit": 150, "concurrency": 25, "timeout_sec": 600}
+  "spec": {
+    "targets": ["scanme.sh"],
+    "templates": {"severities": ["info","low"], "tags": ["tech"]},
+    "options": {"rate_limit": 150, "concurrency": 25, "timeout_sec": 600}
+  }
 }'
 ```
+
+## Config API (Phase 1)
+
+Manage reusable **targets** (a named host allowlist) and **template sets** (severity/
+tag/path filters + optional pinned git ref), then launch scans from them.
+
+```sh
+# create a target (the hosts list is the scope allowlist)
+curl -s -X POST localhost:8080/targets -d '{"name":"prod-web","hosts":["scanme.sh"],"tags":["prod"]}'
+
+# create a template set
+curl -s -X POST localhost:8080/template-sets -d '{"name":"info","severities":["info","low"]}'
+
+# launch a scan from stored config
+curl -s -X POST localhost:8080/scans -d '{"target_id":"<id>","template_set_id":"<id>"}'
+```
+
+Both resources support the full REST set: `GET|POST /targets`,
+`GET|PUT|DELETE /targets/{id}` (and likewise `/template-sets`). Deleting a target or
+template set nulls the link on past scans but never deletes scan history.
+
+> Auth (OIDC/BFF) and the React SPA land in the next Phase 1 slices; these endpoints
+> are currently unauthenticated.
 
 ## Develop
 

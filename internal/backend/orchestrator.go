@@ -35,10 +35,11 @@ func NewOrchestrator(st *store.Store, client *ScannerClient, log *slog.Logger) *
 	}
 }
 
-// Submit records a scan, then runs the dispatch/poll/ingest loop in the
-// background. It returns the backend scan id immediately.
-func (o *Orchestrator) Submit(ctx context.Context, spec types.ScanSpec) (string, error) {
-	scanID, err := o.store.CreateScan(ctx, spec)
+// Submit records a scan (optionally linked to the config it came from), then
+// runs the dispatch/poll/ingest loop in the background. It returns the backend
+// scan id immediately.
+func (o *Orchestrator) Submit(ctx context.Context, spec types.ScanSpec, link store.ScanLink) (string, error) {
+	scanID, err := o.store.CreateScan(ctx, spec, link)
 	if err != nil {
 		return "", err
 	}

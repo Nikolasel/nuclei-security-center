@@ -87,16 +87,24 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return nil
 }
 
+// ScanLink optionally ties a scan to the stored config it came from. Empty
+// fields mean an ad-hoc scan not linked to a target/template set.
+type ScanLink struct {
+	TargetID      string
+	TemplateSetID string
+}
+
 // CreateScan inserts a new scan in the queued state and returns its id.
-func (s *Store) CreateScan(ctx context.Context, spec types.ScanSpec) (string, error) {
+func (s *Store) CreateScan(ctx context.Context, spec types.ScanSpec, link ScanLink) (string, error) {
 	id := types.NewID()
 	specJSON, err := json.Marshal(spec)
 	if err != nil {
 		return "", fmt.Errorf("marshal spec: %w", err)
 	}
 	_, err = s.pool.Exec(ctx,
-		`INSERT INTO scans (id, state, spec) VALUES ($1, $2, $3)`,
-		id, types.ScanQueued, specJSON,
+		`INSERT INTO scans (id, state, spec, target_id, template_set_id)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		id, types.ScanQueued, specJSON, nullStr(link.TargetID), nullStr(link.TemplateSetID),
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert scan: %w", err)

@@ -1,0 +1,18 @@
+# syntax=docker/dockerfile:1
+
+# ---- build the scanner binary ----
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -o /out/scanner ./cmd/scanner
+
+# ---- runtime: the official Nuclei image ships the nuclei binary + updater,
+#      so the node needs nothing else to sync templates and run scans ----
+FROM projectdiscovery/nuclei:latest
+COPY --from=build /out/scanner /usr/local/bin/scanner
+ENV NUCLEI_PATH=nuclei \
+    SCANNER_WORK_DIR=/tmp/nuclei-scans
+EXPOSE 8081
+ENTRYPOINT ["/usr/local/bin/scanner"]

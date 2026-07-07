@@ -1,0 +1,15 @@
+# Binaries (root-level build output only — must not match cmd/backend, cmd/scanner)
+/bin/
+/out/
+/backend
+/scanner
+*.exe
+
+# Local env / secrets
+.env
+
+# Go
+/vendor/
+
+# OS
+.DS_Store

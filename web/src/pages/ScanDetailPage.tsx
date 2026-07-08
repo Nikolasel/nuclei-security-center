@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
-import { FindingsView } from "../components/FindingsView";
+import { ScanFindingsView } from "../components/ScanFindingsView";
 import { Card, ErrorText, Spinner, StateBadge } from "../components/ui";
 
 export function ScanDetailPage() {
@@ -67,7 +67,7 @@ export function ScanDetailPage() {
       {!done ? (
         <p className="text-sm text-neutral-500">Findings appear here once the scan finishes.</p>
       ) : (
-        <FindingsView scanId={id} />
+        <ScanFindingsView scanId={id} />
       )}
     </div>
   );

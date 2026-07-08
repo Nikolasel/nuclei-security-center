@@ -140,18 +140,6 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 	return err
 }
 
-// InsertFinding stores one parsed finding plus its verbatim raw JSON line. CVE
-// ids and tags are promoted to columns (from the parsed struct) for filtering.
-func (s *Store) InsertFinding(ctx context.Context, scanID string, f types.NucleiFinding, raw []byte) error {
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO findings (scan_id, template_id, name, severity, host, matched_at, type, cve, tags, raw)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		scanID, f.TemplateID, f.Info.Name, f.Info.Severity, f.Host, f.MatchedAt, f.Type,
-		orEmpty(f.CVEs()), orEmpty(f.Info.Tags), raw,
-	)
-	return err
-}
-
 // ScanRow is a scan as returned to API callers.
 type ScanRow struct {
 	ID              string     `json:"id"`
@@ -212,10 +200,13 @@ func (s *Store) ListScans(ctx context.Context, limit int) ([]ScanRow, error) {
 	return out, rows.Err()
 }
 
-// FindingRow is a finding as returned to API callers.
+// FindingRow is a single per-scan occurrence as returned to API callers (the
+// scan-detail view). FindingID links it to the deduplicated lifecycle entity so
+// the UI can navigate to the tracked finding.
 type FindingRow struct {
 	ID         int64     `json:"id"`
 	ScanID     string    `json:"scan_id"`
+	FindingID  *int64    `json:"finding_id,omitempty"`
 	TemplateID string    `json:"template_id"`
 	Name       string    `json:"name"`
 	Severity   string    `json:"severity"`
@@ -299,7 +290,7 @@ func (s *Store) ListFindings(ctx context.Context, f FindingFilter) ([]FindingRow
 	limitPH := push(f.Limit)
 	offsetPH := push(f.Offset)
 	query := fmt.Sprintf(
-		`SELECT id, scan_id, template_id, name, severity, host, matched_at, type, cve, tags, created_at
+		`SELECT id, scan_id, finding_id, template_id, name, severity, host, matched_at, type, cve, tags, created_at
 		 FROM findings %s ORDER BY %s DESC, id DESC LIMIT $%d OFFSET $%d`,
 		where, severityOrder, limitPH, offsetPH)
 	rows, err := s.pool.Query(ctx, query, args...)
@@ -311,37 +302,13 @@ func (s *Store) ListFindings(ctx context.Context, f FindingFilter) ([]FindingRow
 	var out []FindingRow
 	for rows.Next() {
 		var fr FindingRow
-		if err := rows.Scan(&fr.ID, &fr.ScanID, &fr.TemplateID, &fr.Name, &fr.Severity,
+		if err := rows.Scan(&fr.ID, &fr.ScanID, &fr.FindingID, &fr.TemplateID, &fr.Name, &fr.Severity,
 			&fr.Host, &fr.MatchedAt, &fr.Type, &fr.CVE, &fr.Tags, &fr.CreatedAt); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, fr)
 	}
 	return out, total, rows.Err()
-}
-
-// FindingDetail is a single finding with its verbatim raw Nuclei JSON, for the
-// vulnerability detail view.
-type FindingDetail struct {
-	FindingRow
-	Raw json.RawMessage `json:"raw"`
-}
-
-// GetFinding returns one finding by id (including the raw payload), or ErrNotFound.
-func (s *Store) GetFinding(ctx context.Context, id int64) (FindingDetail, error) {
-	var d FindingDetail
-	err := s.pool.QueryRow(ctx,
-		`SELECT id, scan_id, template_id, name, severity, host, matched_at, type, created_at, raw
-		 FROM findings WHERE id = $1`, id,
-	).Scan(&d.ID, &d.ScanID, &d.TemplateID, &d.Name, &d.Severity, &d.Host,
-		&d.MatchedAt, &d.Type, &d.CreatedAt, &d.Raw)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return FindingDetail{}, ErrNotFound
-		}
-		return FindingDetail{}, err
-	}
-	return d, nil
 }
 
 func deref(p *string) string {

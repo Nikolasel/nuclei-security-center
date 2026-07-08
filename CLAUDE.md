@@ -12,8 +12,20 @@ Repo: `git@github.com:Nikolasel/nuclei-security-center.git`.
 Read it before making architectural changes. `README.md` covers running the stack.
 
 Current status: **Phase 1 is complete** (targets/template-set CRUD, scan-from-config,
-OIDC/BFF auth with IdP-driven roles, and the React SPA). Phase 2 (scheduling + finding
-lifecycle) is next. See §8 of the architecture doc.
+OIDC/BFF auth with IdP-driven roles, and the React SPA). **Phase 2 is in progress** — the
+**finding-lifecycle** slice is done (dedup + first/last-seen + triage status + new/resolved
+views); **scheduling** and **exports** are the remaining Phase 2 slices. See §8 of the
+architecture doc.
+
+**Findings are two tables now (Phase 2):** `findings` is the immutable per-scan
+**occurrence** log (holds the verbatim raw JSONL; answers "what did scan X observe");
+`finding_lifecycle` is the **deduplicated** entity keyed on `(target_id, template_id,
+matched_at)` that users triage — its status survives across scans. Ingest inserts an
+occurrence and upserts the lifecycle row (`store.IngestFinding`); a finding marked `fixed`
+is auto-reopened on re-observation. "Resolved/gone" and "new" are **derived at read time**
+(vs. the target's latest completed scan), never stored. `GET /api/findings` = lifecycle
+view; `GET /api/scans/{id}/findings` = occurrences; `PATCH /api/findings/{id}/status` =
+triage (operator).
 
 The JSON API is served under **`/api/*`**; the React SPA (in `web/`) is built by Vite and
 **embedded into the backend binary** (`go:embed`), served at `/` same-origin so the BFF

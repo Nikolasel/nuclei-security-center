@@ -1,6 +1,11 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import clsx from "clsx";
-import type { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode } from "react";
+import type {
+  ButtonHTMLAttributes,
+  InputHTMLAttributes,
+  ReactNode,
+  SelectHTMLAttributes,
+} from "react";
 
 export function cn(...parts: Array<string | false | undefined | null>) {
   return clsx(parts);
@@ -82,6 +87,59 @@ export function StateBadge({ state }: { state: string }) {
     >
       {state}
     </span>
+  );
+}
+
+const statusStyles: Record<string, string> = {
+  open: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+  triaged: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300",
+  false_positive: "bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400",
+  fixed: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300",
+};
+
+const statusLabels: Record<string, string> = {
+  open: "Open",
+  triaged: "Triaged",
+  false_positive: "False positive",
+  fixed: "Fixed",
+};
+
+/** StatusBadge renders a finding's manual triage status. */
+export function StatusBadge({ status }: { status: string }) {
+  return (
+    <span
+      className={cn(
+        "inline-block rounded px-1.5 py-0.5 text-xs font-medium",
+        statusStyles[status] ?? "bg-neutral-100 text-neutral-700",
+      )}
+    >
+      {statusLabels[status] ?? status}
+    </span>
+  );
+}
+
+/** Pill is a small outlined marker used for derived facets (New / Resolved). */
+export function Pill({ children, tone }: { children: ReactNode; tone: "new" | "resolved" }) {
+  const styles =
+    tone === "new"
+      ? "border-indigo-300 text-indigo-700 dark:border-indigo-800 dark:text-indigo-300"
+      : "border-emerald-300 text-emerald-700 dark:border-emerald-800 dark:text-emerald-300";
+  return (
+    <span className={cn("inline-block rounded-full border px-2 py-0.5 text-xs font-medium", styles)}>
+      {children}
+    </span>
+  );
+}
+
+export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectElement>) {
+  return (
+    <select
+      className={cn(
+        "rounded-md border border-neutral-300 bg-white px-2 py-1.5 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-neutral-700 dark:bg-neutral-800",
+        className,
+      )}
+      {...props}
+    />
   );
 }
 

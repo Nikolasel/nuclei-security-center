@@ -255,7 +255,7 @@ Status legend: ✅ done · 🔜 next · ⬜ planned. Each phase ends at a demoab
 |---|---|---|---|
 | **0** | Core loop (the spine) | ✅ done | ~3–4 days |
 | **1** | CRUD + on-demand scans + auth + SPA | ✅ done | ~2–2.5 wks |
-| **2** | Scheduling + finding lifecycle | 🔜 next | ~1–1.5 wks |
+| **2** | Scheduling + finding lifecycle | 🔜 in progress | ~1–1.5 wks |
 | **3** | Storage + guardrails + RBAC | ⬜ | ~1 wk |
 | **4** | Cloud deploy + hardening | ⬜ | ~1–1.5 wks |
 
@@ -299,16 +299,25 @@ The first genuinely usable product slice.
 - **Exit criteria (met):** a logged-in user defines a target + template set in the UI,
   runs a scan, and browses the resulting findings.
 
-### Phase 2 — Scheduling + finding lifecycle ⬜  (~1–1.5 wks)
+### Phase 2 — Scheduling + finding lifecycle 🔜  (~1–1.5 wks)
 
-Turns point-in-time scans into a tracked signal.
+Turns point-in-time scans into a tracked signal. Built in three slices, one PR each.
 
-- **Scheduling:** cron schedules in the backend ticker → dispatch (the `schedules` table
-  from §3), enable/disable in the UI.
-- **Lifecycle:** finding dedup keyed on `(target, template, matched_at)` with
-  `first_seen`/`last_seen`; "new since last scan" and "resolved" views; triage status
-  (open / triaged / false_positive / fixed).
-- **Exports:** JSON / SARIF / CSV (Nuclei emits the first two natively).
+- **Lifecycle:** ✅ *(slice 1)* — findings split into two tables: `findings` stays the
+  immutable per-scan **occurrence** log (raw JSONL preserved), and a new
+  `finding_lifecycle` is the **deduplicated** entity keyed on `(target_id, template_id,
+  matched_at)` (migration 0005). Ingest inserts an occurrence + upserts the lifecycle row
+  (`first_seen`/`last_seen`, denormalised latest display fields); a finding marked `fixed`
+  is auto-reopened when re-observed. Triage `status` (open / triaged / false_positive /
+  fixed) lives on the lifecycle entity so it survives across scans. **"new since last
+  scan"** and **"resolved/gone"** are derived at read time (vs. the target's latest
+  completed scan) so they never go stale. API: `GET /api/findings` (dedup view, with
+  `status`/`view` filters), `GET /api/scans/{id}/findings` (occurrences),
+  `PATCH /api/findings/{id}/status` (operator). SPA: view tabs (All/Open/New/Resolved),
+  status filter, and a triage panel on the detail page.
+- **Scheduling:** ⬜ *(slice 2)* — cron schedules in the backend ticker → dispatch (the
+  `schedules` table from §3), enable/disable in the UI.
+- **Exports:** ⬜ *(slice 3)* — JSON / SARIF / CSV (Nuclei emits the first two natively).
 - **Exit criteria:** a nightly schedule runs unattended; the UI shows what's new vs.
   resolved between runs and lets a user triage a finding.
 

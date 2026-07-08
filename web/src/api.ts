@@ -43,9 +43,12 @@ export interface Scan {
   finished_at?: string;
 }
 
-export interface Finding {
+// Occurrence is one per-scan observation (the immutable scan-detail row). It
+// links to its deduplicated lifecycle finding via finding_id.
+export interface Occurrence {
   id: number;
   scan_id: string;
+  finding_id?: number;
   template_id: string;
   name: string;
   severity: string;
@@ -57,15 +60,65 @@ export interface Finding {
   created_at: string;
 }
 
-export interface FindingsPage {
-  items: Finding[];
+export type FindingStatus = "open" | "triaged" | "false_positive" | "fixed";
+
+export const FINDING_STATUSES: FindingStatus[] = ["open", "triaged", "false_positive", "fixed"];
+
+export const STATUS_LABELS: Record<FindingStatus, string> = {
+  open: "Open",
+  triaged: "Triaged",
+  false_positive: "False positive",
+  fixed: "Fixed",
+};
+
+// LifecycleFinding is the deduplicated, triageable entity keyed on
+// (target, template, matched_at). `resolved` (gone in the target's latest scan)
+// and `new` (first seen in that scan) are derived server-side.
+export interface LifecycleFinding {
+  id: number;
+  target_id?: string;
+  template_id: string;
+  name: string;
+  severity: string;
+  host: string;
+  matched_at: string;
+  type: string;
+  cve: string[];
+  tags: string[];
+  status: FindingStatus;
+  resolved: boolean;
+  new: boolean;
+  first_seen_scan?: string;
+  last_seen_scan?: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  latest_occurrence_id?: number;
+}
+
+export interface Page<T> {
+  items: T[];
   total: number;
   limit: number;
   offset: number;
 }
 
+/** view narrows the findings list: new/resolved/open are derived cuts. */
+export type FindingsView = "all" | "open" | "new" | "resolved";
+
 export interface FindingsQuery {
-  scanId?: string;
+  targetId?: string;
+  q?: string;
+  severities?: string[];
+  host?: string;
+  cve?: string;
+  tag?: string;
+  status?: FindingStatus;
+  view?: FindingsView;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ScanFindingsQuery {
   q?: string;
   severities?: string[];
   host?: string;
@@ -112,8 +165,11 @@ export interface NucleiRaw {
   [key: string]: unknown;
 }
 
-export interface FindingDetail extends Finding {
-  raw: NucleiRaw;
+export interface FindingDetail extends LifecycleFinding {
+  status_note?: string;
+  status_by?: string;
+  status_at?: string;
+  raw?: NucleiRaw;
 }
 
 export class ApiError extends Error {
@@ -164,7 +220,25 @@ export const api = {
 
   listFindings: (q: FindingsQuery = {}) => {
     const p = new URLSearchParams();
-    if (q.scanId) p.set("scan_id", q.scanId);
+    if (q.targetId) p.set("target_id", q.targetId);
+    if (q.q) p.set("q", q.q);
+    if (q.severities?.length) p.set("severity", q.severities.join(","));
+    if (q.host) p.set("host", q.host);
+    if (q.cve) p.set("cve", q.cve);
+    if (q.tag) p.set("tag", q.tag);
+    if (q.status) p.set("status", q.status);
+    if (q.view && q.view !== "all") p.set("view", q.view);
+    if (q.limit != null) p.set("limit", String(q.limit));
+    if (q.offset != null) p.set("offset", String(q.offset));
+    const qs = p.toString();
+    return request<Page<LifecycleFinding>>("GET", qs ? `/api/findings?${qs}` : "/api/findings");
+  },
+  getFinding: (id: number | string) => request<FindingDetail>("GET", `/api/findings/${id}`),
+  updateFindingStatus: (id: number | string, body: { status: FindingStatus; note?: string }) =>
+    request<FindingDetail>("PATCH", `/api/findings/${id}/status`, body),
+
+  listScanFindings: (scanId: string, q: ScanFindingsQuery = {}) => {
+    const p = new URLSearchParams();
     if (q.q) p.set("q", q.q);
     if (q.severities?.length) p.set("severity", q.severities.join(","));
     if (q.host) p.set("host", q.host);
@@ -173,7 +247,6 @@ export const api = {
     if (q.limit != null) p.set("limit", String(q.limit));
     if (q.offset != null) p.set("offset", String(q.offset));
     const qs = p.toString();
-    return request<FindingsPage>("GET", qs ? `/api/findings?${qs}` : "/api/findings");
+    return request<Page<Occurrence>>("GET", qs ? `/api/scans/${scanId}/findings?${qs}` : `/api/scans/${scanId}/findings`);
   },
-  getFinding: (id: number | string) => request<FindingDetail>("GET", `/api/findings/${id}`),
 };

@@ -1,8 +1,16 @@
-import { useQuery } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, type NucleiRaw } from "../api";
-import { Button, Card, ErrorText, SeverityBadge, Spinner } from "../components/ui";
+import {
+  api,
+  FINDING_STATUSES,
+  STATUS_LABELS,
+  type FindingDetail,
+  type FindingStatus,
+  type NucleiRaw,
+} from "../api";
+import { hasRole, useMe } from "../auth";
+import { Button, Card, ErrorText, Pill, Select, SeverityBadge, Spinner, StatusBadge } from "../components/ui";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -65,6 +73,80 @@ function Meta({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+/** TriagePanel shows lifecycle state (status, new/resolved, first/last seen) and,
+ *  for operators, lets the user change the triage status with an optional note. */
+function TriagePanel({ f }: { f: FindingDetail }) {
+  const me = useMe();
+  const canTriage = hasRole(me.data ?? undefined, "operator");
+  const qc = useQueryClient();
+
+  const [status, setStatus] = useState<FindingStatus>(f.status);
+  const [note, setNote] = useState("");
+
+  // Keep the control in sync when the finding reloads (e.g. after a save).
+  useEffect(() => setStatus(f.status), [f.status]);
+
+  const mutation = useMutation({
+    mutationFn: () => api.updateFindingStatus(f.id, { status, note: note.trim() || undefined }),
+    onSuccess: (updated) => {
+      qc.setQueryData(["finding", String(f.id)], updated);
+      qc.invalidateQueries({ queryKey: ["findings"] });
+      setNote("");
+    },
+  });
+
+  const dirty = status !== f.status || note.trim() !== "";
+
+  return (
+    <Card className="p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="mr-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">Triage</h2>
+        <StatusBadge status={f.status} />
+        {f.new && <Pill tone="new">New</Pill>}
+        {f.resolved && <Pill tone="resolved">Resolved · not seen in latest scan</Pill>}
+      </div>
+
+      {(f.status_by || f.status_note) && (
+        <p className="mt-2 text-xs text-neutral-500">
+          {f.status_by && <>Set by {f.status_by}</>}
+          {f.status_at && <> · {new Date(f.status_at).toLocaleString()}</>}
+          {f.status_note && <> — “{f.status_note}”</>}
+        </p>
+      )}
+
+      {canTriage ? (
+        <div className="mt-3 flex flex-wrap items-end gap-3">
+          <label className="space-y-1">
+            <span className="block text-xs font-medium text-neutral-500">Set status</span>
+            <Select value={status} onChange={(e) => setStatus(e.target.value as FindingStatus)}>
+              {FINDING_STATUSES.map((s) => (
+                <option key={s} value={s}>
+                  {STATUS_LABELS[s]}
+                </option>
+              ))}
+            </Select>
+          </label>
+          <label className="flex-1 space-y-1" style={{ minWidth: "16rem" }}>
+            <span className="block text-xs font-medium text-neutral-500">Note (optional)</span>
+            <input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="why this status…"
+              className="w-full rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-neutral-700 dark:bg-neutral-800"
+            />
+          </label>
+          <Button variant="primary" disabled={!dirty || mutation.isPending} onClick={() => mutation.mutate()}>
+            {mutation.isPending ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      ) : (
+        <p className="mt-2 text-xs text-neutral-400">Operator role required to change status.</p>
+      )}
+      {mutation.isError && <ErrorText error={mutation.error} />}
+    </Card>
+  );
+}
+
 export function FindingDetailPage() {
   const { id = "" } = useParams();
   const q = useQuery({ queryKey: ["finding", id], queryFn: () => api.getFinding(id) });
@@ -88,8 +170,13 @@ export function FindingDetailPage() {
         <div className="mt-1 flex flex-wrap items-center gap-3">
           <SeverityBadge severity={f.severity} />
           <h1 className="text-xl font-semibold">{name}</h1>
+          <StatusBadge status={f.status} />
+          {f.new && <Pill tone="new">New</Pill>}
+          {f.resolved && <Pill tone="resolved">Resolved</Pill>}
         </div>
       </div>
+
+      <TriagePanel f={f} />
 
       <Section title="Overview">
         <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
@@ -112,16 +199,31 @@ export function FindingDetailPage() {
               <span className="font-mono text-xs">{f.template_id}</span>
             )}
           </Meta>
-          <Meta label="Scan">
-            <Link
-              to={`/scans/${f.scan_id}`}
-              className="font-mono text-xs text-indigo-600 hover:underline dark:text-indigo-400"
-            >
-              {f.scan_id.slice(0, 8)}
-            </Link>
+          <Meta label="First seen">
+            {f.first_seen_scan ? (
+              <Link
+                to={`/scans/${f.first_seen_scan}`}
+                className="text-indigo-600 hover:underline dark:text-indigo-400"
+                title={new Date(f.first_seen_at).toLocaleString()}
+              >
+                {new Date(f.first_seen_at).toLocaleDateString()}
+              </Link>
+            ) : (
+              new Date(f.first_seen_at).toLocaleDateString()
+            )}
           </Meta>
-          <Meta label="Detected">
-            {raw.timestamp ? new Date(raw.timestamp).toLocaleString() : new Date(f.created_at).toLocaleString()}
+          <Meta label="Last seen">
+            {f.last_seen_scan ? (
+              <Link
+                to={`/scans/${f.last_seen_scan}`}
+                className="text-indigo-600 hover:underline dark:text-indigo-400"
+                title={new Date(f.last_seen_at).toLocaleString()}
+              >
+                {new Date(f.last_seen_at).toLocaleDateString()}
+              </Link>
+            ) : (
+              new Date(f.last_seen_at).toLocaleDateString()
+            )}
           </Meta>
         </dl>
       </Section>
@@ -235,14 +337,16 @@ export function FindingDetailPage() {
         </Section>
       )}
 
-      <Section title="Raw finding">
-        <details>
-          <summary className="cursor-pointer text-sm text-neutral-500">Show raw JSON</summary>
-          <div className="mt-2">
-            <CodeBlock text={JSON.stringify(f.raw, null, 2)} />
-          </div>
-        </details>
-      </Section>
+      {f.raw && (
+        <Section title="Raw finding">
+          <details>
+            <summary className="cursor-pointer text-sm text-neutral-500">Show raw JSON</summary>
+            <div className="mt-2">
+              <CodeBlock text={JSON.stringify(f.raw, null, 2)} />
+            </div>
+          </details>
+        </Section>
+      )}
     </div>
   );
 }

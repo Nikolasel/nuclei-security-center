@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -49,9 +50,20 @@ func main() {
 	client := backend.NewScannerClient(scannerURL, scannerToken)
 	orch := backend.NewOrchestrator(st, client, log)
 
+	auth, err := buildAuthenticator(ctx, st, log)
+	if err != nil {
+		log.Error("configure auth", "err", err)
+		os.Exit(1)
+	}
+	if auth != nil {
+		startSessionSweeper(ctx, st, log)
+	} else {
+		log.Warn("OIDC_ISSUER not set — authentication is DISABLED (dev mode); all requests act as an all-roles dev user")
+	}
+
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           backend.NewServer(st, orch, log).Handler(),
+		Handler:           backend.NewServer(st, orch, auth, log).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -64,6 +76,90 @@ func main() {
 	}()
 
 	waitForShutdown(log, srv)
+}
+
+// buildAuthenticator wires the OIDC/BFF authenticator from the environment. If
+// OIDC_ISSUER is unset it returns (nil, nil) — auth-disabled dev mode. When the
+// issuer is set, the remaining required OIDC vars must be present.
+func buildAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger) (*backend.Authenticator, error) {
+	issuer := os.Getenv("OIDC_ISSUER")
+	if issuer == "" {
+		return nil, nil
+	}
+
+	clientID := os.Getenv("OIDC_CLIENT_ID")
+	clientSecret := os.Getenv("OIDC_CLIENT_SECRET")
+	if clientID == "" || clientSecret == "" {
+		return nil, errors.New("OIDC_CLIENT_ID and OIDC_CLIENT_SECRET are required when OIDC_ISSUER is set")
+	}
+
+	baseURL := envOr("APP_BASE_URL", "http://localhost:8080")
+	redirect := envOr("OIDC_REDIRECT_URL", baseURL+"/auth/callback")
+	postLogin := envOr("POST_LOGIN_REDIRECT", baseURL+"/")
+
+	ttl := 12 * time.Hour
+	if v := os.Getenv("SESSION_TTL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, errors.New("SESSION_TTL: " + err.Error())
+		}
+		ttl = d
+	}
+
+	cfg := backend.AuthConfig{
+		Issuer:       issuer,
+		DiscoveryURL: os.Getenv("OIDC_DISCOVERY_URL"),
+		ClientID:     clientID,
+		ClientSecret: clientSecret,
+		RedirectURL:  redirect,
+		PostLogin:    postLogin,
+		Scopes:       splitCSV(envOr("OIDC_SCOPES", "openid,profile,email")),
+		RolesClaim:   envOr("OIDC_ROLES_CLAIM", "groups"),
+		GroupRoles: map[string]string{
+			envOr("OIDC_ADMIN_GROUP", "admin"):       backend.RoleAdmin,
+			envOr("OIDC_OPERATOR_GROUP", "operator"): backend.RoleOperator,
+			envOr("OIDC_VIEWER_GROUP", "viewer"):     backend.RoleViewer,
+		},
+		SessionTTL:   ttl,
+		CookieName:   envOr("SESSION_COOKIE_NAME", "nsc_session"),
+		SecureCookie: os.Getenv("COOKIE_SECURE") == "true",
+	}
+
+	auth, err := backend.NewAuthenticator(ctx, st, log, cfg)
+	if err != nil {
+		return nil, err
+	}
+	log.Info("OIDC auth enabled", "issuer", issuer, "client_id", clientID)
+	return auth, nil
+}
+
+// startSessionSweeper periodically deletes expired sessions and auth flows.
+func startSessionSweeper(ctx context.Context, st *store.Store, log *slog.Logger) {
+	go func() {
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := st.SweepExpiredAuth(ctx); err != nil {
+					log.Warn("sweep expired auth", "err", err)
+				}
+			}
+		}
+	}()
+}
+
+// splitCSV splits a comma-separated env value, trimming spaces and dropping empties.
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // openStoreWithRetry tolerates Postgres not being ready yet (compose startup).

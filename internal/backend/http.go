@@ -14,17 +14,19 @@ import (
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
-// Server is the backend's HTTP API. Phase 0 has no auth yet (OIDC/BFF lands in
-// Phase 1); it exposes just enough to trigger a scan and read results.
+// Server is the backend's HTTP API. Mutating and read endpoints are guarded by
+// OIDC/BFF auth (§6); when auth is nil (OIDC unconfigured) the guards fall back
+// to a dev identity with all roles, so local smoke tests still work.
 type Server struct {
 	store *store.Store
 	orch  *Orchestrator
+	auth  *Authenticator
 	log   *slog.Logger
 }
 
-// NewServer builds the backend HTTP server.
-func NewServer(st *store.Store, orch *Orchestrator, log *slog.Logger) *Server {
-	return &Server{store: st, orch: orch, log: log}
+// NewServer builds the backend HTTP server. auth may be nil to disable auth.
+func NewServer(st *store.Store, orch *Orchestrator, auth *Authenticator, log *slog.Logger) *Server {
+	return &Server{store: st, orch: orch, auth: auth, log: log}
 }
 
 // defaultOptions are the sane rate/concurrency/timeout defaults applied when a
@@ -39,35 +41,49 @@ func DefaultSpec() types.ScanSpec {
 	return types.ScanSpec{Targets: []string{"scanme.sh"}, Options: defaultOptions()}
 }
 
-// Handler returns the backend router.
+// Handler returns the backend router. Authorization per endpoint: reads need
+// viewer, running scans and config writes need operator, deletes need admin.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 
+	// Auth (public entry points; /auth/me needs a session).
+	if s.auth != nil {
+		mux.HandleFunc("GET /auth/login", s.auth.handleLogin)
+		mux.HandleFunc("GET /auth/callback", s.auth.handleCallback)
+		mux.HandleFunc("POST /auth/logout", s.auth.handleLogout)
+	}
+	mux.HandleFunc("GET /auth/me", s.requireAuth(s.handleMe))
+
 	// Scans
-	mux.HandleFunc("POST /scans", s.handleCreateScan)
-	mux.HandleFunc("GET /scans/{id}", s.handleGetScan)
-	mux.HandleFunc("GET /findings", s.handleListFindings)
+	mux.HandleFunc("POST /scans", s.requireRole(RoleOperator, s.handleCreateScan))
+	mux.HandleFunc("GET /scans/{id}", s.requireRole(RoleViewer, s.handleGetScan))
+	mux.HandleFunc("GET /findings", s.requireRole(RoleViewer, s.handleListFindings))
 
 	// Targets (config)
-	mux.HandleFunc("GET /targets", s.handleListTargets)
-	mux.HandleFunc("POST /targets", s.handleCreateTarget)
-	mux.HandleFunc("GET /targets/{id}", s.handleGetTarget)
-	mux.HandleFunc("PUT /targets/{id}", s.handleUpdateTarget)
-	mux.HandleFunc("DELETE /targets/{id}", s.handleDeleteTarget)
+	mux.HandleFunc("GET /targets", s.requireRole(RoleViewer, s.handleListTargets))
+	mux.HandleFunc("POST /targets", s.requireRole(RoleOperator, s.handleCreateTarget))
+	mux.HandleFunc("GET /targets/{id}", s.requireRole(RoleViewer, s.handleGetTarget))
+	mux.HandleFunc("PUT /targets/{id}", s.requireRole(RoleOperator, s.handleUpdateTarget))
+	mux.HandleFunc("DELETE /targets/{id}", s.requireRole(RoleAdmin, s.handleDeleteTarget))
 
 	// Template sets (config)
-	mux.HandleFunc("GET /template-sets", s.handleListTemplateSets)
-	mux.HandleFunc("POST /template-sets", s.handleCreateTemplateSet)
-	mux.HandleFunc("GET /template-sets/{id}", s.handleGetTemplateSet)
-	mux.HandleFunc("PUT /template-sets/{id}", s.handleUpdateTemplateSet)
-	mux.HandleFunc("DELETE /template-sets/{id}", s.handleDeleteTemplateSet)
+	mux.HandleFunc("GET /template-sets", s.requireRole(RoleViewer, s.handleListTemplateSets))
+	mux.HandleFunc("POST /template-sets", s.requireRole(RoleOperator, s.handleCreateTemplateSet))
+	mux.HandleFunc("GET /template-sets/{id}", s.requireRole(RoleViewer, s.handleGetTemplateSet))
+	mux.HandleFunc("PUT /template-sets/{id}", s.requireRole(RoleOperator, s.handleUpdateTemplateSet))
+	mux.HandleFunc("DELETE /template-sets/{id}", s.requireRole(RoleAdmin, s.handleDeleteTemplateSet))
 
 	return mux
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleMe returns the authenticated caller's identity (for the SPA to render).
+func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, identityFrom(r.Context()))
 }
 
 // createScanRequest launches a scan one of three ways: from a stored target

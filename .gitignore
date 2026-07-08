@@ -11,5 +11,11 @@
 # Go
 /vendor/
 
+# Frontend (web/). node_modules and build output are not committed; a placeholder
+# web/dist/index.html IS committed so `go build` can embed before a real build.
+/web/node_modules/
+/web/dist/*
+!/web/dist/index.html
+
 # OS
 .DS_Store

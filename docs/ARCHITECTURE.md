@@ -254,8 +254,8 @@ Status legend: ✅ done · 🔜 next · ⬜ planned. Each phase ends at a demoab
 | Phase | Focus | Status | Effort |
 |---|---|---|---|
 | **0** | Core loop (the spine) | ✅ done | ~3–4 days |
-| **1** | CRUD + on-demand scans + auth | 🔜 next | ~2–2.5 wks |
-| **2** | Scheduling + finding lifecycle | ⬜ | ~1–1.5 wks |
+| **1** | CRUD + on-demand scans + auth + SPA | ✅ done | ~2–2.5 wks |
+| **2** | Scheduling + finding lifecycle | 🔜 next | ~1–1.5 wks |
 | **3** | Storage + guardrails + RBAC | ⬜ | ~1 wk |
 | **4** | Cloud deploy + hardening | ⬜ | ~1–1.5 wks |
 
@@ -290,9 +290,12 @@ The first genuinely usable product slice.
   (reads→viewer, scans & config writes→operator, deletes→admin); auth-disabled dev
   mode when `OIDC_ISSUER` is unset; compose ships a seeded Keycloak realm.
 - **Frontend:** React + TS + Vite SPA — targets/template-sets management, "run scan"
-  flow, findings table with severity/host/template filters, scan detail view. ⬜ *(slice 3)*
-- **Exit criteria:** a logged-in user defines a target + template set in the UI, runs a
-  scan, and browses the resulting findings.
+  flow, findings table with severity/host/template filters, scan detail view. ✅ *(slice 3)*
+  — Tailwind + Radix; TanStack Query; role-gated controls; served same-origin as an
+  embedded build (`go:embed`) so the BFF cookie stays same-site; the API moved under
+  `/api/*`.
+- **Exit criteria (met):** a logged-in user defines a target + template set in the UI,
+  runs a scan, and browses the resulting findings.
 
 ### Phase 2 — Scheduling + finding lifecycle ⬜  (~1–1.5 wks)
 

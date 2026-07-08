@@ -180,6 +180,35 @@ func (s *Store) GetScan(ctx context.Context, id string) (ScanRow, error) {
 	return r, nil
 }
 
+// ListScans returns recent scans, newest first.
+func (s *Store) ListScans(ctx context.Context, limit int) ([]ScanRow, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, state, nuclei_version, templates_commit, error, created_at, finished_at
+		 FROM scans ORDER BY created_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []ScanRow
+	for rows.Next() {
+		var r ScanRow
+		var nucleiVersion, templatesCommit, errStr *string
+		if err := rows.Scan(&r.ID, &r.State, &nucleiVersion, &templatesCommit, &errStr,
+			&r.CreatedAt, &r.FinishedAt); err != nil {
+			return nil, err
+		}
+		r.NucleiVersion = deref(nucleiVersion)
+		r.TemplatesCommit = deref(templatesCommit)
+		r.Error = deref(errStr)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // FindingRow is a finding as returned to API callers.
 type FindingRow struct {
 	ID         int64     `json:"id"`

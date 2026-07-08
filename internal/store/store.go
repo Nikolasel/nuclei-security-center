@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -222,37 +223,101 @@ type FindingRow struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-// ListFindings returns findings, most recent first, optionally filtered by scan.
-func (s *Store) ListFindings(ctx context.Context, scanID string, limit int) ([]FindingRow, error) {
-	if limit <= 0 || limit > 1000 {
-		limit = 200
+// FindingFilter narrows and pages a findings query. All filter fields are
+// optional; Limit/Offset drive server-side pagination.
+type FindingFilter struct {
+	ScanID   string
+	Severity string
+	Host     string
+	Limit    int
+	Offset   int
+}
+
+// severityOrder ranks findings so the most severe sort first, server-side.
+const severityOrder = `CASE lower(severity)
+	WHEN 'critical' THEN 5 WHEN 'high' THEN 4 WHEN 'medium' THEN 3
+	WHEN 'low' THEN 2 WHEN 'info' THEN 1 ELSE 0 END`
+
+// ListFindings returns a page of findings (severity-sorted, then newest first)
+// plus the total count matching the filter (ignoring Limit/Offset).
+func (s *Store) ListFindings(ctx context.Context, f FindingFilter) ([]FindingRow, int, error) {
+	if f.Limit <= 0 || f.Limit > 500 {
+		f.Limit = 50
 	}
-	var rows pgx.Rows
-	var err error
-	if scanID != "" {
-		rows, err = s.pool.Query(ctx,
-			`SELECT id, scan_id, template_id, name, severity, host, matched_at, type, created_at
-			 FROM findings WHERE scan_id = $1 ORDER BY id DESC LIMIT $2`, scanID, limit)
-	} else {
-		rows, err = s.pool.Query(ctx,
-			`SELECT id, scan_id, template_id, name, severity, host, matched_at, type, created_at
-			 FROM findings ORDER BY id DESC LIMIT $1`, limit)
+	if f.Offset < 0 {
+		f.Offset = 0
 	}
+
+	var conds []string
+	var args []any
+	add := func(condFmt string, val any) {
+		args = append(args, val)
+		conds = append(conds, fmt.Sprintf(condFmt, len(args)))
+	}
+	if f.ScanID != "" {
+		add("scan_id = $%d", f.ScanID)
+	}
+	if f.Severity != "" {
+		add("lower(severity) = $%d", strings.ToLower(f.Severity))
+	}
+	if f.Host != "" {
+		add("host ILIKE $%d", "%"+f.Host+"%")
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = "WHERE " + strings.Join(conds, " AND ")
+	}
+
+	var total int
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM findings "+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	args = append(args, f.Limit, f.Offset)
+	query := fmt.Sprintf(
+		`SELECT id, scan_id, template_id, name, severity, host, matched_at, type, created_at
+		 FROM findings %s ORDER BY %s DESC, id DESC LIMIT $%d OFFSET $%d`,
+		where, severityOrder, len(args)-1, len(args))
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 
 	var out []FindingRow
 	for rows.Next() {
-		var f FindingRow
-		if err := rows.Scan(&f.ID, &f.ScanID, &f.TemplateID, &f.Name, &f.Severity,
-			&f.Host, &f.MatchedAt, &f.Type, &f.CreatedAt); err != nil {
-			return nil, err
+		var fr FindingRow
+		if err := rows.Scan(&fr.ID, &fr.ScanID, &fr.TemplateID, &fr.Name, &fr.Severity,
+			&fr.Host, &fr.MatchedAt, &fr.Type, &fr.CreatedAt); err != nil {
+			return nil, 0, err
 		}
-		out = append(out, f)
+		out = append(out, fr)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
+}
+
+// FindingDetail is a single finding with its verbatim raw Nuclei JSON, for the
+// vulnerability detail view.
+type FindingDetail struct {
+	FindingRow
+	Raw json.RawMessage `json:"raw"`
+}
+
+// GetFinding returns one finding by id (including the raw payload), or ErrNotFound.
+func (s *Store) GetFinding(ctx context.Context, id int64) (FindingDetail, error) {
+	var d FindingDetail
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, scan_id, template_id, name, severity, host, matched_at, type, created_at, raw
+		 FROM findings WHERE id = $1`, id,
+	).Scan(&d.ID, &d.ScanID, &d.TemplateID, &d.Name, &d.Severity, &d.Host,
+		&d.MatchedAt, &d.Type, &d.CreatedAt, &d.Raw)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return FindingDetail{}, ErrNotFound
+		}
+		return FindingDetail{}, err
+	}
+	return d, nil
 }
 
 func deref(p *string) string {

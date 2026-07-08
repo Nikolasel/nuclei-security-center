@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { useMe } from "./auth";
 import { Layout } from "./components/Layout";
 import { Button, Card, ErrorText, Spinner } from "./components/ui";
+import { FindingDetailPage } from "./pages/FindingDetailPage";
 import { FindingsPage } from "./pages/FindingsPage";
 import { ScansPage } from "./pages/ScansPage";
 import { ScanDetailPage } from "./pages/ScanDetailPage";
@@ -46,6 +47,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/findings" replace />} />
         <Route path="/findings" element={<FindingsPage />} />
+        <Route path="/findings/:id" element={<FindingDetailPage />} />
         <Route path="/scans" element={<ScansPage />} />
         <Route path="/scans/:id" element={<ScanDetailPage />} />
         <Route path="/targets" element={<TargetsPage />} />

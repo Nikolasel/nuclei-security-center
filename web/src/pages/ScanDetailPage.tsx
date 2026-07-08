@@ -17,11 +17,6 @@ export function ScanDetailPage() {
   });
 
   const done = scan.data?.state === "complete" || scan.data?.state === "failed";
-  const findings = useQuery({
-    queryKey: ["findings", id],
-    queryFn: () => api.listFindings(id),
-    enabled: done,
-  });
 
   return (
     <div className="space-y-5">
@@ -71,12 +66,8 @@ export function ScanDetailPage() {
 
       {!done ? (
         <p className="text-sm text-neutral-500">Findings appear here once the scan finishes.</p>
-      ) : findings.isLoading ? (
-        <Spinner label="Loading findings…" />
-      ) : findings.isError ? (
-        <ErrorText error={findings.error} />
       ) : (
-        <FindingsView findings={findings.data ?? []} />
+        <FindingsView scanId={id} />
       )}
     </div>
   );

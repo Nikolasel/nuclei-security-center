@@ -1,26 +1,40 @@
-import { useMemo, useState } from "react";
-import type { Finding } from "../api";
-import { Card, Input, SeverityBadge } from "./ui";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { api } from "../api";
+import { Button, Card, ErrorText, Input, SeverityBadge, Spinner } from "./ui";
 
 const SEVERITIES = ["critical", "high", "medium", "low", "info"];
-const rank: Record<string, number> = { critical: 5, high: 4, medium: 3, low: 2, info: 1 };
+const PAGE_SIZE = 50;
 
-export function FindingsView({ findings }: { findings: Finding[] }) {
+export function FindingsView({ scanId }: { scanId?: string }) {
+  const navigate = useNavigate();
   const [severity, setSeverity] = useState("");
+  const [hostInput, setHostInput] = useState("");
   const [host, setHost] = useState("");
-  const [template, setTemplate] = useState("");
+  const [offset, setOffset] = useState(0);
 
-  const filtered = useMemo(() => {
-    const h = host.trim().toLowerCase();
-    const t = template.trim().toLowerCase();
-    return findings
-      .filter((f) => (severity ? f.severity.toLowerCase() === severity : true))
-      .filter((f) => (h ? f.host.toLowerCase().includes(h) : true))
-      .filter((f) =>
-        t ? f.template_id.toLowerCase().includes(t) || f.name.toLowerCase().includes(t) : true,
-      )
-      .sort((a, b) => (rank[b.severity.toLowerCase()] ?? 0) - (rank[a.severity.toLowerCase()] ?? 0));
-  }, [findings, severity, host, template]);
+  // Debounce the host filter so we don't refetch on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setHost(hostInput.trim()), 300);
+    return () => clearTimeout(t);
+  }, [hostInput]);
+
+  // Any filter change resets to the first page.
+  useEffect(() => {
+    setOffset(0);
+  }, [severity, host, scanId]);
+
+  const q = useQuery({
+    queryKey: ["findings", { scanId, severity, host, offset }],
+    queryFn: () => api.listFindings({ scanId, severity, host, limit: PAGE_SIZE, offset }),
+    placeholderData: keepPreviousData,
+  });
+
+  const total = q.data?.total ?? 0;
+  const items = q.data?.items ?? [];
+  const from = total === 0 ? 0 : offset + 1;
+  const to = Math.min(offset + PAGE_SIZE, total);
 
   return (
     <div className="space-y-3">
@@ -42,60 +56,79 @@ export function FindingsView({ findings }: { findings: Finding[] }) {
         </label>
         <label className="space-y-1">
           <span className="block text-xs font-medium text-neutral-500">Host</span>
-          <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="filter host…" className="w-48" />
-        </label>
-        <label className="space-y-1">
-          <span className="block text-xs font-medium text-neutral-500">Template / name</span>
           <Input
-            value={template}
-            onChange={(e) => setTemplate(e.target.value)}
-            placeholder="filter template…"
-            className="w-56"
+            value={hostInput}
+            onChange={(e) => setHostInput(e.target.value)}
+            placeholder="filter host…"
+            className="w-48"
           />
         </label>
         <span className="pb-1.5 text-sm text-neutral-500">
-          {filtered.length} of {findings.length}
+          {q.isLoading ? "…" : total === 0 ? "0 findings" : `${from}–${to} of ${total}`}
         </span>
       </div>
 
-      <Card>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
-                <th className="px-3 py-2 font-medium">Severity</th>
-                <th className="px-3 py-2 font-medium">Name</th>
-                <th className="px-3 py-2 font-medium">Template</th>
-                <th className="px-3 py-2 font-medium">Host</th>
-                <th className="px-3 py-2 font-medium">Matched</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((f) => (
-                <tr
-                  key={f.id}
-                  className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50 dark:border-neutral-800/60 dark:hover:bg-neutral-800/40"
-                >
-                  <td className="px-3 py-2">
-                    <SeverityBadge severity={f.severity} />
-                  </td>
-                  <td className="px-3 py-2">{f.name || <span className="text-neutral-400">—</span>}</td>
-                  <td className="px-3 py-2 font-mono text-xs">{f.template_id}</td>
-                  <td className="px-3 py-2">{f.host}</td>
-                  <td className="px-3 py-2 font-mono text-xs text-neutral-500">{f.matched_at}</td>
-                </tr>
-              ))}
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-3 py-8 text-center text-neutral-400">
-                    No findings match.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+      {q.isLoading ? (
+        <Spinner label="Loading findings…" />
+      ) : q.isError ? (
+        <ErrorText error={q.error} />
+      ) : (
+        <>
+          <Card>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
+                    <th className="px-3 py-2 font-medium">Severity</th>
+                    <th className="px-3 py-2 font-medium">Name</th>
+                    <th className="px-3 py-2 font-medium">Template</th>
+                    <th className="px-3 py-2 font-medium">Host</th>
+                    <th className="px-3 py-2 font-medium">Matched</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((f) => (
+                    <tr
+                      key={f.id}
+                      onClick={() => navigate(`/findings/${f.id}`)}
+                      className="cursor-pointer border-b border-neutral-100 last:border-0 hover:bg-neutral-50 dark:border-neutral-800/60 dark:hover:bg-neutral-800/40"
+                    >
+                      <td className="px-3 py-2">
+                        <SeverityBadge severity={f.severity} />
+                      </td>
+                      <td className="px-3 py-2">{f.name || <span className="text-neutral-400">—</span>}</td>
+                      <td className="px-3 py-2 font-mono text-xs">{f.template_id}</td>
+                      <td className="px-3 py-2">{f.host}</td>
+                      <td className="px-3 py-2 font-mono text-xs text-neutral-500">{f.matched_at}</td>
+                    </tr>
+                  ))}
+                  {items.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="px-3 py-8 text-center text-neutral-400">
+                        No findings match.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+
+          {total > PAGE_SIZE && (
+            <div className="flex items-center justify-end gap-3 text-sm">
+              <span className="text-neutral-500">
+                Page {Math.floor(offset / PAGE_SIZE) + 1} of {Math.ceil(total / PAGE_SIZE)}
+              </span>
+              <Button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
+                ← Prev
+              </Button>
+              <Button disabled={to >= total} onClick={() => setOffset(offset + PAGE_SIZE)}>
+                Next →
+              </Button>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

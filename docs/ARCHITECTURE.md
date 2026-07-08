@@ -290,10 +290,12 @@ The first genuinely usable product slice.
   (reads→viewer, scans & config writes→operator, deletes→admin); auth-disabled dev
   mode when `OIDC_ISSUER` is unset; compose ships a seeded Keycloak realm.
 - **Frontend:** React + TS + Vite SPA — targets/template-sets management, "run scan"
-  flow, findings table with severity/host/template filters, scan detail view. ✅ *(slice 3)*
-  — Tailwind + Radix; TanStack Query; role-gated controls; served same-origin as an
-  embedded build (`go:embed`) so the BFF cookie stays same-site; the API moved under
-  `/api/*`.
+  flow, findings table (server-side severity/host filters + pagination), a per-finding
+  **vulnerability detail page** (full parsed Nuclei output: classification/CVE, request/
+  response, curl reproducer, references, remediation, raw JSON), and a scan detail view.
+  ✅ *(slice 3)* — Tailwind + Radix; TanStack Query; role-gated controls; served
+  same-origin as an embedded build (`go:embed`) so the BFF cookie stays same-site; the
+  API moved under `/api/*`.
 - **Exit criteria (met):** a logged-in user defines a target + template set in the UI,
   runs a scan, and browses the resulting findings.
 

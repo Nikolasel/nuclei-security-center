@@ -55,6 +55,62 @@ export interface Finding {
   created_at: string;
 }
 
+export interface FindingsPage {
+  items: Finding[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface FindingsQuery {
+  scanId?: string;
+  severity?: string;
+  host?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** NucleiRaw models the subset of a Nuclei JSONL finding the detail view renders.
+ *  Fields are optional — templates emit different shapes. */
+export interface NucleiRaw {
+  "template-id"?: string;
+  "template-url"?: string;
+  "matcher-name"?: string;
+  type?: string;
+  host?: string;
+  ip?: string;
+  port?: string;
+  scheme?: string;
+  url?: string;
+  "matched-at"?: string;
+  "extracted-results"?: string[];
+  request?: string;
+  response?: string;
+  "curl-command"?: string;
+  timestamp?: string;
+  info?: {
+    name?: string;
+    author?: string[];
+    tags?: string[];
+    description?: string;
+    reference?: string[];
+    severity?: string;
+    remediation?: string;
+    classification?: {
+      "cve-id"?: string[];
+      "cwe-id"?: string[];
+      "cvss-metrics"?: string;
+      "cvss-score"?: number;
+      "epss-score"?: number;
+    };
+  };
+  [key: string]: unknown;
+}
+
+export interface FindingDetail extends Finding {
+  raw: NucleiRaw;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -101,9 +157,15 @@ export const api = {
   createScan: (body: { target_id?: string; template_set_id?: string }) =>
     request<{ scan_id: string }>("POST", "/api/scans", body),
 
-  listFindings: (scanId?: string) =>
-    request<Finding[]>(
-      "GET",
-      scanId ? `/api/findings?scan_id=${encodeURIComponent(scanId)}` : "/api/findings",
-    ),
+  listFindings: (q: FindingsQuery = {}) => {
+    const p = new URLSearchParams();
+    if (q.scanId) p.set("scan_id", q.scanId);
+    if (q.severity) p.set("severity", q.severity);
+    if (q.host) p.set("host", q.host);
+    if (q.limit != null) p.set("limit", String(q.limit));
+    if (q.offset != null) p.set("offset", String(q.offset));
+    const qs = p.toString();
+    return request<FindingsPage>("GET", qs ? `/api/findings?${qs}` : "/api/findings");
+  },
+  getFinding: (id: number | string) => request<FindingDetail>("GET", `/api/findings/${id}`),
 };

@@ -64,6 +64,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/scans", s.requireRole(RoleOperator, s.handleCreateScan))
 	mux.HandleFunc("GET /api/scans/{id}", s.requireRole(RoleViewer, s.handleGetScan))
 	mux.HandleFunc("GET /api/findings", s.requireRole(RoleViewer, s.handleListFindings))
+	mux.HandleFunc("GET /api/findings/{id}", s.requireRole(RoleViewer, s.handleGetFinding))
 
 	// Targets (config)
 	mux.HandleFunc("GET /api/targets", s.requireRole(RoleViewer, s.handleListTargets))
@@ -203,10 +204,32 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, row)
 }
 
+// findingsPage is the paginated envelope returned by GET /api/findings.
+type findingsPage struct {
+	Items  []store.FindingRow `json:"items"`
+	Total  int                `json:"total"`
+	Limit  int                `json:"limit"`
+	Offset int                `json:"offset"`
+}
+
 func (s *Server) handleListFindings(w http.ResponseWriter, r *http.Request) {
-	scanID := r.URL.Query().Get("scan_id")
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	rows, err := s.store.ListFindings(r.Context(), scanID, limit)
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
+	filter := store.FindingFilter{
+		ScanID:   q.Get("scan_id"),
+		Severity: q.Get("severity"),
+		Host:     q.Get("host"),
+		Limit:    limit,
+		Offset:   offset,
+	}
+	rows, total, err := s.store.ListFindings(r.Context(), filter)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -214,7 +237,21 @@ func (s *Server) handleListFindings(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []store.FindingRow{}
 	}
-	writeJSON(w, http.StatusOK, rows)
+	writeJSON(w, http.StatusOK, findingsPage{Items: rows, Total: total, Limit: limit, Offset: offset})
+}
+
+func (s *Server) handleGetFinding(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid finding id", http.StatusBadRequest)
+		return
+	}
+	d, err := s.store.GetFinding(r.Context(), id)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

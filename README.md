@@ -65,8 +65,20 @@ ProjectDiscovery's public test host `scanme.sh` — no infrastructure of your ow
 curl -sb jar.txt -X POST localhost:8080/api/scans          # => {"scan_id":"..."}
 # check scan state (queued → running → complete)
 curl -sb jar.txt localhost:8080/api/scans/<scan_id>
-# list ingested findings
+# list ingested findings (paginated envelope: {items,total,limit,offset})
 curl -sb jar.txt "localhost:8080/api/findings?scan_id=<scan_id>" | jq
+# one finding with full raw Nuclei output (for the vulnerability detail view)
+curl -sb jar.txt "localhost:8080/api/findings/<finding_id>" | jq
+```
+
+`GET /api/findings` supports server-side filtering + pagination:
+`q` (name/template substring), `severity` (comma-separated, any-of), `host`
+(substring), `cve` (substring), `tag` (exact), plus `scan_id`, `limit`, `offset`.
+CVE ids and tags are promoted to indexed columns (migration 0004) so these filters
+are cheap.
+
+```sh
+curl -sb jar.txt "localhost:8080/api/findings?q=ssl&severity=critical,high&tag=tls&limit=50" | jq
 ```
 
 Override the target/templates with an ad-hoc spec (note the `spec` wrapper):

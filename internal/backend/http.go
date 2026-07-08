@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
@@ -223,11 +224,14 @@ func (s *Server) handleListFindings(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 	filter := store.FindingFilter{
-		ScanID:   q.Get("scan_id"),
-		Severity: q.Get("severity"),
-		Host:     q.Get("host"),
-		Limit:    limit,
-		Offset:   offset,
+		ScanID:     q.Get("scan_id"),
+		Query:      strings.TrimSpace(q.Get("q")),
+		Severities: splitCSV(q.Get("severity")),
+		Host:       strings.TrimSpace(q.Get("host")),
+		CVE:        strings.TrimSpace(q.Get("cve")),
+		Tag:        strings.TrimSpace(q.Get("tag")),
+		Limit:      limit,
+		Offset:     offset,
 	}
 	rows, total, err := s.store.ListFindings(r.Context(), filter)
 	if err != nil {
@@ -252,6 +256,17 @@ func (s *Server) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// splitCSV splits a comma-separated query value, trimming spaces and dropping empties.
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

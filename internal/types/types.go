@@ -67,10 +67,28 @@ type NucleiFinding struct {
 	Info       NucleiInfo `json:"info"`
 }
 
-// NucleiInfo is the nested "info" object; we read only name + severity.
+// NucleiInfo is the nested "info" object. We read the rock-stable scalar fields
+// plus tags and CVE classification, which we promote to indexed columns for
+// filtering (the full line is still preserved verbatim as raw).
 type NucleiInfo struct {
-	Name     string `json:"name"`
-	Severity string `json:"severity"`
+	Name           string                `json:"name"`
+	Severity       string                `json:"severity"`
+	Tags           []string              `json:"tags,omitempty"`
+	Classification *NucleiClassification `json:"classification,omitempty"`
+}
+
+// NucleiClassification holds the vulnerability identifiers we index for search.
+type NucleiClassification struct {
+	CVEID []string `json:"cve-id,omitempty"`
+	CWEID []string `json:"cwe-id,omitempty"`
+}
+
+// CVEs returns the finding's CVE ids (nil-safe).
+func (f NucleiFinding) CVEs() []string {
+	if f.Info.Classification == nil {
+		return nil
+	}
+	return f.Info.Classification.CVEID
 }
 
 // NewID returns a random RFC 4122 v4 UUID string. UUID generation is a solved,

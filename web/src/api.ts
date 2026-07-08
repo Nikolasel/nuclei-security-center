@@ -52,6 +52,8 @@ export interface Finding {
   host: string;
   matched_at: string;
   type: string;
+  cve: string[];
+  tags: string[];
   created_at: string;
 }
 
@@ -64,8 +66,11 @@ export interface FindingsPage {
 
 export interface FindingsQuery {
   scanId?: string;
-  severity?: string;
+  q?: string;
+  severities?: string[];
   host?: string;
+  cve?: string;
+  tag?: string;
   limit?: number;
   offset?: number;
 }
@@ -160,8 +165,11 @@ export const api = {
   listFindings: (q: FindingsQuery = {}) => {
     const p = new URLSearchParams();
     if (q.scanId) p.set("scan_id", q.scanId);
-    if (q.severity) p.set("severity", q.severity);
+    if (q.q) p.set("q", q.q);
+    if (q.severities?.length) p.set("severity", q.severities.join(","));
     if (q.host) p.set("host", q.host);
+    if (q.cve) p.set("cve", q.cve);
+    if (q.tag) p.set("tag", q.tag);
     if (q.limit != null) p.set("limit", String(q.limit));
     if (q.offset != null) p.set("offset", String(q.offset));
     const qs = p.toString();

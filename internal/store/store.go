@@ -140,12 +140,14 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 	return err
 }
 
-// InsertFinding stores one parsed finding plus its verbatim raw JSON line.
+// InsertFinding stores one parsed finding plus its verbatim raw JSON line. CVE
+// ids and tags are promoted to columns (from the parsed struct) for filtering.
 func (s *Store) InsertFinding(ctx context.Context, scanID string, f types.NucleiFinding, raw []byte) error {
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO findings (scan_id, template_id, name, severity, host, matched_at, type, raw)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		scanID, f.TemplateID, f.Info.Name, f.Info.Severity, f.Host, f.MatchedAt, f.Type, raw,
+		`INSERT INTO findings (scan_id, template_id, name, severity, host, matched_at, type, cve, tags, raw)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		scanID, f.TemplateID, f.Info.Name, f.Info.Severity, f.Host, f.MatchedAt, f.Type,
+		orEmpty(f.CVEs()), orEmpty(f.Info.Tags), raw,
 	)
 	return err
 }
@@ -220,17 +222,22 @@ type FindingRow struct {
 	Host       string    `json:"host"`
 	MatchedAt  string    `json:"matched_at"`
 	Type       string    `json:"type"`
+	CVE        []string  `json:"cve"`
+	Tags       []string  `json:"tags"`
 	CreatedAt  time.Time `json:"created_at"`
 }
 
 // FindingFilter narrows and pages a findings query. All filter fields are
 // optional; Limit/Offset drive server-side pagination.
 type FindingFilter struct {
-	ScanID   string
-	Severity string
-	Host     string
-	Limit    int
-	Offset   int
+	ScanID     string
+	Query      string   // substring match on vulnerability name OR template id
+	Severities []string // any-of (e.g. ["critical","high"])
+	Host       string   // substring match
+	CVE        string   // substring match on any of the finding's CVE ids
+	Tag        string   // exact tag membership
+	Limit      int
+	Offset     int
 }
 
 // severityOrder ranks findings so the most severe sort first, server-side.
@@ -250,18 +257,34 @@ func (s *Store) ListFindings(ctx context.Context, f FindingFilter) ([]FindingRow
 
 	var conds []string
 	var args []any
-	add := func(condFmt string, val any) {
+	// push appends an arg and returns its 1-based placeholder index.
+	push := func(val any) int {
 		args = append(args, val)
-		conds = append(conds, fmt.Sprintf(condFmt, len(args)))
+		return len(args)
 	}
 	if f.ScanID != "" {
-		add("scan_id = $%d", f.ScanID)
+		conds = append(conds, fmt.Sprintf("scan_id = $%d", push(f.ScanID)))
 	}
-	if f.Severity != "" {
-		add("lower(severity) = $%d", strings.ToLower(f.Severity))
+	if f.Query != "" {
+		n := push("%" + f.Query + "%")
+		conds = append(conds, fmt.Sprintf("(name ILIKE $%d OR template_id ILIKE $%d)", n, n))
+	}
+	if len(f.Severities) > 0 {
+		lowered := make([]string, len(f.Severities))
+		for i, s := range f.Severities {
+			lowered[i] = strings.ToLower(s)
+		}
+		conds = append(conds, fmt.Sprintf("lower(severity) = ANY($%d)", push(lowered)))
 	}
 	if f.Host != "" {
-		add("host ILIKE $%d", "%"+f.Host+"%")
+		conds = append(conds, fmt.Sprintf("host ILIKE $%d", push("%"+f.Host+"%")))
+	}
+	if f.CVE != "" {
+		conds = append(conds, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM unnest(cve) c WHERE c ILIKE $%d)", push("%"+f.CVE+"%")))
+	}
+	if f.Tag != "" {
+		conds = append(conds, fmt.Sprintf("$%d = ANY(tags)", push(f.Tag)))
 	}
 	where := ""
 	if len(conds) > 0 {
@@ -273,11 +296,12 @@ func (s *Store) ListFindings(ctx context.Context, f FindingFilter) ([]FindingRow
 		return nil, 0, err
 	}
 
-	args = append(args, f.Limit, f.Offset)
+	limitPH := push(f.Limit)
+	offsetPH := push(f.Offset)
 	query := fmt.Sprintf(
-		`SELECT id, scan_id, template_id, name, severity, host, matched_at, type, created_at
+		`SELECT id, scan_id, template_id, name, severity, host, matched_at, type, cve, tags, created_at
 		 FROM findings %s ORDER BY %s DESC, id DESC LIMIT $%d OFFSET $%d`,
-		where, severityOrder, len(args)-1, len(args))
+		where, severityOrder, limitPH, offsetPH)
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
@@ -288,7 +312,7 @@ func (s *Store) ListFindings(ctx context.Context, f FindingFilter) ([]FindingRow
 	for rows.Next() {
 		var fr FindingRow
 		if err := rows.Scan(&fr.ID, &fr.ScanID, &fr.TemplateID, &fr.Name, &fr.Severity,
-			&fr.Host, &fr.MatchedAt, &fr.Type, &fr.CreatedAt); err != nil {
+			&fr.Host, &fr.MatchedAt, &fr.Type, &fr.CVE, &fr.Tags, &fr.CreatedAt); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, fr)

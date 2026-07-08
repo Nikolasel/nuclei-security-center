@@ -1,0 +1,82 @@
+package backend
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/Nikolasel/nuclei-security-center/internal/store"
+)
+
+// The three roles, ordered by privilege. Roles are assigned by the IdP (a
+// groups/roles claim), never in-app; see the auth slice in the architecture doc.
+const (
+	RoleViewer   = "viewer"
+	RoleOperator = "operator"
+	RoleAdmin    = "admin"
+)
+
+// roleRank ranks roles so a higher role satisfies a lower requirement (admin
+// can do anything an operator can, etc.). Unknown roles rank 0.
+var roleRank = map[string]int{
+	RoleViewer:   1,
+	RoleOperator: 2,
+	RoleAdmin:    3,
+}
+
+// satisfies reports whether any of the identity's roles meets the required role.
+func satisfies(id store.Identity, required string) bool {
+	need := roleRank[required]
+	for _, r := range id.Roles {
+		if roleRank[r] >= need {
+			return true
+		}
+	}
+	return false
+}
+
+type ctxKey int
+
+const identityKey ctxKey = 0
+
+func withIdentity(ctx context.Context, id store.Identity) context.Context {
+	return context.WithValue(ctx, identityKey, id)
+}
+
+// identityFrom returns the caller's identity, or the zero value if unauthenticated.
+func identityFrom(ctx context.Context) store.Identity {
+	id, _ := ctx.Value(identityKey).(store.Identity)
+	return id
+}
+
+// devIdentity is injected when auth is disabled (OIDC not configured) so
+// handlers behave uniformly. It holds every role.
+var devIdentity = store.Identity{Subject: "dev", Roles: []string{RoleAdmin, RoleOperator, RoleViewer}}
+
+// requireAuth resolves the session cookie to an identity and injects it into the
+// request context, or 401s. With auth disabled it injects devIdentity.
+func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.auth == nil {
+			next(w, r.WithContext(withIdentity(r.Context(), devIdentity)))
+			return
+		}
+		id, ok := s.auth.identityFromRequest(r)
+		if !ok {
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		next(w, r.WithContext(withIdentity(r.Context(), id)))
+	}
+}
+
+// requireRole wraps a handler so only callers holding at least `role` reach it.
+// It implies requireAuth.
+func (s *Server) requireRole(role string, next http.HandlerFunc) http.HandlerFunc {
+	return s.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		if !satisfies(identityFrom(r.Context()), role) {
+			http.Error(w, "insufficient role", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	})
+}

@@ -32,6 +32,7 @@ func (s *Server) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	in.CreatedBy = identityFrom(r.Context()).Subject
 	t, err := s.store.CreateTarget(r.Context(), in)
 	if err != nil {
 		writeStoreErr(w, err)
@@ -97,6 +98,7 @@ func (s *Server) handleCreateTemplateSet(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	in.CreatedBy = identityFrom(r.Context()).Subject
 	t, err := s.store.CreateTemplateSet(r.Context(), in)
 	if err != nil {
 		writeStoreErr(w, err)

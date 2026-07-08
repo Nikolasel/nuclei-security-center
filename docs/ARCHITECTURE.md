@@ -282,11 +282,15 @@ Proves the whole architecture end-to-end before any product surface is built.
 The first genuinely usable product slice.
 
 - **Backend:** targets CRUD (with the scope allowlist), template-set CRUD, replace the
-  hardcoded default spec with real scan-from-config, scan history endpoints.
+  hardcoded default spec with real scan-from-config, scan history endpoints. ✅ *(slice 1)*
 - **Auth:** OIDC via the BFF pattern (§6) — backend as confidential client, httpOnly
-  session cookie to the SPA. Wire one IdP (Keycloak locally).
+  session cookie to the SPA. Wire one IdP (Keycloak locally). ✅ *(slice 2)* — roles
+  come from the IdP `groups` claim (admin/operator/viewer); server-side sessions +
+  single-use PKCE/state/nonce flow (migration 0003); requireAuth/requireRole guards
+  (reads→viewer, scans & config writes→operator, deletes→admin); auth-disabled dev
+  mode when `OIDC_ISSUER` is unset; compose ships a seeded Keycloak realm.
 - **Frontend:** React + TS + Vite SPA — targets/template-sets management, "run scan"
-  flow, findings table with severity/host/template filters, scan detail view.
+  flow, findings table with severity/host/template filters, scan detail view. ⬜ *(slice 3)*
 - **Exit criteria:** a logged-in user defines a target + template set in the UI, runs a
   scan, and browses the resulting findings.
 

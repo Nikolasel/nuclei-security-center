@@ -7,16 +7,19 @@ scans. Architecture and build plan: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 git clone git@github.com:Nikolasel/nuclei-security-center.git
 ```
 
-## Status: Phase 0 (the spine)
+## Status: Phase 1 (usable product slice)
 
-Phase 0 proves the whole architecture end-to-end with no auth, UI, or scheduling
-yet: **backend dispatches → scanner node syncs templates + runs nuclei → backend
-polls, pulls results, and ingests findings into Postgres.**
+A logged-in user manages targets + template sets, runs scans from them, and
+browses findings in a React UI. Under the hood: **backend dispatches → scanner
+node syncs templates + runs nuclei → backend polls, pulls results, and ingests
+findings into Postgres**, all behind OIDC/BFF auth.
 
 ```
-POST /scans ──▶ backend ──dispatch──▶ scanner node ──▶ nuclei ──▶ results.jsonl
-                  │  ◀────poll/pull──────────┘
-                  └─▶ Postgres (scans, findings)
+browser ─▶ React SPA (served by backend at /) ─▶ /api/* (session cookie, roles)
+              │
+POST /api/scans ─▶ backend ──dispatch──▶ scanner node ──▶ nuclei ──▶ results.jsonl
+                    │  ◀────poll/pull──────────┘
+                    └─▶ Postgres (scans, findings)
 ```
 
 ### Layout
@@ -26,46 +29,62 @@ cmd/backend      backend entrypoint (system of record + orchestrator)
 cmd/scanner      scanner node entrypoint (credential-less nuclei runner)
 internal/types   wire contracts shared by both services
 internal/scanner scanner node: runs nuclei, serves results over HTTP
-internal/backend orchestrator (dispatch/poll/ingest), scanner client, HTTP API
+internal/backend orchestrator (dispatch/poll/ingest), scanner client, HTTP API, OIDC/BFF auth
 internal/store   Postgres access + embedded migrations
-deploy/          Dockerfiles
-docker-compose.yml   postgres + minio + scanner + backend
+web/             React + TS + Vite SPA (embedded into the backend via go:embed)
+deploy/          Dockerfiles + seeded Keycloak realm
+docker-compose.yml   postgres + minio + keycloak + scanner + backend
 ```
 
 ## Run it
 
-Requires Docker (Go compiles inside the build containers).
+Requires Docker (Go and the SPA both compile inside the build containers).
 
 ```sh
-cp .env.example .env          # then edit SCANNER_TOKEN
+cp .env.example .env          # then edit SCANNER_TOKEN + OIDC_CLIENT_SECRET
 docker compose up --build
 ```
 
-Services: backend on `:8080`, scanner on `:8081`, Postgres on `:5432`,
+Then open **http://localhost:8080** and log in (demo users below).
+
+Services: backend + UI on `:8080`, scanner on `:8081`, Postgres on `:5432`,
 Keycloak on `:8082` (OIDC IdP), MinIO on `:9000` (console `:9001`, staged for
 Phase 3, not yet wired).
 
-### Trigger the Phase 0 scan
+## API
 
-With an empty body the backend runs its default scan against ProjectDiscovery's
-public test host `scanme.sh` — no infrastructure of your own needed.
+The JSON API lives under `/api/*` and is guarded by the session cookie (see
+[Authentication](#authentication-oidcbff)). The examples below assume a cookie
+jar `jar.txt`, or [auth-disabled dev mode](#authentication-oidcbff) for headless use.
+
+**Scans.** With an empty body the backend runs its default scan against
+ProjectDiscovery's public test host `scanme.sh` — no infrastructure of your own needed.
 
 ```sh
 # start a scan
-curl -s -X POST localhost:8080/scans
-# => {"scan_id":"..."}
-
+curl -sb jar.txt -X POST localhost:8080/api/scans          # => {"scan_id":"..."}
 # check scan state (queued → running → complete)
-curl -s localhost:8080/scans/<scan_id>
-
-# list ingested findings
-curl -s "localhost:8080/findings?scan_id=<scan_id>" | jq
+curl -sb jar.txt localhost:8080/api/scans/<scan_id>
+# list ingested findings (paginated envelope: {items,total,limit,offset})
+curl -sb jar.txt "localhost:8080/api/findings?scan_id=<scan_id>" | jq
+# one finding with full raw Nuclei output (for the vulnerability detail view)
+curl -sb jar.txt "localhost:8080/api/findings/<finding_id>" | jq
 ```
 
-You can override the target/templates with an ad-hoc spec (note the `spec` wrapper):
+`GET /api/findings` supports server-side filtering + pagination:
+`q` (name/template substring), `severity` (comma-separated, any-of), `host`
+(substring), `cve` (substring), `tag` (exact), plus `scan_id`, `limit`, `offset`.
+CVE ids and tags are promoted to indexed columns (migration 0004) so these filters
+are cheap.
 
 ```sh
-curl -s -X POST localhost:8080/scans -H 'content-type: application/json' -d '{
+curl -sb jar.txt "localhost:8080/api/findings?q=ssl&severity=critical,high&tag=tls&limit=50" | jq
+```
+
+Override the target/templates with an ad-hoc spec (note the `spec` wrapper):
+
+```sh
+curl -sb jar.txt -X POST localhost:8080/api/scans -H 'content-type: application/json' -d '{
   "spec": {
     "targets": ["scanme.sh"],
     "templates": {"severities": ["info","low"], "tags": ["tech"]},
@@ -74,25 +93,21 @@ curl -s -X POST localhost:8080/scans -H 'content-type: application/json' -d '{
 }'
 ```
 
-## Config API (Phase 1)
-
-Manage reusable **targets** (a named host allowlist) and **template sets** (severity/
-tag/path filters + optional pinned git ref), then launch scans from them.
+**Config.** Reusable **targets** (a named host allowlist) and **template sets**
+(severity/tag/path filters + optional pinned git ref) to launch scans from:
 
 ```sh
 # create a target (the hosts list is the scope allowlist)
-curl -s -X POST localhost:8080/targets -d '{"name":"prod-web","hosts":["scanme.sh"],"tags":["prod"]}'
-
+curl -sb jar.txt -X POST localhost:8080/api/targets -d '{"name":"prod-web","hosts":["scanme.sh"],"tags":["prod"]}'
 # create a template set
-curl -s -X POST localhost:8080/template-sets -d '{"name":"info","severities":["info","low"]}'
-
+curl -sb jar.txt -X POST localhost:8080/api/template-sets -d '{"name":"info","severities":["info","low"]}'
 # launch a scan from stored config
-curl -s -X POST localhost:8080/scans -d '{"target_id":"<id>","template_set_id":"<id>"}'
+curl -sb jar.txt -X POST localhost:8080/api/scans -d '{"target_id":"<id>","template_set_id":"<id>"}'
 ```
 
-Both resources support the full REST set: `GET|POST /targets`,
-`GET|PUT|DELETE /targets/{id}` (and likewise `/template-sets`). Deleting a target or
-template set nulls the link on past scans but never deletes scan history.
+Both resources support the full REST set: `GET|POST /api/targets`,
+`GET|PUT|DELETE /api/targets/{id}` (and likewise `/api/template-sets`). Deleting a
+target or template set nulls the link on past scans but never deletes scan history.
 
 ## Authentication (OIDC/BFF)
 
@@ -112,20 +127,14 @@ client, the three groups, and one demo user each (username = password):
 | `operator` | `operator` | operator |
 | `viewer` | `viewer` | viewer |
 
-Log in by visiting `http://localhost:8080/auth/login` in a browser — Keycloak
-authenticates you and redirects back with a session cookie. `GET /auth/me` returns
-your identity + roles; `POST /auth/logout` ends the session. Keycloak's own admin
-console is at `http://localhost:8082` (`admin`/`admin`).
+Just open `http://localhost:8080` and the SPA redirects you to Keycloak; after
+login it drops you back into the app with a session cookie. The raw endpoints:
+`GET /api/auth/login` starts the flow, `GET /api/auth/me` returns your identity +
+roles, `POST /api/auth/logout` ends the session. Keycloak's own admin console is
+at `http://localhost:8082` (`admin`/`admin`).
 
 Because protected endpoints authenticate via the **session cookie** (not a bearer
-token), drive them from the browser or a cookie jar:
-
-```sh
-# log in (opens Keycloak, sets the cookie in the jar)
-curl -sc jar.txt -L "localhost:8080/auth/login"   # follow the browser flow instead for real login
-curl -sb jar.txt localhost:8080/auth/me | jq
-curl -sb jar.txt -X POST localhost:8080/scans
-```
+token), drive the API from the browser or a cookie jar populated by a real login.
 
 > **Pure-API smoke testing without auth:** unset `OIDC_ISSUER` (comment it out in
 > `docker-compose.yml`) to run the backend in **auth-disabled dev mode** — every
@@ -134,9 +143,24 @@ curl -sb jar.txt -X POST localhost:8080/scans
 
 ## Develop
 
+Backend:
+
 ```sh
-go build ./...
+go build ./...   # embeds web/dist (a placeholder until the SPA is built)
 go vet ./...
+go test ./...
+```
+
+Frontend (`web/`) — hot-reload dev server that proxies `/api` to the backend.
+Run the backend in **auth-disabled dev mode** (unset `OIDC_ISSUER`) so the SPA
+sees an all-roles dev user without the cross-origin login dance; real OIDC is
+exercised through the compose stack.
+
+```sh
+cd web
+npm install
+npm run dev        # http://localhost:5173, proxies /api → :8080
+npm run build      # type-check + produce web/dist for embedding
 ```
 
 ## Config
@@ -155,7 +179,7 @@ go vet ./...
 | `OIDC_CLIENT_ID` | backend | – (required if issuer set) | confidential client id |
 | `OIDC_CLIENT_SECRET` | backend | – (required if issuer set) | confidential client secret |
 | `APP_BASE_URL` | backend | `http://localhost:8080` | base URL for the redirect + post-login defaults |
-| `OIDC_REDIRECT_URL` | backend | `APP_BASE_URL`+`/auth/callback` | callback URL registered with the IdP |
+| `OIDC_REDIRECT_URL` | backend | `APP_BASE_URL`+`/api/auth/callback` | callback URL registered with the IdP |
 | `POST_LOGIN_REDIRECT` | backend | `APP_BASE_URL`+`/` | where the browser lands after login |
 | `OIDC_SCOPES` | backend | `openid,profile,email` | requested scopes |
 | `OIDC_ROLES_CLAIM` | backend | `groups` | ID-token claim holding the user's groups/roles |

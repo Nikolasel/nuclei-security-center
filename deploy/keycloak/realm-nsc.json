@@ -14,7 +14,7 @@
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": false,
-      "redirectUris": ["http://localhost:8080/auth/callback"],
+      "redirectUris": ["http://localhost:8080/api/auth/callback"],
       "webOrigins": ["http://localhost:8080"],
       "attributes": {
         "post.logout.redirect.uris": "http://localhost:8080/*"

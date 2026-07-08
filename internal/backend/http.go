@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
@@ -21,12 +22,14 @@ type Server struct {
 	store *store.Store
 	orch  *Orchestrator
 	auth  *Authenticator
+	spa   http.Handler
 	log   *slog.Logger
 }
 
-// NewServer builds the backend HTTP server. auth may be nil to disable auth.
-func NewServer(st *store.Store, orch *Orchestrator, auth *Authenticator, log *slog.Logger) *Server {
-	return &Server{store: st, orch: orch, auth: auth, log: log}
+// NewServer builds the backend HTTP server. auth may be nil to disable auth; spa
+// is the handler for the embedded frontend (served for all non-/api routes).
+func NewServer(st *store.Store, orch *Orchestrator, auth *Authenticator, spa http.Handler, log *slog.Logger) *Server {
+	return &Server{store: st, orch: orch, auth: auth, spa: spa, log: log}
 }
 
 // defaultOptions are the sane rate/concurrency/timeout defaults applied when a
@@ -41,38 +44,50 @@ func DefaultSpec() types.ScanSpec {
 	return types.ScanSpec{Targets: []string{"scanme.sh"}, Options: defaultOptions()}
 }
 
-// Handler returns the backend router. Authorization per endpoint: reads need
+// Handler returns the backend router. The JSON API lives under /api/*; the SPA
+// (embedded static build) is served at / with client-route fallback. /healthz
+// stays at the root for infra probes. Authorization per endpoint: reads need
 // viewer, running scans and config writes need operator, deletes need admin.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
 
-	// Auth (public entry points; /auth/me needs a session).
+	// Auth (public entry points; /api/auth/me needs a session).
 	if s.auth != nil {
-		mux.HandleFunc("GET /auth/login", s.auth.handleLogin)
-		mux.HandleFunc("GET /auth/callback", s.auth.handleCallback)
-		mux.HandleFunc("POST /auth/logout", s.auth.handleLogout)
+		mux.HandleFunc("GET /api/auth/login", s.auth.handleLogin)
+		mux.HandleFunc("GET /api/auth/callback", s.auth.handleCallback)
+		mux.HandleFunc("POST /api/auth/logout", s.auth.handleLogout)
 	}
-	mux.HandleFunc("GET /auth/me", s.requireAuth(s.handleMe))
+	mux.HandleFunc("GET /api/auth/me", s.requireAuth(s.handleMe))
 
 	// Scans
-	mux.HandleFunc("POST /scans", s.requireRole(RoleOperator, s.handleCreateScan))
-	mux.HandleFunc("GET /scans/{id}", s.requireRole(RoleViewer, s.handleGetScan))
-	mux.HandleFunc("GET /findings", s.requireRole(RoleViewer, s.handleListFindings))
+	mux.HandleFunc("GET /api/scans", s.requireRole(RoleViewer, s.handleListScans))
+	mux.HandleFunc("POST /api/scans", s.requireRole(RoleOperator, s.handleCreateScan))
+	mux.HandleFunc("GET /api/scans/{id}", s.requireRole(RoleViewer, s.handleGetScan))
+	mux.HandleFunc("GET /api/findings", s.requireRole(RoleViewer, s.handleListFindings))
+	mux.HandleFunc("GET /api/findings/{id}", s.requireRole(RoleViewer, s.handleGetFinding))
 
 	// Targets (config)
-	mux.HandleFunc("GET /targets", s.requireRole(RoleViewer, s.handleListTargets))
-	mux.HandleFunc("POST /targets", s.requireRole(RoleOperator, s.handleCreateTarget))
-	mux.HandleFunc("GET /targets/{id}", s.requireRole(RoleViewer, s.handleGetTarget))
-	mux.HandleFunc("PUT /targets/{id}", s.requireRole(RoleOperator, s.handleUpdateTarget))
-	mux.HandleFunc("DELETE /targets/{id}", s.requireRole(RoleAdmin, s.handleDeleteTarget))
+	mux.HandleFunc("GET /api/targets", s.requireRole(RoleViewer, s.handleListTargets))
+	mux.HandleFunc("POST /api/targets", s.requireRole(RoleOperator, s.handleCreateTarget))
+	mux.HandleFunc("GET /api/targets/{id}", s.requireRole(RoleViewer, s.handleGetTarget))
+	mux.HandleFunc("PUT /api/targets/{id}", s.requireRole(RoleOperator, s.handleUpdateTarget))
+	mux.HandleFunc("DELETE /api/targets/{id}", s.requireRole(RoleAdmin, s.handleDeleteTarget))
 
 	// Template sets (config)
-	mux.HandleFunc("GET /template-sets", s.requireRole(RoleViewer, s.handleListTemplateSets))
-	mux.HandleFunc("POST /template-sets", s.requireRole(RoleOperator, s.handleCreateTemplateSet))
-	mux.HandleFunc("GET /template-sets/{id}", s.requireRole(RoleViewer, s.handleGetTemplateSet))
-	mux.HandleFunc("PUT /template-sets/{id}", s.requireRole(RoleOperator, s.handleUpdateTemplateSet))
-	mux.HandleFunc("DELETE /template-sets/{id}", s.requireRole(RoleAdmin, s.handleDeleteTemplateSet))
+	mux.HandleFunc("GET /api/template-sets", s.requireRole(RoleViewer, s.handleListTemplateSets))
+	mux.HandleFunc("POST /api/template-sets", s.requireRole(RoleOperator, s.handleCreateTemplateSet))
+	mux.HandleFunc("GET /api/template-sets/{id}", s.requireRole(RoleViewer, s.handleGetTemplateSet))
+	mux.HandleFunc("PUT /api/template-sets/{id}", s.requireRole(RoleOperator, s.handleUpdateTemplateSet))
+	mux.HandleFunc("DELETE /api/template-sets/{id}", s.requireRole(RoleAdmin, s.handleDeleteTemplateSet))
+
+	// Unknown /api/* paths get a JSON-ish 404 rather than the SPA's index.html.
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "not found", http.StatusNotFound)
+	})
+
+	// Everything else: the embedded SPA (falls back to index.html for client routes).
+	mux.Handle("/", s.spa)
 
 	return mux
 }
@@ -164,6 +179,19 @@ func (s *Server) buildScanSpec(ctx context.Context, req createScanRequest) (type
 	}
 }
 
+func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	rows, err := s.store.ListScans(r.Context(), limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if rows == nil {
+		rows = []store.ScanRow{}
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
 func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	row, err := s.store.GetScan(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -177,10 +205,35 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, row)
 }
 
+// findingsPage is the paginated envelope returned by GET /api/findings.
+type findingsPage struct {
+	Items  []store.FindingRow `json:"items"`
+	Total  int                `json:"total"`
+	Limit  int                `json:"limit"`
+	Offset int                `json:"offset"`
+}
+
 func (s *Server) handleListFindings(w http.ResponseWriter, r *http.Request) {
-	scanID := r.URL.Query().Get("scan_id")
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	rows, err := s.store.ListFindings(r.Context(), scanID, limit)
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
+	filter := store.FindingFilter{
+		ScanID:     q.Get("scan_id"),
+		Query:      strings.TrimSpace(q.Get("q")),
+		Severities: splitCSV(q.Get("severity")),
+		Host:       strings.TrimSpace(q.Get("host")),
+		CVE:        strings.TrimSpace(q.Get("cve")),
+		Tag:        strings.TrimSpace(q.Get("tag")),
+		Limit:      limit,
+		Offset:     offset,
+	}
+	rows, total, err := s.store.ListFindings(r.Context(), filter)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -188,7 +241,32 @@ func (s *Server) handleListFindings(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []store.FindingRow{}
 	}
-	writeJSON(w, http.StatusOK, rows)
+	writeJSON(w, http.StatusOK, findingsPage{Items: rows, Total: total, Limit: limit, Offset: offset})
+}
+
+func (s *Server) handleGetFinding(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid finding id", http.StatusBadRequest)
+		return
+	}
+	d, err := s.store.GetFinding(r.Context(), id)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+// splitCSV splits a comma-separated query value, trimming spaces and dropping empties.
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

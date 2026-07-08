@@ -15,6 +15,7 @@ import (
 
 	"github.com/Nikolasel/nuclei-security-center/internal/backend"
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/Nikolasel/nuclei-security-center/web"
 )
 
 func main() {
@@ -63,7 +64,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           backend.NewServer(st, orch, auth, log).Handler(),
+		Handler:           backend.NewServer(st, orch, auth, web.Handler(), log).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -94,7 +95,7 @@ func buildAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger) 
 	}
 
 	baseURL := envOr("APP_BASE_URL", "http://localhost:8080")
-	redirect := envOr("OIDC_REDIRECT_URL", baseURL+"/auth/callback")
+	redirect := envOr("OIDC_REDIRECT_URL", baseURL+"/api/auth/callback")
 	postLogin := envOr("POST_LOGIN_REDIRECT", baseURL+"/")
 
 	ttl := 12 * time.Hour

@@ -11,8 +11,13 @@ Repo: `git@github.com:Nikolasel/nuclei-security-center.git`.
 **`docs/ARCHITECTURE.md` is the source of truth for design decisions and the phase plan.**
 Read it before making architectural changes. `README.md` covers running the stack.
 
-Current status: **Phase 0 (core loop) is complete.** Phase 1 (CRUD + on-demand scans +
-OIDC/BFF auth + React SPA) is next. See §8 of the architecture doc.
+Current status: **Phase 1 is complete** (targets/template-set CRUD, scan-from-config,
+OIDC/BFF auth with IdP-driven roles, and the React SPA). Phase 2 (scheduling + finding
+lifecycle) is next. See §8 of the architecture doc.
+
+The JSON API is served under **`/api/*`**; the React SPA (in `web/`) is built by Vite and
+**embedded into the backend binary** (`go:embed`), served at `/` same-origin so the BFF
+session cookie stays same-site. `/healthz` stays at the root for probes.
 
 ## Architecture in one breath
 
@@ -51,12 +56,17 @@ cmd/backend        backend entrypoint (main + graceful shutdown + PG retry)
 cmd/scanner        scanner node entrypoint
 internal/types     wire contracts shared by both services + Nuclei JSONL parse structs
 internal/scanner   Runner (runs nuclei, process-group cancel/timeout) + HTTP API
-internal/backend   Orchestrator (dispatch/poll/ingest) + ScannerClient + HTTP API
+internal/backend   Orchestrator (dispatch/poll/ingest) + ScannerClient + HTTP API + OIDC/BFF auth (auth.go, authz.go)
 internal/store     Postgres access + embedded migrations (internal/store/migrations/*.sql)
-deploy/            Dockerfile.backend (distroless), Dockerfile.scanner (nuclei base image)
-docker-compose.yml postgres + minio + scanner + backend
+web/               React + TS + Vite SPA; embedded into the backend via go:embed (web/embed.go)
+deploy/            Dockerfile.backend (SPA build + distroless), Dockerfile.scanner, keycloak/ (seeded realm)
+docker-compose.yml postgres + minio + keycloak + scanner + backend
 docs/ARCHITECTURE.md   design + phased plan (source of truth)
 ```
+
+The frontend build output `web/dist` is git-ignored except a committed placeholder
+`index.html` (so `go build` can embed before a real build); the Docker image builds the
+real SPA. Frontend dev: `cd web && npm install && npm run dev` (proxies `/api` to :8080).
 
 ## Commands
 

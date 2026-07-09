@@ -43,9 +43,12 @@ export interface Scan {
   finished_at?: string;
 }
 
-export interface Finding {
+// Occurrence is one per-scan observation (the immutable scan-detail row). It
+// links to its deduplicated lifecycle finding via finding_id.
+export interface Occurrence {
   id: number;
   scan_id: string;
+  finding_id?: number;
   template_id: string;
   name: string;
   severity: string;
@@ -57,15 +60,96 @@ export interface Finding {
   created_at: string;
 }
 
-export interface FindingsPage {
-  items: Finding[];
+export type Severity = "critical" | "high" | "medium" | "low" | "info";
+export const SEVERITIES: Severity[] = ["critical", "high", "medium", "low", "info"];
+
+// Disposition is the manual analyst overlay (Tenable-style). Closure is
+// evidence-driven — there is no manual "fixed"; the scanner mitigates.
+export type Disposition = "none" | "false_positive" | "accepted";
+export const DISPOSITIONS: Disposition[] = ["none", "false_positive", "accepted"];
+export const DISPOSITION_LABELS: Record<Disposition, string> = {
+  none: "None",
+  false_positive: "False positive",
+  accepted: "Accept risk",
+};
+
+// DetectionState is derived from scan observation; EffectiveState overlays the
+// disposition (accepted / false_positive win) on top of it.
+export type DetectionState =
+  | "new"
+  | "active"
+  | "resurfaced"
+  | "mitigated"
+  | "previously_mitigated";
+export type EffectiveState = DetectionState | "accepted" | "false_positive";
+export const EFFECTIVE_STATES: EffectiveState[] = [
+  "new",
+  "active",
+  "resurfaced",
+  "mitigated",
+  "previously_mitigated",
+  "accepted",
+  "false_positive",
+];
+export const STATE_LABELS: Record<EffectiveState, string> = {
+  new: "New",
+  active: "Active",
+  resurfaced: "Resurfaced",
+  mitigated: "Mitigated",
+  previously_mitigated: "Prev. mitigated",
+  accepted: "Accepted",
+  false_positive: "False positive",
+};
+
+// LifecycleFinding is the deduplicated, triageable entity keyed on
+// (target, template, matched_at). detection_state / effective_state and
+// effective_severity (recast-aware) are all derived server-side.
+export interface LifecycleFinding {
+  id: number;
+  target_id?: string;
+  template_id: string;
+  name: string;
+  severity: string;
+  recast_severity?: string;
+  effective_severity: string;
+  host: string;
+  matched_at: string;
+  type: string;
+  cve: string[];
+  tags: string[];
+  disposition: Disposition;
+  accept_expires_at?: string;
+  detection_state: DetectionState;
+  effective_state: EffectiveState;
+  times_mitigated: number;
+  first_seen_scan?: string;
+  last_seen_scan?: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  latest_occurrence_id?: number;
+}
+
+export interface Page<T> {
+  items: T[];
   total: number;
   limit: number;
   offset: number;
 }
 
 export interface FindingsQuery {
-  scanId?: string;
+  targetId?: string;
+  q?: string;
+  severities?: string[];
+  host?: string;
+  cve?: string;
+  tag?: string;
+  disposition?: Disposition;
+  state?: EffectiveState;
+  limit?: number;
+  offset?: number;
+}
+
+export interface ScanFindingsQuery {
   q?: string;
   severities?: string[];
   host?: string;
@@ -112,8 +196,14 @@ export interface NucleiRaw {
   [key: string]: unknown;
 }
 
-export interface FindingDetail extends Finding {
-  raw: NucleiRaw;
+export interface FindingDetail extends LifecycleFinding {
+  disposition_note?: string;
+  disposition_by?: string;
+  disposition_at?: string;
+  recast_note?: string;
+  recast_by?: string;
+  recast_at?: string;
+  raw?: NucleiRaw;
 }
 
 export class ApiError extends Error {
@@ -164,7 +254,31 @@ export const api = {
 
   listFindings: (q: FindingsQuery = {}) => {
     const p = new URLSearchParams();
-    if (q.scanId) p.set("scan_id", q.scanId);
+    if (q.targetId) p.set("target_id", q.targetId);
+    if (q.q) p.set("q", q.q);
+    if (q.severities?.length) p.set("severity", q.severities.join(","));
+    if (q.host) p.set("host", q.host);
+    if (q.cve) p.set("cve", q.cve);
+    if (q.tag) p.set("tag", q.tag);
+    if (q.disposition) p.set("disposition", q.disposition);
+    if (q.state) p.set("state", q.state);
+    if (q.limit != null) p.set("limit", String(q.limit));
+    if (q.offset != null) p.set("offset", String(q.offset));
+    const qs = p.toString();
+    return request<Page<LifecycleFinding>>("GET", qs ? `/api/findings?${qs}` : "/api/findings");
+  },
+  getFinding: (id: number | string) => request<FindingDetail>("GET", `/api/findings/${id}`),
+  // Analyst overlays (operator only). accept_expires_at applies to "accepted".
+  setDisposition: (
+    id: number | string,
+    body: { disposition: Disposition; note?: string; accept_expires_at?: string | null },
+  ) => request<FindingDetail>("PATCH", `/api/findings/${id}/disposition`, body),
+  // Recast Risk: override severity; pass severity "" to clear the recast.
+  recastSeverity: (id: number | string, body: { severity: string; note?: string }) =>
+    request<FindingDetail>("PATCH", `/api/findings/${id}/severity`, body),
+
+  listScanFindings: (scanId: string, q: ScanFindingsQuery = {}) => {
+    const p = new URLSearchParams();
     if (q.q) p.set("q", q.q);
     if (q.severities?.length) p.set("severity", q.severities.join(","));
     if (q.host) p.set("host", q.host);
@@ -173,7 +287,6 @@ export const api = {
     if (q.limit != null) p.set("limit", String(q.limit));
     if (q.offset != null) p.set("offset", String(q.offset));
     const qs = p.toString();
-    return request<FindingsPage>("GET", qs ? `/api/findings?${qs}` : "/api/findings");
+    return request<Page<Occurrence>>("GET", qs ? `/api/scans/${scanId}/findings?${qs}` : `/api/scans/${scanId}/findings`);
   },
-  getFinding: (id: number | string) => request<FindingDetail>("GET", `/api/findings/${id}`),
 };

@@ -65,20 +65,60 @@ ProjectDiscovery's public test host `scanme.sh` — no infrastructure of your ow
 curl -sb jar.txt -X POST localhost:8080/api/scans          # => {"scan_id":"..."}
 # check scan state (queued → running → complete)
 curl -sb jar.txt localhost:8080/api/scans/<scan_id>
-# list ingested findings (paginated envelope: {items,total,limit,offset})
-curl -sb jar.txt "localhost:8080/api/findings?scan_id=<scan_id>" | jq
-# one finding with full raw Nuclei output (for the vulnerability detail view)
-curl -sb jar.txt "localhost:8080/api/findings/<finding_id>" | jq
+# occurrences observed by one scan (paginated envelope: {items,total,limit,offset})
+curl -sb jar.txt "localhost:8080/api/scans/<scan_id>/findings" | jq
 ```
 
-`GET /api/findings` supports server-side filtering + pagination:
-`q` (name/template substring), `severity` (comma-separated, any-of), `host`
-(substring), `cve` (substring), `tag` (exact), plus `scan_id`, `limit`, `offset`.
-CVE ids and tags are promoted to indexed columns (migration 0004) so these filters
-are cheap.
+**Findings lifecycle (Phase 2).** Findings are **deduplicated** across scans and
+tracked over time with a **Tenable Security Center-style** lifecycle. `GET /api/findings`
+returns the deduplicated entities (keyed on `(target, template, matched_at)`). Each has:
+
+- a **detection state** — derived from scan observation, never stored. **Closure is
+  evidence-driven — there is no manual "fixed."** The state is a function of whether the
+  finding is in the target's latest completed scan and how many times it has come back
+  after disappearing (`times_mitigated`):
+
+  | Detection state | In latest scan? | Meaning |
+  |---|---|---|
+  | `new` | yes | first time ever observed |
+  | `active` | yes | seen before, never gone |
+  | `resurfaced` | yes | was mitigated, now detected again — a **regression** |
+  | `mitigated` | no | previously seen; the latest scan no longer finds it (auto-closed) |
+  | `previously_mitigated` | no | mitigated, came back, and is gone again — a **flapping** finding |
+
+  `resurfaced` is to `active` what `previously_mitigated` is to `mitigated`: same current
+  presence, but "…and this has disappeared before." Both need attention a clean
+  `active`/`mitigated` doesn't — a regressed fix, or a vuln that keeps reappearing.
+- a manual **disposition** — `none` / `false_positive` / `accepted` (Accept Risk, with an
+  optional `accept_expires_at`; an expired acceptance reverts to the detection state) —
+  and an optional **`recast_severity`** (Recast Risk).
+- an **`effective_state`** and **`effective_severity`** overlaying the two (an `accepted`
+  or `false_positive` disposition wins; otherwise you see the detection state).
+
+`GET /api/scans/{id}/findings` (above) returns the immutable per-scan **occurrences** instead.
 
 ```sh
-curl -sb jar.txt "localhost:8080/api/findings?q=ssl&severity=critical,high&tag=tls&limit=50" | jq
+# deduplicated lifecycle list (paginated + filtered)
+curl -sb jar.txt "localhost:8080/api/findings" | jq
+# one tracked finding + full raw Nuclei output of its latest occurrence
+curl -sb jar.txt "localhost:8080/api/findings/<finding_id>" | jq
+# disposition (operator) — none | false_positive | accepted (+ optional accept_expires_at)
+curl -sb jar.txt -X PATCH localhost:8080/api/findings/<finding_id>/disposition \
+  -H 'content-type: application/json' \
+  -d '{"disposition":"accepted","note":"risk accepted for Q3","accept_expires_at":"2027-01-01T00:00:00Z"}'
+# recast severity (operator) — empty severity clears the recast
+curl -sb jar.txt -X PATCH localhost:8080/api/findings/<finding_id>/severity \
+  -H 'content-type: application/json' -d '{"severity":"high","note":"internet-facing"}'
+```
+
+`GET /api/findings` supports server-side filtering + pagination: `q` (name/template
+substring), `severity` (comma-separated, any-of, matched against the effective severity),
+`host` (substring), `cve` (substring), `tag` (exact), `disposition` (exact), `state`
+(exact effective state), plus `target_id`, `limit`, `offset`. CVE ids and tags are
+promoted to indexed columns so these filters are cheap.
+
+```sh
+curl -sb jar.txt "localhost:8080/api/findings?severity=critical,high&state=new&limit=50" | jq
 ```
 
 Override the target/templates with an ad-hoc spec (note the `spec` wrapper):

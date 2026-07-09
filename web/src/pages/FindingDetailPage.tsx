@@ -1,8 +1,18 @@
-import { useQuery } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, type NucleiRaw } from "../api";
-import { Button, Card, ErrorText, SeverityBadge, Spinner } from "../components/ui";
+import {
+  api,
+  DISPOSITION_LABELS,
+  DISPOSITIONS,
+  SEVERITIES,
+  STATE_LABELS,
+  type Disposition,
+  type FindingDetail,
+  type NucleiRaw,
+} from "../api";
+import { hasRole, useMe } from "../auth";
+import { Button, Card, ErrorText, FindingStateBadge, Input, Pill, Select, SeverityBadge, Spinner } from "../components/ui";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -65,6 +75,142 @@ function Meta({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+/** TriagePanel shows the Tenable-style lifecycle (effective + detection state,
+ *  mitigation history, disposition + recast audit) and, for operators, lets the
+ *  user Accept Risk (with optional expiry) / mark False Positive / recast severity.
+ *  There is no manual "fixed" — mitigation is evidence-driven. */
+function TriagePanel({ f }: { f: FindingDetail }) {
+  const me = useMe();
+  const canTriage = hasRole(me.data ?? undefined, "operator");
+  const qc = useQueryClient();
+
+  const isoDate = (iso?: string) => (iso ? iso.slice(0, 10) : "");
+  const [disposition, setDisposition] = useState<Disposition>(f.disposition);
+  const [expires, setExpires] = useState(isoDate(f.accept_expires_at));
+  const [dispNote, setDispNote] = useState("");
+  const [recast, setRecast] = useState(f.recast_severity ?? "");
+  const [recastNote, setRecastNote] = useState("");
+
+  // Re-sync controls when the finding reloads (e.g. after a save).
+  useEffect(() => {
+    setDisposition(f.disposition);
+    setExpires(isoDate(f.accept_expires_at));
+    setRecast(f.recast_severity ?? "");
+  }, [f.disposition, f.accept_expires_at, f.recast_severity]);
+
+  const onSaved = (updated: FindingDetail) => {
+    qc.setQueryData(["finding", String(f.id)], updated);
+    qc.invalidateQueries({ queryKey: ["findings"] });
+  };
+
+  const dispMut = useMutation({
+    mutationFn: () =>
+      api.setDisposition(f.id, {
+        disposition,
+        note: dispNote.trim() || undefined,
+        accept_expires_at:
+          disposition === "accepted" && expires ? new Date(`${expires}T00:00:00Z`).toISOString() : null,
+      }),
+    onSuccess: (u) => {
+      onSaved(u);
+      setDispNote("");
+    },
+  });
+
+  const recastMut = useMutation({
+    mutationFn: () => api.recastSeverity(f.id, { severity: recast, note: recastNote.trim() || undefined }),
+    onSuccess: (u) => {
+      onSaved(u);
+      setRecastNote("");
+    },
+  });
+
+  const dispDirty =
+    disposition !== f.disposition ||
+    dispNote.trim() !== "" ||
+    (disposition === "accepted" && expires !== isoDate(f.accept_expires_at));
+  const recastDirty = recast !== (f.recast_severity ?? "") || recastNote.trim() !== "";
+
+  return (
+    <Card className="space-y-4 p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="mr-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">Lifecycle</h2>
+        <FindingStateBadge state={f.effective_state} />
+        <span className="text-xs text-neutral-500">
+          detection: <span className="font-medium text-neutral-700 dark:text-neutral-300">{STATE_LABELS[f.detection_state]}</span>
+        </span>
+        {f.times_mitigated > 0 && <Pill tone="warn">mitigated ×{f.times_mitigated}</Pill>}
+        {f.disposition === "accepted" && f.accept_expires_at && (
+          <span className="text-xs text-neutral-500">
+            accept expires {new Date(f.accept_expires_at).toLocaleDateString()}
+          </span>
+        )}
+      </div>
+
+      {(f.disposition_by || f.disposition_note) && (
+        <p className="text-xs text-neutral-500">
+          Disposition <span className="font-medium">{DISPOSITION_LABELS[f.disposition]}</span>
+          {f.disposition_by && <> · by {f.disposition_by}</>}
+          {f.disposition_at && <> · {new Date(f.disposition_at).toLocaleString()}</>}
+          {f.disposition_note && <> — “{f.disposition_note}”</>}
+        </p>
+      )}
+      {f.recast_severity && (
+        <p className="text-xs text-neutral-500">
+          Severity recast to <span className="font-medium">{f.recast_severity}</span>
+          {f.recast_by && <> · by {f.recast_by}</>}
+          {f.recast_note && <> — “{f.recast_note}”</>}
+        </p>
+      )}
+
+      {canTriage ? (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2 rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
+            <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Disposition</div>
+            <Select value={disposition} onChange={(e) => setDisposition(e.target.value as Disposition)}>
+              {DISPOSITIONS.map((d) => (
+                <option key={d} value={d}>
+                  {DISPOSITION_LABELS[d]}
+                </option>
+              ))}
+            </Select>
+            {disposition === "accepted" && (
+              <label className="block space-y-1">
+                <span className="block text-xs text-neutral-500">Accept until (optional)</span>
+                <Input type="date" value={expires} onChange={(e) => setExpires(e.target.value)} />
+              </label>
+            )}
+            <Input value={dispNote} onChange={(e) => setDispNote(e.target.value)} placeholder="note (optional)…" />
+            <Button variant="primary" disabled={!dispDirty || dispMut.isPending} onClick={() => dispMut.mutate()}>
+              {dispMut.isPending ? "Saving…" : "Save disposition"}
+            </Button>
+            {dispMut.isError && <ErrorText error={dispMut.error} />}
+          </div>
+
+          <div className="space-y-2 rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
+            <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Recast severity</div>
+            <Select value={recast} onChange={(e) => setRecast(e.target.value)}>
+              <option value="">— no recast (observed: {f.severity}) —</option>
+              {SEVERITIES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </Select>
+            <Input value={recastNote} onChange={(e) => setRecastNote(e.target.value)} placeholder="note (optional)…" />
+            <Button variant="primary" disabled={!recastDirty || recastMut.isPending} onClick={() => recastMut.mutate()}>
+              {recastMut.isPending ? "Saving…" : recast ? "Save recast" : "Clear recast"}
+            </Button>
+            {recastMut.isError && <ErrorText error={recastMut.error} />}
+          </div>
+        </div>
+      ) : (
+        <p className="text-xs text-neutral-400">Operator role required to change disposition or severity.</p>
+      )}
+    </Card>
+  );
+}
+
 export function FindingDetailPage() {
   const { id = "" } = useParams();
   const q = useQuery({ queryKey: ["finding", id], queryFn: () => api.getFinding(id) });
@@ -86,10 +232,13 @@ export function FindingDetailPage() {
           ← Findings
         </Link>
         <div className="mt-1 flex flex-wrap items-center gap-3">
-          <SeverityBadge severity={f.severity} />
+          <SeverityBadge severity={f.effective_severity} recast={!!f.recast_severity} />
           <h1 className="text-xl font-semibold">{name}</h1>
+          <FindingStateBadge state={f.effective_state} />
         </div>
       </div>
+
+      <TriagePanel f={f} />
 
       <Section title="Overview">
         <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
@@ -112,16 +261,31 @@ export function FindingDetailPage() {
               <span className="font-mono text-xs">{f.template_id}</span>
             )}
           </Meta>
-          <Meta label="Scan">
-            <Link
-              to={`/scans/${f.scan_id}`}
-              className="font-mono text-xs text-indigo-600 hover:underline dark:text-indigo-400"
-            >
-              {f.scan_id.slice(0, 8)}
-            </Link>
+          <Meta label="First seen">
+            {f.first_seen_scan ? (
+              <Link
+                to={`/scans/${f.first_seen_scan}`}
+                className="text-indigo-600 hover:underline dark:text-indigo-400"
+                title={new Date(f.first_seen_at).toLocaleString()}
+              >
+                {new Date(f.first_seen_at).toLocaleDateString()}
+              </Link>
+            ) : (
+              new Date(f.first_seen_at).toLocaleDateString()
+            )}
           </Meta>
-          <Meta label="Detected">
-            {raw.timestamp ? new Date(raw.timestamp).toLocaleString() : new Date(f.created_at).toLocaleString()}
+          <Meta label="Last seen">
+            {f.last_seen_scan ? (
+              <Link
+                to={`/scans/${f.last_seen_scan}`}
+                className="text-indigo-600 hover:underline dark:text-indigo-400"
+                title={new Date(f.last_seen_at).toLocaleString()}
+              >
+                {new Date(f.last_seen_at).toLocaleDateString()}
+              </Link>
+            ) : (
+              new Date(f.last_seen_at).toLocaleDateString()
+            )}
           </Meta>
         </dl>
       </Section>
@@ -235,14 +399,16 @@ export function FindingDetailPage() {
         </Section>
       )}
 
-      <Section title="Raw finding">
-        <details>
-          <summary className="cursor-pointer text-sm text-neutral-500">Show raw JSON</summary>
-          <div className="mt-2">
-            <CodeBlock text={JSON.stringify(f.raw, null, 2)} />
-          </div>
-        </details>
-      </Section>
+      {f.raw && (
+        <Section title="Raw finding">
+          <details>
+            <summary className="cursor-pointer text-sm text-neutral-500">Show raw JSON</summary>
+            <div className="mt-2">
+              <CodeBlock text={JSON.stringify(f.raw, null, 2)} />
+            </div>
+          </details>
+        </Section>
+      )}
     </div>
   );
 }

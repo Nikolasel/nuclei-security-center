@@ -43,11 +43,11 @@ func (o *Orchestrator) Submit(ctx context.Context, spec types.ScanSpec, link sto
 	if err != nil {
 		return "", err
 	}
-	go o.run(scanID, spec)
+	go o.run(scanID, link.TargetID, spec)
 	return scanID, nil
 }
 
-func (o *Orchestrator) run(scanID string, spec types.ScanSpec) {
+func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 	// Detached from the request context; give the whole run a generous ceiling.
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
@@ -74,7 +74,7 @@ func (o *Orchestrator) run(scanID string, spec types.ScanSpec) {
 		return
 	}
 
-	if err := o.ingest(ctx, scanID, nodeScanID); err != nil {
+	if err := o.ingest(ctx, scanID, targetID, nodeScanID); err != nil {
 		o.failScan(ctx, scanID, "ingest: "+err.Error())
 		return
 	}
@@ -107,7 +107,8 @@ func (o *Orchestrator) pollToDone(ctx context.Context, nodeScanID string) (types
 }
 
 // ingest streams the node's JSONL results and writes each finding to Postgres.
-func (o *Orchestrator) ingest(ctx context.Context, scanID, nodeScanID string) error {
+// targetID scopes the deduplicated lifecycle entity (empty for ad-hoc scans).
+func (o *Orchestrator) ingest(ctx context.Context, scanID, targetID, nodeScanID string) error {
 	body, err := o.client.Results(ctx, nodeScanID)
 	if err != nil {
 		return err
@@ -130,7 +131,7 @@ func (o *Orchestrator) ingest(ctx context.Context, scanID, nodeScanID string) er
 		// Copy the line: bufio.Scanner reuses its buffer on the next Scan.
 		raw := make([]byte, len(line))
 		copy(raw, line)
-		if err := o.store.InsertFinding(ctx, scanID, f, raw); err != nil {
+		if err := o.store.IngestFinding(ctx, scanID, targetID, f, raw); err != nil {
 			return err
 		}
 		n++

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
@@ -67,11 +68,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/scans/{id}", s.requireRole(RoleViewer, s.handleGetScan))
 	mux.HandleFunc("GET /api/scans/{id}/findings", s.requireRole(RoleViewer, s.handleListScanFindings))
 
-	// Findings — the deduplicated, triageable lifecycle entities (§3). Triage is a
-	// mutation, so it needs operator; reads need viewer.
+	// Findings — the deduplicated, triageable lifecycle entities (§3). Analyst
+	// overlays (disposition, severity recast) are mutations → operator; reads → viewer.
 	mux.HandleFunc("GET /api/findings", s.requireRole(RoleViewer, s.handleListFindings))
 	mux.HandleFunc("GET /api/findings/{id}", s.requireRole(RoleViewer, s.handleGetFinding))
-	mux.HandleFunc("PATCH /api/findings/{id}/status", s.requireRole(RoleOperator, s.handleUpdateFindingStatus))
+	mux.HandleFunc("PATCH /api/findings/{id}/disposition", s.requireRole(RoleOperator, s.handleSetDisposition))
+	mux.HandleFunc("PATCH /api/findings/{id}/severity", s.requireRole(RoleOperator, s.handleRecastSeverity))
 
 	// Targets (config)
 	mux.HandleFunc("GET /api/targets", s.requireRole(RoleViewer, s.handleListTargets))
@@ -237,16 +239,16 @@ func (s *Server) handleListFindings(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, offset := pageParams(q)
 	filter := store.LifecycleFilter{
-		TargetID:   q.Get("target_id"),
-		Query:      strings.TrimSpace(q.Get("q")),
-		Severities: splitCSV(q.Get("severity")),
-		Host:       strings.TrimSpace(q.Get("host")),
-		CVE:        strings.TrimSpace(q.Get("cve")),
-		Tag:        strings.TrimSpace(q.Get("tag")),
-		Status:     strings.TrimSpace(q.Get("status")),
-		View:       strings.TrimSpace(q.Get("view")),
-		Limit:      limit,
-		Offset:     offset,
+		TargetID:    q.Get("target_id"),
+		Query:       strings.TrimSpace(q.Get("q")),
+		Severities:  splitCSV(q.Get("severity")),
+		Host:        strings.TrimSpace(q.Get("host")),
+		CVE:         strings.TrimSpace(q.Get("cve")),
+		Tag:         strings.TrimSpace(q.Get("tag")),
+		Disposition: strings.TrimSpace(q.Get("disposition")),
+		State:       strings.TrimSpace(q.Get("state")),
+		Limit:       limit,
+		Offset:      offset,
 	}
 	rows, total, err := s.store.ListLifecycleFindings(r.Context(), filter)
 	if err != nil {
@@ -273,36 +275,79 @@ func (s *Server) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d)
 }
 
-// updateStatusRequest is the body of PATCH /api/findings/{id}/status.
-type updateStatusRequest struct {
-	Status string `json:"status"`
-	Note   string `json:"note"`
+// actorFrom returns a stable identifier for the authenticated caller (email,
+// falling back to subject) to stamp on an audit field.
+func actorFrom(r *http.Request) string {
+	id := identityFrom(r.Context())
+	if id.Email != "" {
+		return id.Email
+	}
+	return id.Subject
 }
 
-func (s *Server) handleUpdateFindingStatus(w http.ResponseWriter, r *http.Request) {
+// setDispositionRequest is the body of PATCH /api/findings/{id}/disposition.
+// AcceptExpiresAt is honoured only for the "accepted" disposition (Accept Risk).
+type setDispositionRequest struct {
+	Disposition     string     `json:"disposition"`
+	Note            string     `json:"note"`
+	AcceptExpiresAt *time.Time `json:"accept_expires_at"`
+}
+
+func (s *Server) handleSetDisposition(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		http.Error(w, "invalid finding id", http.StatusBadRequest)
 		return
 	}
-	var req updateStatusRequest
+	var req setDispositionRequest
 	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
 		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if !store.ValidStatus(req.Status) {
-		http.Error(w, "invalid status (want one of: open, triaged, false_positive, fixed)", http.StatusBadRequest)
+	if !store.ValidDisposition(req.Disposition) {
+		http.Error(w, "invalid disposition (want one of: none, false_positive, accepted)", http.StatusBadRequest)
 		return
 	}
-	id2 := identityFrom(r.Context())
-	actor := id2.Email
-	if actor == "" {
-		actor = id2.Subject
-	}
-	if err := s.store.UpdateFindingStatus(r.Context(), id, req.Status, strings.TrimSpace(req.Note), actor); err != nil {
+	if err := s.store.SetDisposition(r.Context(), id, req.Disposition, strings.TrimSpace(req.Note), actorFrom(r), req.AcceptExpiresAt); err != nil {
 		writeStoreErr(w, err)
 		return
 	}
+	s.writeFinding(w, r, id)
+}
+
+// recastSeverityRequest is the body of PATCH /api/findings/{id}/severity. An empty
+// severity clears the recast (reverting to the scan-observed severity).
+type recastSeverityRequest struct {
+	Severity string `json:"severity"`
+	Note     string `json:"note"`
+}
+
+func (s *Server) handleRecastSeverity(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid finding id", http.StatusBadRequest)
+		return
+	}
+	var req recastSeverityRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
+		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	sev := strings.TrimSpace(req.Severity)
+	if sev != "" && !store.ValidSeverity(sev) {
+		http.Error(w, "invalid severity (want one of: critical, high, medium, low, info — or empty to clear)", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.RecastSeverity(r.Context(), id, sev, strings.TrimSpace(req.Note), actorFrom(r)); err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	s.writeFinding(w, r, id)
+}
+
+// writeFinding re-reads a lifecycle finding and writes it as the response (the
+// updated entity returned by the disposition/recast mutations).
+func (s *Server) writeFinding(w http.ResponseWriter, r *http.Request, id int64) {
 	d, err := s.store.GetLifecycleFinding(r.Context(), id)
 	if err != nil {
 		writeStoreErr(w, err)

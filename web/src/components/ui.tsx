@@ -6,6 +6,7 @@ import type {
   ReactNode,
   SelectHTMLAttributes,
 } from "react";
+import { STATE_LABELS, type EffectiveState } from "../api";
 
 export function cn(...parts: Array<string | false | undefined | null>) {
   return clsx(parts);
@@ -56,16 +57,19 @@ const severityStyles: Record<string, string> = {
   info: "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300",
 };
 
-export function SeverityBadge({ severity }: { severity: string }) {
+export function SeverityBadge({ severity, recast }: { severity: string; recast?: boolean }) {
   const s = severity.toLowerCase();
   return (
     <span
+      title={recast ? "Recast severity (analyst override)" : undefined}
       className={cn(
         "inline-block rounded px-1.5 py-0.5 text-xs font-semibold uppercase tracking-wide",
         severityStyles[s] ?? "bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300",
+        recast && "ring-1 ring-inset ring-indigo-500",
       )}
     >
       {severity || "unknown"}
+      {recast && " ⟲"}
     </span>
   );
 }
@@ -90,40 +94,39 @@ export function StateBadge({ state }: { state: string }) {
   );
 }
 
-const statusStyles: Record<string, string> = {
-  open: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
-  triaged: "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300",
-  false_positive: "bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400",
-  fixed: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300",
+// Effective-state palette (Tenable-style lifecycle). Cumulative states (still
+// detected) are warm/attention-grabbing; mitigated states are green (good);
+// analyst overlays are muted.
+const findingStateStyles: Record<string, string> = {
+  new: "bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300",
+  active: "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300",
+  resurfaced: "bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300",
+  mitigated: "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300",
+  previously_mitigated: "bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300",
+  accepted: "bg-neutral-200 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300",
+  false_positive: "bg-neutral-200 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-500",
 };
 
-const statusLabels: Record<string, string> = {
-  open: "Open",
-  triaged: "Triaged",
-  false_positive: "False positive",
-  fixed: "Fixed",
-};
-
-/** StatusBadge renders a finding's manual triage status. */
-export function StatusBadge({ status }: { status: string }) {
+/** FindingStateBadge renders a finding's derived effective lifecycle state. */
+export function FindingStateBadge({ state }: { state: EffectiveState | string }) {
   return (
     <span
       className={cn(
         "inline-block rounded px-1.5 py-0.5 text-xs font-medium",
-        statusStyles[status] ?? "bg-neutral-100 text-neutral-700",
+        findingStateStyles[state] ?? "bg-neutral-100 text-neutral-700",
       )}
     >
-      {statusLabels[status] ?? status}
+      {STATE_LABELS[state as EffectiveState] ?? state}
     </span>
   );
 }
 
-/** Pill is a small outlined marker used for derived facets (New / Resolved). */
-export function Pill({ children, tone }: { children: ReactNode; tone: "new" | "resolved" }) {
+/** Pill is a small outlined marker for secondary facets. */
+export function Pill({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "warn" }) {
   const styles =
-    tone === "new"
-      ? "border-indigo-300 text-indigo-700 dark:border-indigo-800 dark:text-indigo-300"
-      : "border-emerald-300 text-emerald-700 dark:border-emerald-800 dark:text-emerald-300";
+    tone === "warn"
+      ? "border-rose-300 text-rose-700 dark:border-rose-800 dark:text-rose-300"
+      : "border-neutral-300 text-neutral-600 dark:border-neutral-700 dark:text-neutral-400";
   return (
     <span className={cn("inline-block rounded-full border px-2 py-0.5 text-xs font-medium", styles)}>
       {children}

@@ -83,9 +83,23 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
 - **schedules** — `id, target_id, template_set_id, cron, rate_limit, concurrency, enabled`.
 - **scans** — `id, source (schedule|adhoc), status, started_at, finished_at,
   nuclei_version, templates_commit, triggered_by`.
-- **findings** — `id, target_id, template_id, name, severity, matched_at, raw_json,
-  first_seen_scan, last_seen_scan, status (open|triaged|false_positive|fixed)`.
-  Keyed on `(target_id, template_id, matched_at)` so lifecycle survives across scans.
+- **findings** (occurrences) — the immutable per-scan observation log: `id, scan_id,
+  target_id, dedup_key, template_id, name, severity, host, matched_at, raw_json`. Answers
+  "what did scan X observe"; feeds the raw archive (Phase 3 S3).
+- **finding_lifecycle** — the **deduplicated, triageable** entity keyed on
+  `(target_id, template_id, matched_at)` so lifecycle survives across scans. Models a
+  **Tenable Security Center-style** two-dimensional lifecycle:
+  - *Detection state* — **derived at read time** from scan observation, never stored:
+    **New / Active / Resurfaced** (cumulative — still detected) and **Mitigated /
+    Previously Mitigated** (no longer detected). `times_mitigated` (maintained at ingest)
+    distinguishes a first disappearance from a flapping one. **Closure is
+    evidence-driven — there is no manual "fixed."**
+  - *Disposition* — the analyst overlay (the only manual state): **Accept Risk** (with an
+    optional `accept_expires_at` — an expired acceptance falls back to its detection
+    state) and **False Positive**, plus **Recast Risk** (a `recast_severity` override).
+    Each carries a note/actor/timestamp audit trio.
+  - The **effective state** (what the UI shows) overlays disposition on detection:
+    accepted / false_positive win, else the detection state.
 - **audit_log** — `id, actor, action, entity, before, after, ts`. Written from day one.
 
 ---
@@ -306,15 +320,18 @@ Turns point-in-time scans into a tracked signal. Built in three slices, one PR e
 - **Lifecycle:** ✅ *(slice 1)* — findings split into two tables: `findings` stays the
   immutable per-scan **occurrence** log (raw JSONL preserved), and a new
   `finding_lifecycle` is the **deduplicated** entity keyed on `(target_id, template_id,
-  matched_at)` (migration 0005). Ingest inserts an occurrence + upserts the lifecycle row
-  (`first_seen`/`last_seen`, denormalised latest display fields); a finding marked `fixed`
-  is auto-reopened when re-observed. Triage `status` (open / triaged / false_positive /
-  fixed) lives on the lifecycle entity so it survives across scans. **"new since last
-  scan"** and **"resolved/gone"** are derived at read time (vs. the target's latest
-  completed scan) so they never go stale. API: `GET /api/findings` (dedup view, with
-  `status`/`view` filters), `GET /api/scans/{id}/findings` (occurrences),
-  `PATCH /api/findings/{id}/status` (operator). SPA: view tabs (All/Open/New/Resolved),
-  status filter, and a triage panel on the detail page.
+  matched_at)` (migrations 0005/0006). Ingest inserts an occurrence + upserts the lifecycle
+  row. The lifecycle follows the **Tenable Security Center model** (§3): an automatic
+  **detection state** (New / Active / Resurfaced / Mitigated / Previously Mitigated),
+  derived at read time from scan observation vs. the target's latest completed scan and a
+  `times_mitigated` counter — so **closure is evidence-driven, not a manual "fixed."** The
+  only manual overlays are analyst **dispositions** — Accept Risk (optional
+  `accept_expires_at`; an expired acceptance falls back to detection) and False Positive —
+  plus **Recast Risk** (severity override). The **effective state** overlays disposition on
+  detection. API: `GET /api/findings` (dedup view, `state`/`disposition` + severity/host/
+  cve/tag filters), `GET /api/scans/{id}/findings` (occurrences),
+  `PATCH /api/findings/{id}/disposition` and `PATCH /api/findings/{id}/severity` (operator).
+  SPA: effective-state tabs, disposition filter, and an Accept-Risk / Recast triage panel.
 - **Scheduling:** ⬜ *(slice 2)* — cron schedules in the backend ticker → dispatch (the
   `schedules` table from §3), enable/disable in the UI.
 - **Exports:** ⬜ *(slice 3)* — JSON / SARIF / CSV (Nuclei emits the first two natively).
@@ -349,5 +366,10 @@ Hardening and the security guardrails from §6.
 
 - **OpenSearch** as a derived findings index if search/volume outgrows Postgres (§3a).
 - **Scanner node registry** with self-registration (vs. the static config list).
+- **Workflow dispositions** (Investigating / In progress) on top of the current Accept-Risk
+  / False-Positive set — deferred deliberately to keep the lifecycle purely detection-driven
+  (the Tenable model). Add if the team wants "who's working on this" tracking.
+- **Scoped disposition rules** — Accept/Recast applied as rules over a plugin/host/tag scope
+  (as Tenable does), vs. the current per-finding overlays.
 - **Regulatory tail** (only if scope changes): SSO federation, SIEM shipping of the audit
   log, CMK/KMS, change-approval — additive to this design, not a rewrite.

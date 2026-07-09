@@ -3,14 +3,16 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   api,
-  FINDING_STATUSES,
-  STATUS_LABELS,
+  DISPOSITION_LABELS,
+  DISPOSITIONS,
+  SEVERITIES,
+  STATE_LABELS,
+  type Disposition,
   type FindingDetail,
-  type FindingStatus,
   type NucleiRaw,
 } from "../api";
 import { hasRole, useMe } from "../auth";
-import { Button, Card, ErrorText, Pill, Select, SeverityBadge, Spinner, StatusBadge } from "../components/ui";
+import { Button, Card, ErrorText, FindingStateBadge, Input, Pill, Select, SeverityBadge, Spinner } from "../components/ui";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -73,76 +75,138 @@ function Meta({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** TriagePanel shows lifecycle state (status, new/resolved, first/last seen) and,
- *  for operators, lets the user change the triage status with an optional note. */
+/** TriagePanel shows the Tenable-style lifecycle (effective + detection state,
+ *  mitigation history, disposition + recast audit) and, for operators, lets the
+ *  user Accept Risk (with optional expiry) / mark False Positive / recast severity.
+ *  There is no manual "fixed" — mitigation is evidence-driven. */
 function TriagePanel({ f }: { f: FindingDetail }) {
   const me = useMe();
   const canTriage = hasRole(me.data ?? undefined, "operator");
   const qc = useQueryClient();
 
-  const [status, setStatus] = useState<FindingStatus>(f.status);
-  const [note, setNote] = useState("");
+  const isoDate = (iso?: string) => (iso ? iso.slice(0, 10) : "");
+  const [disposition, setDisposition] = useState<Disposition>(f.disposition);
+  const [expires, setExpires] = useState(isoDate(f.accept_expires_at));
+  const [dispNote, setDispNote] = useState("");
+  const [recast, setRecast] = useState(f.recast_severity ?? "");
+  const [recastNote, setRecastNote] = useState("");
 
-  // Keep the control in sync when the finding reloads (e.g. after a save).
-  useEffect(() => setStatus(f.status), [f.status]);
+  // Re-sync controls when the finding reloads (e.g. after a save).
+  useEffect(() => {
+    setDisposition(f.disposition);
+    setExpires(isoDate(f.accept_expires_at));
+    setRecast(f.recast_severity ?? "");
+  }, [f.disposition, f.accept_expires_at, f.recast_severity]);
 
-  const mutation = useMutation({
-    mutationFn: () => api.updateFindingStatus(f.id, { status, note: note.trim() || undefined }),
-    onSuccess: (updated) => {
-      qc.setQueryData(["finding", String(f.id)], updated);
-      qc.invalidateQueries({ queryKey: ["findings"] });
-      setNote("");
+  const onSaved = (updated: FindingDetail) => {
+    qc.setQueryData(["finding", String(f.id)], updated);
+    qc.invalidateQueries({ queryKey: ["findings"] });
+  };
+
+  const dispMut = useMutation({
+    mutationFn: () =>
+      api.setDisposition(f.id, {
+        disposition,
+        note: dispNote.trim() || undefined,
+        accept_expires_at:
+          disposition === "accepted" && expires ? new Date(`${expires}T00:00:00Z`).toISOString() : null,
+      }),
+    onSuccess: (u) => {
+      onSaved(u);
+      setDispNote("");
     },
   });
 
-  const dirty = status !== f.status || note.trim() !== "";
+  const recastMut = useMutation({
+    mutationFn: () => api.recastSeverity(f.id, { severity: recast, note: recastNote.trim() || undefined }),
+    onSuccess: (u) => {
+      onSaved(u);
+      setRecastNote("");
+    },
+  });
+
+  const dispDirty =
+    disposition !== f.disposition ||
+    dispNote.trim() !== "" ||
+    (disposition === "accepted" && expires !== isoDate(f.accept_expires_at));
+  const recastDirty = recast !== (f.recast_severity ?? "") || recastNote.trim() !== "";
 
   return (
-    <Card className="p-4">
+    <Card className="space-y-4 p-4">
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="mr-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">Triage</h2>
-        <StatusBadge status={f.status} />
-        {f.new && <Pill tone="new">New</Pill>}
-        {f.resolved && <Pill tone="resolved">Resolved · not seen in latest scan</Pill>}
+        <h2 className="mr-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">Lifecycle</h2>
+        <FindingStateBadge state={f.effective_state} />
+        <span className="text-xs text-neutral-500">
+          detection: <span className="font-medium text-neutral-700 dark:text-neutral-300">{STATE_LABELS[f.detection_state]}</span>
+        </span>
+        {f.times_mitigated > 0 && <Pill tone="warn">mitigated ×{f.times_mitigated}</Pill>}
+        {f.disposition === "accepted" && f.accept_expires_at && (
+          <span className="text-xs text-neutral-500">
+            accept expires {new Date(f.accept_expires_at).toLocaleDateString()}
+          </span>
+        )}
       </div>
 
-      {(f.status_by || f.status_note) && (
-        <p className="mt-2 text-xs text-neutral-500">
-          {f.status_by && <>Set by {f.status_by}</>}
-          {f.status_at && <> · {new Date(f.status_at).toLocaleString()}</>}
-          {f.status_note && <> — “{f.status_note}”</>}
+      {(f.disposition_by || f.disposition_note) && (
+        <p className="text-xs text-neutral-500">
+          Disposition <span className="font-medium">{DISPOSITION_LABELS[f.disposition]}</span>
+          {f.disposition_by && <> · by {f.disposition_by}</>}
+          {f.disposition_at && <> · {new Date(f.disposition_at).toLocaleString()}</>}
+          {f.disposition_note && <> — “{f.disposition_note}”</>}
+        </p>
+      )}
+      {f.recast_severity && (
+        <p className="text-xs text-neutral-500">
+          Severity recast to <span className="font-medium">{f.recast_severity}</span>
+          {f.recast_by && <> · by {f.recast_by}</>}
+          {f.recast_note && <> — “{f.recast_note}”</>}
         </p>
       )}
 
       {canTriage ? (
-        <div className="mt-3 flex flex-wrap items-end gap-3">
-          <label className="space-y-1">
-            <span className="block text-xs font-medium text-neutral-500">Set status</span>
-            <Select value={status} onChange={(e) => setStatus(e.target.value as FindingStatus)}>
-              {FINDING_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {STATUS_LABELS[s]}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2 rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
+            <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Disposition</div>
+            <Select value={disposition} onChange={(e) => setDisposition(e.target.value as Disposition)}>
+              {DISPOSITIONS.map((d) => (
+                <option key={d} value={d}>
+                  {DISPOSITION_LABELS[d]}
                 </option>
               ))}
             </Select>
-          </label>
-          <label className="flex-1 space-y-1" style={{ minWidth: "16rem" }}>
-            <span className="block text-xs font-medium text-neutral-500">Note (optional)</span>
-            <input
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="why this status…"
-              className="w-full rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-neutral-700 dark:bg-neutral-800"
-            />
-          </label>
-          <Button variant="primary" disabled={!dirty || mutation.isPending} onClick={() => mutation.mutate()}>
-            {mutation.isPending ? "Saving…" : "Save"}
-          </Button>
+            {disposition === "accepted" && (
+              <label className="block space-y-1">
+                <span className="block text-xs text-neutral-500">Accept until (optional)</span>
+                <Input type="date" value={expires} onChange={(e) => setExpires(e.target.value)} />
+              </label>
+            )}
+            <Input value={dispNote} onChange={(e) => setDispNote(e.target.value)} placeholder="note (optional)…" />
+            <Button variant="primary" disabled={!dispDirty || dispMut.isPending} onClick={() => dispMut.mutate()}>
+              {dispMut.isPending ? "Saving…" : "Save disposition"}
+            </Button>
+            {dispMut.isError && <ErrorText error={dispMut.error} />}
+          </div>
+
+          <div className="space-y-2 rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
+            <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Recast severity</div>
+            <Select value={recast} onChange={(e) => setRecast(e.target.value)}>
+              <option value="">— no recast (observed: {f.severity}) —</option>
+              {SEVERITIES.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </Select>
+            <Input value={recastNote} onChange={(e) => setRecastNote(e.target.value)} placeholder="note (optional)…" />
+            <Button variant="primary" disabled={!recastDirty || recastMut.isPending} onClick={() => recastMut.mutate()}>
+              {recastMut.isPending ? "Saving…" : recast ? "Save recast" : "Clear recast"}
+            </Button>
+            {recastMut.isError && <ErrorText error={recastMut.error} />}
+          </div>
         </div>
       ) : (
-        <p className="mt-2 text-xs text-neutral-400">Operator role required to change status.</p>
+        <p className="text-xs text-neutral-400">Operator role required to change disposition or severity.</p>
       )}
-      {mutation.isError && <ErrorText error={mutation.error} />}
     </Card>
   );
 }
@@ -168,11 +232,9 @@ export function FindingDetailPage() {
           ← Findings
         </Link>
         <div className="mt-1 flex flex-wrap items-center gap-3">
-          <SeverityBadge severity={f.severity} />
+          <SeverityBadge severity={f.effective_severity} recast={!!f.recast_severity} />
           <h1 className="text-xl font-semibold">{name}</h1>
-          <StatusBadge status={f.status} />
-          {f.new && <Pill tone="new">New</Pill>}
-          {f.resolved && <Pill tone="resolved">Resolved</Pill>}
+          <FindingStateBadge state={f.effective_state} />
         </div>
       </div>
 

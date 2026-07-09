@@ -70,30 +70,41 @@ curl -sb jar.txt "localhost:8080/api/scans/<scan_id>/findings" | jq
 ```
 
 **Findings lifecycle (Phase 2).** Findings are **deduplicated** across scans and
-tracked over time. `GET /api/findings` returns the deduplicated entities (keyed on
-`(target, template, matched_at)`) with first/last-seen and a triage `status`; each
-carries derived `new` (first seen in the target's latest scan) and `resolved` (not
-seen in it) facets. `GET /api/scans/{id}/findings` (above) returns the immutable
-per-scan **occurrences** instead.
+tracked over time with a **Tenable Security Center-style** lifecycle. `GET /api/findings`
+returns the deduplicated entities (keyed on `(target, template, matched_at)`). Each has:
+
+- a **detection state** — derived from scan observation, never stored: `new` / `active` /
+  `resurfaced` (still detected) and `mitigated` / `previously_mitigated` (no longer
+  detected). **Closure is evidence-driven — there is no manual "fixed."**
+- a manual **disposition** — `none` / `false_positive` / `accepted` (Accept Risk, with an
+  optional `accept_expires_at`; an expired acceptance reverts to the detection state) —
+  and an optional **`recast_severity`** (Recast Risk).
+- an **`effective_state`** and **`effective_severity`** overlaying the two.
+
+`GET /api/scans/{id}/findings` (above) returns the immutable per-scan **occurrences** instead.
 
 ```sh
-# deduplicated triage list (paginated + filtered)
+# deduplicated lifecycle list (paginated + filtered)
 curl -sb jar.txt "localhost:8080/api/findings" | jq
 # one tracked finding + full raw Nuclei output of its latest occurrence
 curl -sb jar.txt "localhost:8080/api/findings/<finding_id>" | jq
-# triage: set status (operator) — open | triaged | false_positive | fixed
-curl -sb jar.txt -X PATCH localhost:8080/api/findings/<finding_id>/status \
-  -H 'content-type: application/json' -d '{"status":"false_positive","note":"test host"}'
+# disposition (operator) — none | false_positive | accepted (+ optional accept_expires_at)
+curl -sb jar.txt -X PATCH localhost:8080/api/findings/<finding_id>/disposition \
+  -H 'content-type: application/json' \
+  -d '{"disposition":"accepted","note":"risk accepted for Q3","accept_expires_at":"2027-01-01T00:00:00Z"}'
+# recast severity (operator) — empty severity clears the recast
+curl -sb jar.txt -X PATCH localhost:8080/api/findings/<finding_id>/severity \
+  -H 'content-type: application/json' -d '{"severity":"high","note":"internet-facing"}'
 ```
 
 `GET /api/findings` supports server-side filtering + pagination: `q` (name/template
-substring), `severity` (comma-separated, any-of), `host` (substring), `cve`
-(substring), `tag` (exact), `status` (exact triage status), `view`
-(`open`|`new`|`resolved`), plus `target_id`, `limit`, `offset`. CVE ids and tags are
+substring), `severity` (comma-separated, any-of, matched against the effective severity),
+`host` (substring), `cve` (substring), `tag` (exact), `disposition` (exact), `state`
+(exact effective state), plus `target_id`, `limit`, `offset`. CVE ids and tags are
 promoted to indexed columns so these filters are cheap.
 
 ```sh
-curl -sb jar.txt "localhost:8080/api/findings?severity=critical,high&view=new&status=open&limit=50" | jq
+curl -sb jar.txt "localhost:8080/api/findings?severity=critical,high&state=new&limit=50" | jq
 ```
 
 Override the target/templates with an ad-hoc spec (note the `spec` wrapper):

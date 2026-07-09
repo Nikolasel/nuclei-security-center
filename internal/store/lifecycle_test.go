@@ -29,15 +29,29 @@ func TestDedupKey(t *testing.T) {
 	}
 }
 
-func TestValidStatus(t *testing.T) {
-	for _, s := range []string{"open", "triaged", "false_positive", "fixed"} {
-		if !ValidStatus(s) {
-			t.Errorf("ValidStatus(%q) = false, want true", s)
+func TestValidDisposition(t *testing.T) {
+	for _, d := range []string{"none", "false_positive", "accepted"} {
+		if !ValidDisposition(d) {
+			t.Errorf("ValidDisposition(%q) = false, want true", d)
 		}
 	}
-	for _, s := range []string{"", "OPEN", "resolved", "new", "bogus"} {
-		if ValidStatus(s) {
-			t.Errorf("ValidStatus(%q) = true, want false", s)
+	// "fixed"/"open" are gone — closure is evidence-driven (Mitigated), not manual.
+	for _, d := range []string{"", "open", "fixed", "resolved", "ACCEPTED", "bogus"} {
+		if ValidDisposition(d) {
+			t.Errorf("ValidDisposition(%q) = true, want false", d)
+		}
+	}
+}
+
+func TestValidSeverity(t *testing.T) {
+	for _, s := range []string{"critical", "high", "medium", "low", "info"} {
+		if !ValidSeverity(s) {
+			t.Errorf("ValidSeverity(%q) = false, want true", s)
+		}
+	}
+	for _, s := range []string{"", "CRITICAL", "none", "informational"} {
+		if ValidSeverity(s) {
+			t.Errorf("ValidSeverity(%q) = true, want false", s)
 		}
 	}
 }

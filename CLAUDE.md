@@ -13,19 +13,31 @@ Read it before making architectural changes. `README.md` covers running the stac
 
 Current status: **Phase 1 is complete** (targets/template-set CRUD, scan-from-config,
 OIDC/BFF auth with IdP-driven roles, and the React SPA). **Phase 2 is in progress** — the
-**finding-lifecycle** slice is done (dedup + first/last-seen + triage status + new/resolved
-views); **scheduling** and **exports** are the remaining Phase 2 slices. See §8 of the
-architecture doc.
+**finding-lifecycle** slice is done (dedup + first/last-seen + a Tenable-style detection
+lifecycle + dispositions/recast); **scheduling** and **exports** are the remaining Phase 2
+slices. See §8 of the architecture doc.
 
 **Findings are two tables now (Phase 2):** `findings` is the immutable per-scan
 **occurrence** log (holds the verbatim raw JSONL; answers "what did scan X observe");
 `finding_lifecycle` is the **deduplicated** entity keyed on `(target_id, template_id,
-matched_at)` that users triage — its status survives across scans. Ingest inserts an
-occurrence and upserts the lifecycle row (`store.IngestFinding`); a finding marked `fixed`
-is auto-reopened on re-observation. "Resolved/gone" and "new" are **derived at read time**
-(vs. the target's latest completed scan), never stored. `GET /api/findings` = lifecycle
-view; `GET /api/scans/{id}/findings` = occurrences; `PATCH /api/findings/{id}/status` =
-triage (operator).
+matched_at)` that users triage. Ingest inserts an occurrence and upserts the lifecycle row
+(`store.IngestFinding`). The lifecycle follows **Tenable Security Center's model**, two
+dimensions:
+
+- **Detection state** — derived at read time (vs. the target's latest completed scan) plus
+  a stored `times_mitigated` counter, never a stored state: `new` / `active` / `resurfaced`
+  (still detected) and `mitigated` / `previously_mitigated` (gone). **Closure is
+  evidence-driven; there is no manual "fixed."** `times_mitigated` is bumped at ingest when
+  a finding reappears after being absent from the previous scan.
+- **Disposition** (manual overlay, the only stored state): `none` / `false_positive` /
+  `accepted` (Accept Risk; `accept_expires_at` optional — an expired acceptance falls back
+  to the detection state) + `recast_severity` (Recast Risk). `effective_state` /
+  `effective_severity` overlay disposition on detection.
+
+`GET /api/findings` = lifecycle view (`state`/`disposition`/severity/… filters);
+`GET /api/scans/{id}/findings` = occurrences; `PATCH /api/findings/{id}/disposition` and
+`PATCH /api/findings/{id}/severity` = analyst overlays (operator). Workflow dispositions
+(investigating / in-progress) are intentionally deferred (see §8 "Beyond MVP").
 
 The JSON API is served under **`/api/*`**; the React SPA (in `web/`) is built by Vite and
 **embedded into the backend binary** (`go:embed`), served at `/` same-origin so the BFF

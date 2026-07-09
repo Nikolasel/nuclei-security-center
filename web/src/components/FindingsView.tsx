@@ -1,17 +1,24 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api, FINDING_STATUSES, STATUS_LABELS, type FindingsView as View, type FindingStatus } from "../api";
-import { Button, Card, cn, ErrorText, Input, Pill, Select, SeverityBadge, Spinner, StatusBadge } from "./ui";
+import {
+  api,
+  DISPOSITION_LABELS,
+  DISPOSITIONS,
+  EFFECTIVE_STATES,
+  STATE_LABELS,
+  type Disposition,
+  type EffectiveState,
+} from "../api";
+import { Button, Card, cn, ErrorText, FindingStateBadge, Input, Pill, Select, SeverityBadge, Spinner } from "./ui";
 
 const SEVERITIES = ["critical", "high", "medium", "low", "info"];
 const PAGE_SIZE = 50;
 
-const VIEWS: { key: View; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "open", label: "Open" },
-  { key: "new", label: "New" },
-  { key: "resolved", label: "Resolved" },
+// Tab cuts over the derived effective state. "" = All.
+const TABS: { key: EffectiveState | ""; label: string }[] = [
+  { key: "", label: "All" },
+  ...EFFECTIVE_STATES.map((s) => ({ key: s, label: STATE_LABELS[s] })),
 ];
 
 const sevChip: Record<string, string> = {
@@ -35,8 +42,8 @@ function relTime(iso: string): string {
   return `${days}d ago`;
 }
 
-/** FindingsView is the deduplicated triage list: one row per tracked finding,
- *  with lifecycle status and new/resolved facets. */
+/** FindingsView is the deduplicated triage list: one row per tracked finding, with
+ *  its Tenable-style effective state (New/Active/Resurfaced/Mitigated/…). */
 export function FindingsView() {
   const navigate = useNavigate();
 
@@ -45,8 +52,8 @@ export function FindingsView() {
   const [cve, setCve] = useState("");
   const [tag, setTag] = useState("");
   const [severities, setSeverities] = useState<string[]>([]);
-  const [status, setStatus] = useState<FindingStatus | "">("");
-  const [view, setView] = useState<View>("all");
+  const [disposition, setDisposition] = useState<Disposition | "">("");
+  const [state, setState] = useState<EffectiveState | "">("");
   const [applied, setApplied] = useState({ q: "", host: "", cve: "", tag: "" });
   const [offset, setOffset] = useState(0);
 
@@ -61,10 +68,10 @@ export function FindingsView() {
   const sevKey = severities.join(",");
   useEffect(() => {
     setOffset(0);
-  }, [applied, sevKey, status, view]);
+  }, [applied, sevKey, disposition, state]);
 
   const query = useQuery({
-    queryKey: ["findings", { applied, sevKey, status, view, offset }],
+    queryKey: ["findings", { applied, sevKey, disposition, state, offset }],
     queryFn: () =>
       api.listFindings({
         q: applied.q,
@@ -72,8 +79,8 @@ export function FindingsView() {
         cve: applied.cve,
         tag: applied.tag,
         severities,
-        status: status || undefined,
-        view,
+        disposition: disposition || undefined,
+        state: state || undefined,
         limit: PAGE_SIZE,
         offset,
       }),
@@ -88,9 +95,9 @@ export function FindingsView() {
   const activeCount = useMemo(
     () =>
       severities.length +
-      (status ? 1 : 0) +
+      (disposition ? 1 : 0) +
       [applied.q, applied.host, applied.cve, applied.tag].filter(Boolean).length,
-    [severities, status, applied],
+    [severities, disposition, applied],
   );
 
   const toggleSeverity = (s: string) =>
@@ -102,25 +109,25 @@ export function FindingsView() {
     setCve("");
     setTag("");
     setSeverities([]);
-    setStatus("");
+    setDisposition("");
   };
 
   return (
     <div className="space-y-3">
-      {/* View tabs */}
-      <div className="flex gap-1">
-        {VIEWS.map((v) => (
+      {/* Effective-state tabs */}
+      <div className="flex flex-wrap gap-1">
+        {TABS.map((t) => (
           <button
-            key={v.key}
-            onClick={() => setView(v.key)}
+            key={t.key || "all"}
+            onClick={() => setState(t.key)}
             className={cn(
               "rounded-md px-3 py-1.5 text-sm font-medium transition",
-              view === v.key
+              state === t.key
                 ? "bg-indigo-600 text-white"
                 : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800",
             )}
           >
-            {v.label}
+            {t.label}
           </button>
         ))}
       </div>
@@ -144,12 +151,12 @@ export function FindingsView() {
             <Input value={tag} onChange={(e) => setTag(e.target.value)} placeholder="exact tag…" className="w-36" />
           </label>
           <label className="space-y-1">
-            <span className="block text-xs font-medium text-neutral-500">Status</span>
-            <Select value={status} onChange={(e) => setStatus(e.target.value as FindingStatus | "")}>
+            <span className="block text-xs font-medium text-neutral-500">Disposition</span>
+            <Select value={disposition} onChange={(e) => setDisposition(e.target.value as Disposition | "")}>
               <option value="">Any</option>
-              {FINDING_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {STATUS_LABELS[s]}
+              {DISPOSITIONS.map((d) => (
+                <option key={d} value={d}>
+                  {DISPOSITION_LABELS[d]}
                 </option>
               ))}
             </Select>
@@ -201,7 +208,7 @@ export function FindingsView() {
                   <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
                     <th className="px-3 py-2 font-medium">Severity</th>
                     <th className="px-3 py-2 font-medium">Name</th>
-                    <th className="px-3 py-2 font-medium">Status</th>
+                    <th className="px-3 py-2 font-medium">State</th>
                     <th className="px-3 py-2 font-medium">CVE</th>
                     <th className="px-3 py-2 font-medium">Host</th>
                     <th className="px-3 py-2 font-medium">Last seen</th>
@@ -215,17 +222,20 @@ export function FindingsView() {
                       className="cursor-pointer border-b border-neutral-100 last:border-0 hover:bg-neutral-50 dark:border-neutral-800/60 dark:hover:bg-neutral-800/40"
                     >
                       <td className="px-3 py-2">
-                        <SeverityBadge severity={f.severity} />
+                        <SeverityBadge severity={f.effective_severity} recast={!!f.recast_severity} />
                       </td>
                       <td className="px-3 py-2">
                         <div className="flex items-center gap-2">
                           <span>{f.name || <span className="text-neutral-400">—</span>}</span>
-                          {f.new && <Pill tone="new">New</Pill>}
-                          {f.resolved && <Pill tone="resolved">Resolved</Pill>}
+                          {f.times_mitigated > 0 && (
+                            <Pill tone="warn">
+                              <span title="Times gone then re-observed">↻ {f.times_mitigated}</span>
+                            </Pill>
+                          )}
                         </div>
                       </td>
                       <td className="px-3 py-2">
-                        <StatusBadge status={f.status} />
+                        <FindingStateBadge state={f.effective_state} />
                       </td>
                       <td className="px-3 py-2">
                         {f.cve?.length ? (

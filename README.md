@@ -73,13 +73,27 @@ curl -sb jar.txt "localhost:8080/api/scans/<scan_id>/findings" | jq
 tracked over time with a **Tenable Security Center-style** lifecycle. `GET /api/findings`
 returns the deduplicated entities (keyed on `(target, template, matched_at)`). Each has:
 
-- a **detection state** — derived from scan observation, never stored: `new` / `active` /
-  `resurfaced` (still detected) and `mitigated` / `previously_mitigated` (no longer
-  detected). **Closure is evidence-driven — there is no manual "fixed."**
+- a **detection state** — derived from scan observation, never stored. **Closure is
+  evidence-driven — there is no manual "fixed."** The state is a function of whether the
+  finding is in the target's latest completed scan and how many times it has come back
+  after disappearing (`times_mitigated`):
+
+  | Detection state | In latest scan? | Meaning |
+  |---|---|---|
+  | `new` | yes | first time ever observed |
+  | `active` | yes | seen before, never gone |
+  | `resurfaced` | yes | was mitigated, now detected again — a **regression** |
+  | `mitigated` | no | previously seen; the latest scan no longer finds it (auto-closed) |
+  | `previously_mitigated` | no | mitigated, came back, and is gone again — a **flapping** finding |
+
+  `resurfaced` is to `active` what `previously_mitigated` is to `mitigated`: same current
+  presence, but "…and this has disappeared before." Both need attention a clean
+  `active`/`mitigated` doesn't — a regressed fix, or a vuln that keeps reappearing.
 - a manual **disposition** — `none` / `false_positive` / `accepted` (Accept Risk, with an
   optional `accept_expires_at`; an expired acceptance reverts to the detection state) —
   and an optional **`recast_severity`** (Recast Risk).
-- an **`effective_state`** and **`effective_severity`** overlaying the two.
+- an **`effective_state`** and **`effective_severity`** overlaying the two (an `accepted`
+  or `false_positive` disposition wins; otherwise you see the detection state).
 
 `GET /api/scans/{id}/findings` (above) returns the immutable per-scan **occurrences** instead.
 

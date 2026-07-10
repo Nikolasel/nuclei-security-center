@@ -12,11 +12,12 @@ Repo: `git@github.com:Nikolasel/nuclei-security-center.git`.
 Read it before making architectural changes. `README.md` covers running the stack.
 
 Current status: **Phase 1 is complete** (targets/template-set CRUD, scan-from-config,
-OIDC/BFF auth with IdP-driven roles, and the React SPA). **Phase 2 is in progress** — the
-**finding-lifecycle** slice is done (dedup + first/last-seen + a Tenable-style detection
-lifecycle + dispositions/recast) and the **scheduling** slice is done (a `schedules` table +
-a backend cron ticker that dispatches due schedules to the same orchestrator path);
-**exports** is the remaining Phase 2 slice. See §8 of the architecture doc.
+OIDC/BFF auth with IdP-driven roles, and the React SPA). **Phase 2 is complete** — the
+**finding-lifecycle** slice (dedup + first/last-seen + a Tenable-style detection lifecycle +
+dispositions/recast), the **scheduling** slice (a `schedules` table + a backend cron ticker
+that dispatches due schedules to the same orchestrator path), and the **exports** slice
+(JSON/CSV/SARIF of the lifecycle list). Next is **Phase 3** (storage + guardrails + RBAC).
+See §8 of the architecture doc.
 
 **Scheduling (Phase 2):** `schedules` (migration 0007) ties a `target_id` (+ optional
 `template_set_id`) to a `cron` expression. A backend `Scheduler` ticker (`internal/backend/
@@ -48,8 +49,13 @@ dimensions:
 
 `GET /api/findings` = lifecycle view (`state`/`disposition`/severity/… filters);
 `GET /api/scans/{id}/findings` = occurrences; `PATCH /api/findings/{id}/disposition` and
-`PATCH /api/findings/{id}/severity` = analyst overlays (operator). Workflow dispositions
-(investigating / in-progress) are intentionally deferred (see §8 "Beyond MVP").
+`PATCH /api/findings/{id}/severity` = analyst overlays (operator);
+`GET /api/findings/export?format=json|csv|sarif|raw` = the lifecycle list exported in the same
+filters (SARIF is a hand-built 2.1.0 doc via `encoding/json`; `raw` emits the verbatim Nuclei
+JSONL of each finding's latest occurrence — Nuclei's native `out.jsonl`; see `internal/backend/export.go`).
+All four formats carry the lifecycle finding `id` as a shared join key (CSV column, JSON `id`,
+SARIF `properties.nsc_lifecycle_id`, raw `_nsc_lifecycle_id`) so raw joins back to the projected data.
+Workflow dispositions (investigating / in-progress) are intentionally deferred (see §8 "Beyond MVP").
 
 The JSON API is served under **`/api/*`**; the React SPA (in `web/`) is built by Vite and
 **embedded into the backend binary** (`go:embed`), served at `/` same-origin so the BFF

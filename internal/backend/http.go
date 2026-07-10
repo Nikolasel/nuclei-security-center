@@ -71,6 +71,7 @@ func (s *Server) Handler() http.Handler {
 	// Findings — the deduplicated, triageable lifecycle entities (§3). Analyst
 	// overlays (disposition, severity recast) are mutations → operator; reads → viewer.
 	mux.HandleFunc("GET /api/findings", s.requireRole(RoleViewer, s.handleListFindings))
+	mux.HandleFunc("GET /api/findings/export", s.requireRole(RoleViewer, s.handleExportFindings))
 	mux.HandleFunc("GET /api/findings/{id}", s.requireRole(RoleViewer, s.handleGetFinding))
 	mux.HandleFunc("PATCH /api/findings/{id}/disposition", s.requireRole(RoleOperator, s.handleSetDisposition))
 	mux.HandleFunc("PATCH /api/findings/{id}/severity", s.requireRole(RoleOperator, s.handleRecastSeverity))
@@ -251,10 +252,10 @@ type findingsPage struct {
 	Offset int                  `json:"offset"`
 }
 
-func (s *Server) handleListFindings(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	limit, offset := pageParams(q)
-	filter := store.LifecycleFilter{
+// lifecycleFilterFromQuery parses the shared findings filter query params (used
+// by both the list and export endpoints). Limit/Offset are left zero.
+func lifecycleFilterFromQuery(q url.Values) store.LifecycleFilter {
+	return store.LifecycleFilter{
 		TargetID:    q.Get("target_id"),
 		Query:       strings.TrimSpace(q.Get("q")),
 		Severities:  splitCSV(q.Get("severity")),
@@ -263,9 +264,15 @@ func (s *Server) handleListFindings(w http.ResponseWriter, r *http.Request) {
 		Tag:         strings.TrimSpace(q.Get("tag")),
 		Disposition: strings.TrimSpace(q.Get("disposition")),
 		State:       strings.TrimSpace(q.Get("state")),
-		Limit:       limit,
-		Offset:      offset,
 	}
+}
+
+func (s *Server) handleListFindings(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, offset := pageParams(q)
+	filter := lifecycleFilterFromQuery(q)
+	filter.Limit = limit
+	filter.Offset = offset
 	rows, total, err := s.store.ListLifecycleFindings(r.Context(), filter)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

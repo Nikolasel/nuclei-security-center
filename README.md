@@ -121,6 +121,32 @@ promoted to indexed columns so these filters are cheap.
 curl -sb jar.txt "localhost:8080/api/findings?severity=critical,high&state=new&limit=50" | jq
 ```
 
+**Export (Phase 2).** The deduplicated lifecycle list exports as **JSON**, **CSV**,
+**SARIF 2.1.0**, or **raw JSONL** via `GET /api/findings/export?format=…`. The export takes
+the *same* filter params as `/api/findings`, so you export exactly what you're looking at
+(unpaginated). CSV is a flat table for spreadsheets; SARIF is a valid 2.1.0 document (deduped
+rules + per-finding results, severity→level) for code-scanning / CI ingestion. The projected
+formats carry our lifecycle overlay — detection state, disposition, `times_mitigated`. **Raw
+JSONL** instead emits the *verbatim Nuclei output* of each finding's latest occurrence, one
+JSON object per line (Nuclei's native `out.jsonl` shape) — the full request/response, curl
+reproducer, and classification that the projected formats drop.
+
+```sh
+# every critical/high finding still active, as CSV
+curl -sb jar.txt "localhost:8080/api/findings/export?format=csv&severity=critical,high&state=active" -o findings.csv
+# the same filter as SARIF, e.g. to upload to GitHub code scanning
+curl -sb jar.txt "localhost:8080/api/findings/export?format=sarif&severity=critical,high" -o findings.sarif
+# raw Nuclei JSONL (verbatim scanner output) for the current view
+curl -sb jar.txt "localhost:8080/api/findings/export?format=raw&severity=critical,high" -o findings.jsonl
+```
+
+Every format carries the **lifecycle finding `id`** as a shared join key — a column in CSV,
+`id` in JSON, `properties.nsc_lifecycle_id` in SARIF, and `_nsc_lifecycle_id` on each raw
+JSONL line (a namespaced field that doesn't collide with Nuclei's) — so a raw export joins
+back to the projected triage data (and to `GET /api/findings/{id}`) on one key.
+
+The SPA offers the same four formats from an **Export** menu on the Findings view.
+
 **Schedules (Phase 2).** A schedule runs a target (+ optional template set) on a **cron**
 cadence, unattended. A backend ticker wakes each minute and dispatches the schedules whose
 next fire time has arrived — through the same path as an ad-hoc scan, so scheduled scans are

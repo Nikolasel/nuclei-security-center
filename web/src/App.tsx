@@ -6,6 +6,7 @@ import { FindingDetailPage } from "./pages/FindingDetailPage";
 import { FindingsPage } from "./pages/FindingsPage";
 import { ScansPage } from "./pages/ScansPage";
 import { ScanDetailPage } from "./pages/ScanDetailPage";
+import { SchedulesPage } from "./pages/SchedulesPage";
 import { TargetsPage } from "./pages/TargetsPage";
 import { TemplateSetsPage } from "./pages/TemplateSetsPage";
 
@@ -50,6 +51,7 @@ export default function App() {
         <Route path="/findings/:id" element={<FindingDetailPage />} />
         <Route path="/scans" element={<ScansPage />} />
         <Route path="/scans/:id" element={<ScanDetailPage />} />
+        <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/targets" element={<TargetsPage />} />
         <Route path="/template-sets" element={<TemplateSetsPage />} />
         <Route path="*" element={<Navigate to="/findings" replace />} />

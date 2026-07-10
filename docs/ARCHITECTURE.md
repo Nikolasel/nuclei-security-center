@@ -332,8 +332,16 @@ Turns point-in-time scans into a tracked signal. Built in three slices, one PR e
   cve/tag filters), `GET /api/scans/{id}/findings` (occurrences),
   `PATCH /api/findings/{id}/disposition` and `PATCH /api/findings/{id}/severity` (operator).
   SPA: effective-state tabs, disposition filter, and an Accept-Risk / Recast triage panel.
-- **Scheduling:** ⬜ *(slice 2)* — cron schedules in the backend ticker → dispatch (the
-  `schedules` table from §3), enable/disable in the UI.
+- **Scheduling:** ✅ *(slice 2)* — a `schedules` table (migration 0007) ties a target
+  (+ optional template set) to a cron expression; a backend **ticker** (`Scheduler`, wakes
+  each minute) dispatches the schedules whose `next_run_at` has arrived, through the same
+  orchestrator path as ad-hoc scans. **Postgres is the source of truth** (survives restart,
+  persists enable/disable, holds `next_run_at`); the `robfig/cron/v3` library is used only to
+  parse expressions and compute the next fire time — no cron logic lives in SQL or in memory.
+  Scans carry provenance (`source` = adhoc | schedule, `schedule_id`). API:
+  `GET/POST /api/schedules`, `GET/PUT/DELETE /api/schedules/{id}`, and
+  `POST /api/schedules/{id}/run` (off-cycle dispatch). SPA: a Schedules page with cron presets,
+  enable/disable, run-now, and next/last-run columns.
 - **Exports:** ⬜ *(slice 3)* — JSON / SARIF / CSV (Nuclei emits the first two natively).
 - **Exit criteria:** a nightly schedule runs unattended; the UI shows what's new vs.
   resolved between runs and lets a user triage a finding.

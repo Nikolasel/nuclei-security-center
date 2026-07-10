@@ -52,6 +52,30 @@ func validateTemplateSet(t *store.TemplateSet) error {
 	return nil
 }
 
+// validateSchedule trims and checks a schedule in place. The cron expression is
+// validated against the same parser the ticker uses, so a schedule that saves is
+// one the ticker can run. Target/template-set existence is enforced by the store
+// (FK → ErrNotFound); here we only require a target_id to be present.
+func validateSchedule(s *store.Schedule) error {
+	s.Name = strings.TrimSpace(s.Name)
+	if s.Name == "" {
+		return errors.New("name is required")
+	}
+	s.TargetID = strings.TrimSpace(s.TargetID)
+	if s.TargetID == "" {
+		return errors.New("target_id is required")
+	}
+	s.TemplateSetID = strings.TrimSpace(s.TemplateSetID)
+	s.Cron = strings.TrimSpace(s.Cron)
+	if s.Cron == "" {
+		return errors.New("cron is required")
+	}
+	if _, err := parseCron(s.Cron); err != nil {
+		return fmt.Errorf("invalid cron %q: %w", s.Cron, err)
+	}
+	return nil
+}
+
 // validateHost accepts a hostname, IP, CIDR, or URL (each optionally with a
 // port for the host/IP forms).
 func validateHost(h string) error {

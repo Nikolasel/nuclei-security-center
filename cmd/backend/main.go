@@ -62,9 +62,16 @@ func main() {
 		log.Warn("OIDC_ISSUER not set — authentication is DISABLED (dev mode); all requests act as an all-roles dev user")
 	}
 
+	apiSrv := backend.NewServer(st, orch, auth, web.Handler(), log)
+
+	// The scheduler ticker dispatches cron schedules; the DB is its source of
+	// truth so it resumes cleanly across restarts.
+	backend.NewScheduler(st, apiSrv, log).Start(ctx)
+	log.Info("scheduler started")
+
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           backend.NewServer(st, orch, auth, web.Handler(), log).Handler(),
+		Handler:           apiSrv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 

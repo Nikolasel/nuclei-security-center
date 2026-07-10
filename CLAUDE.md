@@ -14,8 +14,20 @@ Read it before making architectural changes. `README.md` covers running the stac
 Current status: **Phase 1 is complete** (targets/template-set CRUD, scan-from-config,
 OIDC/BFF auth with IdP-driven roles, and the React SPA). **Phase 2 is in progress** — the
 **finding-lifecycle** slice is done (dedup + first/last-seen + a Tenable-style detection
-lifecycle + dispositions/recast); **scheduling** and **exports** are the remaining Phase 2
-slices. See §8 of the architecture doc.
+lifecycle + dispositions/recast) and the **scheduling** slice is done (a `schedules` table +
+a backend cron ticker that dispatches due schedules to the same orchestrator path);
+**exports** is the remaining Phase 2 slice. See §8 of the architecture doc.
+
+**Scheduling (Phase 2):** `schedules` (migration 0007) ties a `target_id` (+ optional
+`template_set_id`) to a `cron` expression. A backend `Scheduler` ticker (`internal/backend/
+scheduler.go`, wakes each minute) selects rows where `enabled AND next_run_at <= now()`,
+dispatches each via `orch.Submit` with `ScanLink{Source:"schedule", ScheduleID:…}`, and
+advances `next_run_at`. **Postgres is the source of truth** (survives restart / persists
+enable-disable); `github.com/robfig/cron/v3` is used *only* to parse cron and compute the
+next fire time — no cron logic in SQL or long-lived in-memory schedulers. Endpoints:
+`GET/POST /api/schedules`, `GET/PUT/DELETE /api/schedules/{id}` (viewer/operator/operator/
+admin), `POST /api/schedules/{id}/run` (operator, off-cycle dispatch, leaves cadence
+untouched).
 
 **Findings are two tables now (Phase 2):** `findings` is the immutable per-scan
 **occurrence** log (holds the verbatim raw JSONL; answers "what did scan X observe");
@@ -80,7 +92,7 @@ cmd/backend        backend entrypoint (main + graceful shutdown + PG retry)
 cmd/scanner        scanner node entrypoint
 internal/types     wire contracts shared by both services + Nuclei JSONL parse structs
 internal/scanner   Runner (runs nuclei, process-group cancel/timeout) + HTTP API
-internal/backend   Orchestrator (dispatch/poll/ingest) + ScannerClient + HTTP API + OIDC/BFF auth (auth.go, authz.go)
+internal/backend   Orchestrator (dispatch/poll/ingest) + Scheduler (cron ticker) + ScannerClient + HTTP API + OIDC/BFF auth (auth.go, authz.go)
 internal/store     Postgres access + embedded migrations (internal/store/migrations/*.sql)
 web/               React + TS + Vite SPA; embedded into the backend via go:embed (web/embed.go)
 deploy/            Dockerfile.backend (SPA build + distroless), Dockerfile.scanner, keycloak/ (seeded realm)

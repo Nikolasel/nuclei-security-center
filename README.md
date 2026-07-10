@@ -238,6 +238,33 @@ token), drive the API from the browser or a cookie jar populated by a real login
 > request acts as an all-roles dev user, so the `curl` examples above work directly.
 > The backend logs a loud warning in this mode.
 
+## Audit log
+
+Every mutating API call (create / update / delete / scan-dispatch / triage) emits one
+structured **`event=audit`** line to **stdout** — there is no audit table and no in-app
+audit screen by design. In the cloud the container's stdout is already shipped to a log
+aggregator (CloudWatch, Azure Log Analytics, GCP Cloud Logging, Loki, …); that system owns
+retention, indexing, and querying, and because the trail lives off the app database a DB
+compromise can't rewrite it.
+
+Each event carries the actor (`actor_subject` / `actor_email`), an `event_id`, the
+fine-grained `action`, the object (`object_type` / `object_id`), `method`, `path`, `status`,
+and `duration_ms`. `event_id` is a small, stable vocabulary to build detections on:
+
+| `event_id` | emitted when |
+|---|---|
+| `access_denied` | a mutating call is rejected by authorization (HTTP 403) |
+| `config_changed` | a target, template set, or schedule is created / updated / deleted |
+| `scan_dispatched` | a scan is submitted (ad-hoc) or a schedule is run |
+| `finding_triaged` | a finding's disposition or severity recast changes |
+
+All audit events log at **INFO** — a denial is authorization working as intended, not a
+fault — so alerting keys off `event_id` / `status`, not the log level. Tail them locally with:
+
+```sh
+docker compose logs -f backend | grep '"event":"audit"'
+```
+
 ## Develop
 
 Backend:

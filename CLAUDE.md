@@ -16,8 +16,20 @@ OIDC/BFF auth with IdP-driven roles, and the React SPA). **Phase 2 is complete**
 **finding-lifecycle** slice (dedup + first/last-seen + a Tenable-style detection lifecycle +
 dispositions/recast), the **scheduling** slice (a `schedules` table + a backend cron ticker
 that dispatches due schedules to the same orchestrator path), and the **exports** slice
-(JSON/CSV/SARIF of the lifecycle list). Next is **Phase 3** (storage + guardrails + RBAC).
+(JSON/CSV/SARIF of the lifecycle list). **Phase 3 is in progress** (storage + guardrails +
+RBAC); the **audit-log** slice is done. Remaining: object storage + scope guardrail.
 See §8 of the architecture doc.
+
+**Audit log (Phase 3):** every mutating API call emits one structured `slog` event
+(`event=audit`) to **stdout** — no DB table, no in-app UI. The trail lives in the platform's
+log aggregator (CloudWatch / Log Analytics / Cloud Logging / Loki), which owns retention +
+querying; keeping it off the app DB means a DB compromise can't rewrite it. `internal/backend/
+audit.go` wraps every mutating route with `s.mutation(eventID, action, objectType, role, h)`
+(replacing bare `requireRole`): it runs authz then logs actor / `event_id` / `action` /
+object type+id / method / path / status / duration. `event_id` is a small fixed vocabulary
+for detections — `access_denied` (any authz 403), `config_changed` (targets/template-sets/
+schedules CUD), `scan_dispatched` (scan submit or schedule run), `finding_triaged`
+(disposition/recast) — all at INFO (a denial is normal enforcement, not a fault).
 
 **Scheduling (Phase 2):** `schedules` (migration 0007) ties a `target_id` (+ optional
 `template_set_id`) to a `cron` expression. A backend `Scheduler` ticker (`internal/backend/
@@ -98,7 +110,7 @@ cmd/backend        backend entrypoint (main + graceful shutdown + PG retry)
 cmd/scanner        scanner node entrypoint
 internal/types     wire contracts shared by both services + Nuclei JSONL parse structs
 internal/scanner   Runner (runs nuclei, process-group cancel/timeout) + HTTP API
-internal/backend   Orchestrator (dispatch/poll/ingest) + Scheduler (cron ticker) + ScannerClient + HTTP API + OIDC/BFF auth (auth.go, authz.go)
+internal/backend   Orchestrator (dispatch/poll/ingest) + Scheduler (cron ticker) + ScannerClient + HTTP API + OIDC/BFF auth (auth.go, authz.go) + audit-log middleware (audit.go)
 internal/store     Postgres access + embedded migrations (internal/store/migrations/*.sql)
 web/               React + TS + Vite SPA; embedded into the backend via go:embed (web/embed.go)
 deploy/            Dockerfile.backend (SPA build + distroless), Dockerfile.scanner, keycloak/ (seeded realm)

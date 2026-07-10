@@ -227,7 +227,10 @@ trade; the native-services path only wins if you're committed to one cloud forev
   TLS-only; mTLS is the upgrade when you want mutual auth.
 - **Secrets:** target auth creds (if any) never in the DB plaintext or templates —
   behind a secrets interface (env/SOPS local, cloud secret manager in prod).
-- **Audit log from day one** — cheap to add now, painful to backfill.
+- **Audit log** — every mutating call is emitted as a structured `event=audit` log line
+  to stdout (Phase 3), where the platform's log aggregator ingests/retains/queries it.
+  Off-DB by design, so a DB compromise can't rewrite the trail; a small `event_id`
+  vocabulary drives detections.
 - **Authz on every mutating endpoint** — the three roles are enforced server-side.
 - Patch your own deps: a vuln scanner running on stale libraries is a bad look.
 
@@ -361,7 +364,16 @@ Hardening and the security guardrails from §6.
 - **Object storage:** wire the S3-compatible interface (MinIO already in Compose) to
   archive raw `out.jsonl`/SARIF per scan.
 - **RBAC:** enforce the three roles (admin / operator / viewer) on every mutating endpoint.
-- **Audit log:** surface the `audit_log` (written since Phase 1) in the UI.
+- **Audit log:** ✅ every mutating API call emits one structured event (`event=audit`)
+  to stdout via `slog` — actor, `event_id`, fine-grained `action`, object type/id, method,
+  path, status, duration — so the platform's log aggregator (CloudWatch / Azure Log
+  Analytics / GCP Cloud Logging / Loki) owns retention, indexing, and querying. The trail
+  deliberately does **not** live in the app DB: the aggregator already solves that, and
+  keeping it off the app DB means a DB compromise can't rewrite it (§6's "SIEM shipping").
+  `event_id` is a small, stable vocabulary detections key off — `access_denied` (authz 403,
+  overriding whatever was attempted), `config_changed` (targets/template-sets/schedules CUD),
+  `scan_dispatched` (ad-hoc scan or schedule run), `finding_triaged` (disposition/recast);
+  all at INFO (a denial is the system working, not a fault). `internal/backend/audit.go`.
 - **Scope guardrail:** hard-enforce that a scan can only target hosts inside an approved
   target record; per-zone scanner selection.
 - **Exit criteria:** raw output is archived and downloadable; roles are enforced; an

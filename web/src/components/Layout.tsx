@@ -7,6 +7,7 @@ import { cn } from "./ui";
 const nav = [
   { to: "/findings", label: "Findings" },
   { to: "/scans", label: "Scans" },
+  { to: "/schedules", label: "Schedules" },
   { to: "/targets", label: "Targets" },
   { to: "/template-sets", label: "Template Sets" },
 ];

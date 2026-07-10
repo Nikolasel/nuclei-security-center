@@ -89,10 +89,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 }
 
 // ScanLink optionally ties a scan to the stored config it came from. Empty
-// fields mean an ad-hoc scan not linked to a target/template set.
+// fields mean an ad-hoc scan not linked to a target/template set. Source
+// records provenance ("adhoc" by default, "schedule" for the ticker);
+// ScheduleID is set when a schedule produced the scan.
 type ScanLink struct {
 	TargetID      string
 	TemplateSetID string
+	Source        string
+	ScheduleID    string
 }
 
 // CreateScan inserts a new scan in the queued state and returns its id.
@@ -102,10 +106,15 @@ func (s *Store) CreateScan(ctx context.Context, spec types.ScanSpec, link ScanLi
 	if err != nil {
 		return "", fmt.Errorf("marshal spec: %w", err)
 	}
+	source := link.Source
+	if source == "" {
+		source = "adhoc"
+	}
 	_, err = s.pool.Exec(ctx,
-		`INSERT INTO scans (id, state, spec, target_id, template_set_id)
-		 VALUES ($1, $2, $3, $4, $5)`,
+		`INSERT INTO scans (id, state, spec, target_id, template_set_id, source, schedule_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		id, types.ScanQueued, specJSON, nullStr(link.TargetID), nullStr(link.TemplateSetID),
+		source, nullStr(link.ScheduleID),
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert scan: %w", err)

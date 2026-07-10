@@ -82,6 +82,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/targets/{id}", s.requireRole(RoleOperator, s.handleUpdateTarget))
 	mux.HandleFunc("DELETE /api/targets/{id}", s.requireRole(RoleAdmin, s.handleDeleteTarget))
 
+	// Schedules (config) — cron-driven scans. Reads → viewer; create/edit/run →
+	// operator; delete → admin (matches targets/template-sets).
+	mux.HandleFunc("GET /api/schedules", s.requireRole(RoleViewer, s.handleListSchedules))
+	mux.HandleFunc("POST /api/schedules", s.requireRole(RoleOperator, s.handleCreateSchedule))
+	mux.HandleFunc("GET /api/schedules/{id}", s.requireRole(RoleViewer, s.handleGetSchedule))
+	mux.HandleFunc("PUT /api/schedules/{id}", s.requireRole(RoleOperator, s.handleUpdateSchedule))
+	mux.HandleFunc("POST /api/schedules/{id}/run", s.requireRole(RoleOperator, s.handleRunSchedule))
+	mux.HandleFunc("DELETE /api/schedules/{id}", s.requireRole(RoleAdmin, s.handleDeleteSchedule))
+
 	// Template sets (config)
 	mux.HandleFunc("GET /api/template-sets", s.requireRole(RoleViewer, s.handleListTemplateSets))
 	mux.HandleFunc("POST /api/template-sets", s.requireRole(RoleOperator, s.handleCreateTemplateSet))
@@ -150,27 +159,7 @@ func (s *Server) buildScanSpec(ctx context.Context, req createScanRequest) (type
 
 	switch {
 	case req.TargetID != "":
-		target, err := s.store.GetTarget(ctx, req.TargetID)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("unknown target_id %q", req.TargetID)
-			}
-			return types.ScanSpec{}, store.ScanLink{}, err
-		}
-		spec := types.ScanSpec{Targets: target.Hosts, Options: defaultOptions()}
-		link := store.ScanLink{TargetID: target.ID}
-		if req.TemplateSetID != "" {
-			ts, err := s.store.GetTemplateSet(ctx, req.TemplateSetID)
-			if err != nil {
-				if errors.Is(err, store.ErrNotFound) {
-					return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("unknown template_set_id %q", req.TemplateSetID)
-				}
-				return types.ScanSpec{}, store.ScanLink{}, err
-			}
-			spec.Templates = ts.Selector()
-			link.TemplateSetID = ts.ID
-		}
-		return spec, link, nil
+		return s.resolveConfigSpec(ctx, req.TargetID, req.TemplateSetID)
 
 	case req.Spec != nil:
 		spec := *req.Spec
@@ -185,6 +174,33 @@ func (s *Server) buildScanSpec(ctx context.Context, req createScanRequest) (type
 	default:
 		return DefaultSpec(), store.ScanLink{}, nil
 	}
+}
+
+// resolveConfigSpec builds a scan spec + config link from a stored target and an
+// optional template set. Shared by ad-hoc "run from config" and the scheduler,
+// so both dispatch identical scans from the same stored config.
+func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID string) (types.ScanSpec, store.ScanLink, error) {
+	target, err := s.store.GetTarget(ctx, targetID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("unknown target_id %q", targetID)
+		}
+		return types.ScanSpec{}, store.ScanLink{}, err
+	}
+	spec := types.ScanSpec{Targets: target.Hosts, Options: defaultOptions()}
+	link := store.ScanLink{TargetID: target.ID}
+	if templateSetID != "" {
+		ts, err := s.store.GetTemplateSet(ctx, templateSetID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("unknown template_set_id %q", templateSetID)
+			}
+			return types.ScanSpec{}, store.ScanLink{}, err
+		}
+		spec.Templates = ts.Selector()
+		link.TemplateSetID = ts.ID
+	}
+	return spec, link, nil
 }
 
 func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {

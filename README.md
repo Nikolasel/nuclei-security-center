@@ -121,6 +121,37 @@ promoted to indexed columns so these filters are cheap.
 curl -sb jar.txt "localhost:8080/api/findings?severity=critical,high&state=new&limit=50" | jq
 ```
 
+**Schedules (Phase 2).** A schedule runs a target (+ optional template set) on a **cron**
+cadence, unattended. A backend ticker wakes each minute and dispatches the schedules whose
+next fire time has arrived — through the same path as an ad-hoc scan, so scheduled scans are
+tracked in the finding lifecycle exactly like manual ones (a scheduled scan carries
+`source: "schedule"`). Postgres is the source of truth: enable/disable and the next-run time
+persist across restarts, and a run missed while the backend was down fires once on the next
+tick, then reschedules forward.
+
+```sh
+# create a schedule: nightly scan of a target at 03:00 (5-field cron; also
+# accepts @hourly/@daily/… and "@every 30m")
+curl -sb jar.txt -X POST localhost:8080/api/schedules -H 'content-type: application/json' -d '{
+  "name": "nightly-prod",
+  "target_id": "<target_id>",
+  "template_set_id": "<template_set_id>",
+  "cron": "0 3 * * *",
+  "enabled": true
+}'
+# list schedules (each shows next_run_at / last_run_at / last_scan_id)
+curl -sb jar.txt localhost:8080/api/schedules | jq
+# pause a schedule (edit) — enabled:false clears its next run
+curl -sb jar.txt -X PUT localhost:8080/api/schedules/<id> -H 'content-type: application/json' \
+  -d '{"name":"nightly-prod","target_id":"<target_id>","cron":"0 3 * * *","enabled":false}'
+# dispatch once now, off-schedule (leaves the cron cadence untouched)
+curl -sb jar.txt -X POST localhost:8080/api/schedules/<id>/run     # => {"scan_id":"..."}
+curl -sb jar.txt -X DELETE localhost:8080/api/schedules/<id>       # remove
+```
+
+Reads need `viewer`; create/edit/run need `operator`; delete needs `admin`. The SPA exposes
+all of this on the **Schedules** page (cron presets, enable/disable toggle, run-now).
+
 Override the target/templates with an ad-hoc spec (note the `spec` wrapper):
 
 ```sh

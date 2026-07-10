@@ -127,6 +127,13 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
+// isForeignKeyViolation reports whether err is a Postgres FK-constraint error —
+// e.g. a schedule referencing a target/template set that doesn't exist.
+func isForeignKeyViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
 // nullStr maps "" to a SQL NULL so optional TEXT columns stay NULL, not empty.
 func nullStr(s string) *string {
 	if s == "" {

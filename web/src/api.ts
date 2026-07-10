@@ -31,6 +31,24 @@ export interface TemplateSet {
   updated_at: string;
 }
 
+// Schedule ties a target (+ optional template set) to a cron expression. The
+// backend ticker dispatches schedules whose next_run_at has arrived. next_run_at
+// is null when disabled; last_run_at/last_scan_id record the most recent run.
+export interface Schedule {
+  id: string;
+  name: string;
+  target_id: string;
+  template_set_id?: string;
+  cron: string;
+  enabled: boolean;
+  next_run_at?: string;
+  last_run_at?: string;
+  last_scan_id?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export type ScanState = "queued" | "running" | "complete" | "failed";
 
 export interface Scan {
@@ -246,6 +264,14 @@ export const api = {
   updateTemplateSet: (id: string, t: Partial<TemplateSet>) =>
     request<TemplateSet>("PUT", `/api/template-sets/${id}`, t),
   deleteTemplateSet: (id: string) => request<void>("DELETE", `/api/template-sets/${id}`),
+
+  listSchedules: () => request<Schedule[]>("GET", "/api/schedules"),
+  createSchedule: (s: Partial<Schedule>) => request<Schedule>("POST", "/api/schedules", s),
+  updateSchedule: (id: string, s: Partial<Schedule>) =>
+    request<Schedule>("PUT", `/api/schedules/${id}`, s),
+  deleteSchedule: (id: string) => request<void>("DELETE", `/api/schedules/${id}`),
+  runSchedule: (id: string) =>
+    request<{ scan_id: string }>("POST", `/api/schedules/${id}/run`),
 
   listScans: () => request<Scan[]>("GET", "/api/scans"),
   getScan: (id: string) => request<Scan>("GET", `/api/scans/${id}`),

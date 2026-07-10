@@ -269,7 +269,7 @@ Status legend: ✅ done · 🔜 next · ⬜ planned. Each phase ends at a demoab
 |---|---|---|---|
 | **0** | Core loop (the spine) | ✅ done | ~3–4 days |
 | **1** | CRUD + on-demand scans + auth + SPA | ✅ done | ~2–2.5 wks |
-| **2** | Scheduling + finding lifecycle | 🔜 in progress | ~1–1.5 wks |
+| **2** | Scheduling + finding lifecycle | ✅ done | ~1–1.5 wks |
 | **3** | Storage + guardrails + RBAC | ⬜ | ~1 wk |
 | **4** | Cloud deploy + hardening | ⬜ | ~1–1.5 wks |
 
@@ -313,7 +313,7 @@ The first genuinely usable product slice.
 - **Exit criteria (met):** a logged-in user defines a target + template set in the UI,
   runs a scan, and browses the resulting findings.
 
-### Phase 2 — Scheduling + finding lifecycle 🔜  (~1–1.5 wks)
+### Phase 2 — Scheduling + finding lifecycle ✅  (~1–1.5 wks)
 
 Turns point-in-time scans into a tracked signal. Built in three slices, one PR each.
 
@@ -342,9 +342,15 @@ Turns point-in-time scans into a tracked signal. Built in three slices, one PR e
   `GET/POST /api/schedules`, `GET/PUT/DELETE /api/schedules/{id}`, and
   `POST /api/schedules/{id}/run` (off-cycle dispatch). SPA: a Schedules page with cron presets,
   enable/disable, run-now, and next/last-run columns.
-- **Exports:** ⬜ *(slice 3)* — JSON / SARIF / CSV (Nuclei emits the first two natively).
-- **Exit criteria:** a nightly schedule runs unattended; the UI shows what's new vs.
-  resolved between runs and lets a user triage a finding.
+- **Exports:** ✅ *(slice 3)* — the deduplicated lifecycle list exports as **JSON / CSV /
+  SARIF 2.1.0** via `GET /api/findings/export?format=…`, honoring the same filters as the
+  list (so "export what I'm looking at" works). CSV is a flat table; SARIF is a minimal
+  valid 2.1.0 doc (deduped rules + per-finding results, severity→level) for CI/code-scanning
+  ingestion, emitted via `encoding/json` (a fixed schema — no dependency). SPA: an Export
+  menu on the findings view. (Nuclei emits JSON/SARIF natively at scan time, but exporting
+  from the lifecycle carries our dedup + detection-state + disposition overlay.)
+- **Exit criteria (met):** a nightly schedule runs unattended; the UI shows what's new vs.
+  resolved between runs, lets a user triage a finding, and exports the current view.
 
 ### Phase 3 — Storage + guardrails + RBAC ⬜  (~1 wk)
 

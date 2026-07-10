@@ -1,3 +1,4 @@
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -6,11 +7,19 @@ import {
   DISPOSITION_LABELS,
   DISPOSITIONS,
   EFFECTIVE_STATES,
+  findingsExportUrl,
   STATE_LABELS,
   type Disposition,
   type EffectiveState,
+  type ExportFormat,
 } from "../api";
 import { Button, Card, cn, ErrorText, FindingStateBadge, Input, Pill, Select, SeverityBadge, Spinner } from "./ui";
+
+const EXPORT_FORMATS: { format: ExportFormat; label: string }[] = [
+  { format: "json", label: "JSON" },
+  { format: "csv", label: "CSV" },
+  { format: "sarif", label: "SARIF" },
+];
 
 const SEVERITIES = ["critical", "high", "medium", "low", "info"];
 const PAGE_SIZE = 50;
@@ -100,6 +109,25 @@ export function FindingsView() {
     [severities, disposition, applied],
   );
 
+  // Export URL uses the same filters the list is currently showing.
+  const exportQuery = {
+    q: applied.q,
+    host: applied.host,
+    cve: applied.cve,
+    tag: applied.tag,
+    severities,
+    disposition: disposition || undefined,
+    state: state || undefined,
+  };
+  const download = (format: ExportFormat) => {
+    const a = document.createElement("a");
+    a.href = findingsExportUrl(format, exportQuery);
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
   const toggleSeverity = (s: string) =>
     setSeverities((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
 
@@ -114,22 +142,52 @@ export function FindingsView() {
 
   return (
     <div className="space-y-3">
-      {/* Effective-state tabs */}
-      <div className="flex flex-wrap gap-1">
-        {TABS.map((t) => (
-          <button
-            key={t.key || "all"}
-            onClick={() => setState(t.key)}
-            className={cn(
-              "rounded-md px-3 py-1.5 text-sm font-medium transition",
-              state === t.key
-                ? "bg-indigo-600 text-white"
-                : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800",
-            )}
-          >
-            {t.label}
-          </button>
-        ))}
+      {/* Effective-state tabs + export */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap gap-1">
+          {TABS.map((t) => (
+            <button
+              key={t.key || "all"}
+              onClick={() => setState(t.key)}
+              className={cn(
+                "rounded-md px-3 py-1.5 text-sm font-medium transition",
+                state === t.key
+                  ? "bg-indigo-600 text-white"
+                  : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800",
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild>
+            <Button className="ml-auto" title="Export the findings matching the current filters">
+              Export ▾
+            </Button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              align="end"
+              sideOffset={6}
+              className="min-w-40 rounded-md border border-neutral-200 bg-white p-1 shadow-lg dark:border-neutral-800 dark:bg-neutral-900"
+            >
+              <div className="px-2 py-1 text-xs text-neutral-500">
+                {total} finding{total === 1 ? "" : "s"} (current filters)
+              </div>
+              {EXPORT_FORMATS.map((f) => (
+                <DropdownMenu.Item
+                  key={f.format}
+                  onSelect={() => download(f.format)}
+                  className="cursor-pointer rounded px-2 py-1.5 text-sm outline-none hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                >
+                  {f.label}
+                </DropdownMenu.Item>
+              ))}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
       </div>
 
       <Card className="p-3">

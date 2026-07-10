@@ -167,6 +167,26 @@ export interface FindingsQuery {
   offset?: number;
 }
 
+export type ExportFormat = "json" | "csv" | "sarif";
+
+/** findingsExportUrl builds the download URL for the lifecycle findings export,
+ *  reusing the same filter params as the list. The browser navigates to it so the
+ *  same-origin session cookie authenticates the request (it's a file download,
+ *  not JSON, so it bypasses the fetch helper). */
+export function findingsExportUrl(format: ExportFormat, q: FindingsQuery = {}): string {
+  const p = new URLSearchParams();
+  p.set("format", format);
+  if (q.targetId) p.set("target_id", q.targetId);
+  if (q.q) p.set("q", q.q);
+  if (q.severities?.length) p.set("severity", q.severities.join(","));
+  if (q.host) p.set("host", q.host);
+  if (q.cve) p.set("cve", q.cve);
+  if (q.tag) p.set("tag", q.tag);
+  if (q.disposition) p.set("disposition", q.disposition);
+  if (q.state) p.set("state", q.state);
+  return `/api/findings/export?${p.toString()}`;
+}
+
 export interface ScanFindingsQuery {
   q?: string;
   severities?: string[];

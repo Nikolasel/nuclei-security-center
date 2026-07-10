@@ -121,6 +121,22 @@ promoted to indexed columns so these filters are cheap.
 curl -sb jar.txt "localhost:8080/api/findings?severity=critical,high&state=new&limit=50" | jq
 ```
 
+**Export (Phase 2).** The deduplicated lifecycle list exports as **JSON**, **CSV**, or
+**SARIF 2.1.0** via `GET /api/findings/export?format=…`. The export takes the *same* filter
+params as `/api/findings`, so you export exactly what you're looking at (unpaginated). CSV is
+a flat table for spreadsheets; SARIF is a valid 2.1.0 document (deduped rules + per-finding
+results, severity→level) for code-scanning / CI ingestion. Each finding carries our lifecycle
+overlay — detection state, disposition, and `times_mitigated` — not just the raw scan hit.
+
+```sh
+# every critical/high finding still active, as CSV
+curl -sb jar.txt "localhost:8080/api/findings/export?format=csv&severity=critical,high&state=active" -o findings.csv
+# the same filter as SARIF, e.g. to upload to GitHub code scanning
+curl -sb jar.txt "localhost:8080/api/findings/export?format=sarif&severity=critical,high" -o findings.sarif
+```
+
+The SPA offers the same three formats from an **Export** menu on the Findings view.
+
 **Schedules (Phase 2).** A schedule runs a target (+ optional template set) on a **cron**
 cadence, unattended. A backend ticker wakes each minute and dispatches the schedules whose
 next fire time has arrived — through the same path as an ad-hoc scan, so scheduled scans are

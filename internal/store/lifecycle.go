@@ -231,22 +231,15 @@ func scanLifecycleRow(row pgx.Row, r *LifecycleRow) error {
 		&r.FirstSeenScan, &r.LastSeenScan, &r.FirstSeenAt, &r.LastSeenAt, &r.LatestOccurrenceID)
 }
 
-// ListLifecycleFindings returns a page of deduplicated findings (severity-sorted,
-// then most-recently-seen first) plus the total matching the filter.
-func (s *Store) ListLifecycleFindings(ctx context.Context, f LifecycleFilter) ([]LifecycleRow, int, error) {
-	if f.Limit <= 0 || f.Limit > 500 {
-		f.Limit = 50
-	}
-	if f.Offset < 0 {
-		f.Offset = 0
-	}
-
-	var conds []string
-	var args []any
+// lifecycleWhere builds the shared WHERE clause for the lifecycle filter,
+// appending its bind values onto *args (owned by the caller, so callers can push
+// further LIMIT/OFFSET placeholders onto the same slice with correct `$N`).
+func lifecycleWhere(f LifecycleFilter, args *[]any) (where string) {
 	push := func(val any) int {
-		args = append(args, val)
-		return len(args)
+		*args = append(*args, val)
+		return len(*args)
 	}
+	var conds []string
 	if f.TargetID != "" {
 		conds = append(conds, fmt.Sprintf("l.target_id = $%d", push(f.TargetID)))
 	}
@@ -276,10 +269,31 @@ func (s *Store) ListLifecycleFindings(ctx context.Context, f LifecycleFilter) ([
 	if f.State != "" {
 		conds = append(conds, fmt.Sprintf("(%s) = $%d", lcEffectiveExpr, push(f.State)))
 	}
-	where := ""
 	if len(conds) > 0 {
 		where = "WHERE " + strings.Join(conds, " AND ")
 	}
+	return where
+}
+
+// lcOrderBy is the shared sort: highest effective severity first, then most
+// recently seen. Kept identical across list + export so an export matches the UI.
+const lcOrderBy = ` ORDER BY ` + effSevOrder + ` DESC, l.last_seen_at DESC, l.id DESC`
+
+// exportMaxRows caps an export so a pathological filter can't OOM the backend.
+const exportMaxRows = 50000
+
+// ListLifecycleFindings returns a page of deduplicated findings (severity-sorted,
+// then most-recently-seen first) plus the total matching the filter.
+func (s *Store) ListLifecycleFindings(ctx context.Context, f LifecycleFilter) ([]LifecycleRow, int, error) {
+	if f.Limit <= 0 || f.Limit > 500 {
+		f.Limit = 50
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+
+	var args []any
+	where := lifecycleWhere(f, &args)
 
 	var total int
 	if err := s.pool.QueryRow(ctx,
@@ -288,11 +302,12 @@ func (s *Store) ListLifecycleFindings(ctx context.Context, f LifecycleFilter) ([
 		return nil, 0, err
 	}
 
-	limitPH := push(f.Limit)
-	offsetPH := push(f.Offset)
-	query := fmt.Sprintf(
-		`SELECT %s %s %s ORDER BY %s DESC, l.last_seen_at DESC, l.id DESC LIMIT $%d OFFSET $%d`,
-		lcSelectCols, lifecycleFrom, where, effSevOrder, limitPH, offsetPH)
+	args = append(args, f.Limit)
+	limitPH := len(args)
+	args = append(args, f.Offset)
+	offsetPH := len(args)
+	query := fmt.Sprintf(`SELECT %s %s %s%s LIMIT $%d OFFSET $%d`,
+		lcSelectCols, lifecycleFrom, where, lcOrderBy, limitPH, offsetPH)
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
@@ -308,6 +323,33 @@ func (s *Store) ListLifecycleFindings(ctx context.Context, f LifecycleFilter) ([
 		out = append(out, r)
 	}
 	return out, total, rows.Err()
+}
+
+// ExportLifecycleFindings returns all deduplicated findings matching the filter
+// (up to exportMaxRows), in the same order as the list — for bulk export. The
+// filter's Limit/Offset are ignored.
+func (s *Store) ExportLifecycleFindings(ctx context.Context, f LifecycleFilter) ([]LifecycleRow, error) {
+	var args []any
+	where := lifecycleWhere(f, &args)
+	args = append(args, exportMaxRows)
+	limitPH := len(args)
+	query := fmt.Sprintf(`SELECT %s %s %s%s LIMIT $%d`,
+		lcSelectCols, lifecycleFrom, where, lcOrderBy, limitPH)
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []LifecycleRow
+	for rows.Next() {
+		var r LifecycleRow
+		if err := scanLifecycleRow(rows, &r); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // GetLifecycleFinding returns one deduplicated finding by id, including the

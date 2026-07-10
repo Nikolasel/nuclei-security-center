@@ -19,6 +19,7 @@ const EXPORT_FORMATS: { format: ExportFormat; label: string }[] = [
   { format: "json", label: "JSON" },
   { format: "csv", label: "CSV" },
   { format: "sarif", label: "SARIF" },
+  { format: "raw", label: "Raw (JSONL)" },
 ];
 
 const SEVERITIES = ["critical", "high", "medium", "low", "info"];

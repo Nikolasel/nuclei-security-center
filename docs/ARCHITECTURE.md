@@ -343,12 +343,14 @@ Turns point-in-time scans into a tracked signal. Built in three slices, one PR e
   `POST /api/schedules/{id}/run` (off-cycle dispatch). SPA: a Schedules page with cron presets,
   enable/disable, run-now, and next/last-run columns.
 - **Exports:** ✅ *(slice 3)* — the deduplicated lifecycle list exports as **JSON / CSV /
-  SARIF 2.1.0** via `GET /api/findings/export?format=…`, honoring the same filters as the
-  list (so "export what I'm looking at" works). CSV is a flat table; SARIF is a minimal
+  SARIF 2.1.0 / raw JSONL** via `GET /api/findings/export?format=…`, honoring the same filters
+  as the list (so "export what I'm looking at" works). CSV is a flat table; SARIF is a minimal
   valid 2.1.0 doc (deduped rules + per-finding results, severity→level) for CI/code-scanning
-  ingestion, emitted via `encoding/json` (a fixed schema — no dependency). SPA: an Export
-  menu on the findings view. (Nuclei emits JSON/SARIF natively at scan time, but exporting
-  from the lifecycle carries our dedup + detection-state + disposition overlay.)
+  ingestion, emitted via `encoding/json` (a fixed schema — no dependency). **Raw JSONL** emits
+  the verbatim Nuclei output of each finding's latest occurrence (Nuclei's native `out.jsonl`)
+  for tools that consume it — the projected formats carry our dedup + detection-state +
+  disposition overlay, raw carries the full original scanner payload. SPA: an Export menu on
+  the findings view.
 - **Exit criteria (met):** a nightly schedule runs unattended; the UI shows what's new vs.
   resolved between runs, lets a user triage a finding, and exports the current view.
 

@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -14,11 +15,16 @@ import (
 )
 
 // Findings export (Phase 2, slice 3). The deduplicated lifecycle list is
-// exportable in three formats: JSON (the API row shape), CSV (a flat table for
-// spreadsheets), and SARIF 2.1.0 (for code-scanning / CI ingestion). All three
-// honor the same filters as GET /api/findings, so "export what I'm looking at"
-// works. SARIF is emitted as a small, stable struct via encoding/json rather
-// than a dependency — it's a fixed JSON schema and stdlib is first-class here.
+// exportable in four formats: JSON (the API row shape), CSV (a flat table for
+// spreadsheets), SARIF 2.1.0 (for code-scanning / CI ingestion), and raw JSONL
+// (the verbatim Nuclei output of each finding's latest occurrence — Nuclei's
+// native out.jsonl shape, for tools that consume it). All honor the same filters
+// as GET /api/findings, so "export what I'm looking at" works. SARIF is emitted
+// as a small, stable struct via encoding/json rather than a dependency — it's a
+// fixed JSON schema and stdlib is first-class here.
+
+// exportExt maps a format to the download file extension (raw ⇒ .jsonl).
+var exportExt = map[string]string{"json": "json", "csv": "csv", "sarif": "sarif", "raw": "jsonl"}
 
 // handleExportFindings streams the filtered lifecycle findings in the requested
 // format as a file download.
@@ -28,20 +34,33 @@ func (s *Server) handleExportFindings(w http.ResponseWriter, r *http.Request) {
 	if format == "" {
 		format = "json"
 	}
-	if format != "json" && format != "csv" && format != "sarif" {
-		http.Error(w, "unsupported format (want json, csv, or sarif)", http.StatusBadRequest)
+	ext, ok := exportExt[format]
+	if !ok {
+		http.Error(w, "unsupported format (want json, csv, sarif, or raw)", http.StatusBadRequest)
 		return
 	}
 
-	rows, err := s.store.ExportLifecycleFindings(r.Context(), lifecycleFilterFromQuery(q))
+	filter := lifecycleFilterFromQuery(q)
+	stamp := time.Now().UTC().Format("20060102-150405")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="findings-%s.%s"`, stamp, ext))
+
+	// Raw JSONL reads the verbatim occurrence payloads rather than the projected rows.
+	if format == "raw" {
+		raws, err := s.store.ExportLifecycleRaw(r.Context(), filter)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		writeFindingsRawJSONL(w, raws)
+		return
+	}
+
+	rows, err := s.store.ExportLifecycleFindings(r.Context(), filter)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	ext := format
-	stamp := time.Now().UTC().Format("20060102-150405")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="findings-%s.%s"`, stamp, ext))
 
 	switch format {
 	case "json":
@@ -58,6 +77,24 @@ func (s *Server) handleExportFindings(w http.ResponseWriter, r *http.Request) {
 	case "sarif":
 		w.Header().Set("Content-Type", "application/sarif+json")
 		writeFindingsSARIF(w, rows)
+	}
+}
+
+// writeFindingsRawJSONL emits one compact raw Nuclei JSON object per line — the
+// native out.jsonl shape. Each payload is already valid JSON from the store
+// (Postgres JSONB), so it is re-emitted compactly without a wrapping array.
+func writeFindingsRawJSONL(w io.Writer, raws []json.RawMessage) {
+	var buf bytes.Buffer
+	for _, raw := range raws {
+		buf.Reset()
+		// Compact strips the JSONB pretty-printing to one line; on the off chance
+		// a payload isn't compactable, fall back to writing it verbatim.
+		if err := json.Compact(&buf, raw); err != nil {
+			_, _ = w.Write(raw)
+		} else {
+			_, _ = w.Write(buf.Bytes())
+		}
+		_, _ = io.WriteString(w, "\n")
 	}
 }
 

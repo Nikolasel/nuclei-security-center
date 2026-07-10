@@ -167,7 +167,7 @@ export interface FindingsQuery {
   offset?: number;
 }
 
-export type ExportFormat = "json" | "csv" | "sarif";
+export type ExportFormat = "json" | "csv" | "sarif" | "raw";
 
 /** findingsExportUrl builds the download URL for the lifecycle findings export,
  *  reusing the same filter params as the list. The browser navigates to it so the

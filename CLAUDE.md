@@ -50,8 +50,9 @@ dimensions:
 `GET /api/findings` = lifecycle view (`state`/`disposition`/severity/… filters);
 `GET /api/scans/{id}/findings` = occurrences; `PATCH /api/findings/{id}/disposition` and
 `PATCH /api/findings/{id}/severity` = analyst overlays (operator);
-`GET /api/findings/export?format=json|csv|sarif` = the lifecycle list exported in the same
-filters (SARIF is a hand-built 2.1.0 doc via `encoding/json`; see `internal/backend/export.go`).
+`GET /api/findings/export?format=json|csv|sarif|raw` = the lifecycle list exported in the same
+filters (SARIF is a hand-built 2.1.0 doc via `encoding/json`; `raw` emits the verbatim Nuclei
+JSONL of each finding's latest occurrence — Nuclei's native `out.jsonl`; see `internal/backend/export.go`).
 Workflow dispositions (investigating / in-progress) are intentionally deferred (see §8 "Beyond MVP").
 
 The JSON API is served under **`/api/*`**; the React SPA (in `web/`) is built by Vite and

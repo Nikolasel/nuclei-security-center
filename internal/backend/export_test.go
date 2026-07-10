@@ -65,6 +65,31 @@ func TestWriteFindingsCSV(t *testing.T) {
 	}
 }
 
+func TestWriteFindingsRawJSONL(t *testing.T) {
+	// Pretty-printed inputs (as Postgres JSONB would hand back) must come out as
+	// one compact object per line.
+	raws := []json.RawMessage{
+		json.RawMessage("{\n  \"template-id\": \"a\",\n  \"host\": \"h1\"\n}"),
+		json.RawMessage(`{"template-id":"b","host":"h2"}`),
+	}
+	var buf bytes.Buffer
+	writeFindingsRawJSONL(&buf, raws)
+
+	lines := bytes.Split(bytes.TrimRight(buf.Bytes(), "\n"), []byte("\n"))
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines, want 2 (one JSON object per line)", len(lines))
+	}
+	for i, ln := range lines {
+		if bytes.Contains(ln, []byte("\n")) {
+			t.Errorf("line %d contains an embedded newline", i)
+		}
+		var obj map[string]any
+		if err := json.Unmarshal(ln, &obj); err != nil {
+			t.Errorf("line %d is not valid JSON: %v", i, err)
+		}
+	}
+}
+
 func TestWriteFindingsSARIF(t *testing.T) {
 	var buf bytes.Buffer
 	writeFindingsSARIF(&buf, sampleRows())

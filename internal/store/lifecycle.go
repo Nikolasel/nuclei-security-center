@@ -352,6 +352,33 @@ func (s *Store) ExportLifecycleFindings(ctx context.Context, f LifecycleFilter) 
 	return out, rows.Err()
 }
 
+// ExportLifecycleRaw returns the verbatim Nuclei JSON of each matching finding's
+// latest occurrence (same filter + order as the list), for a raw JSONL export.
+// Findings whose latest occurrence is missing are skipped (INNER JOIN).
+func (s *Store) ExportLifecycleRaw(ctx context.Context, f LifecycleFilter) ([]json.RawMessage, error) {
+	var args []any
+	where := lifecycleWhere(f, &args)
+	args = append(args, exportMaxRows)
+	limitPH := len(args)
+	query := fmt.Sprintf(`SELECT o.raw %s JOIN findings o ON o.id = l.latest_occurrence_id %s%s LIMIT $%d`,
+		lifecycleFrom, where, lcOrderBy, limitPH)
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []json.RawMessage
+	for rows.Next() {
+		var raw json.RawMessage
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		out = append(out, raw)
+	}
+	return out, rows.Err()
+}
+
 // GetLifecycleFinding returns one deduplicated finding by id, including the
 // disposition/recast audit trail and the raw JSON of its latest occurrence.
 func (s *Store) GetLifecycleFinding(ctx context.Context, id int64) (LifecycleDetail, error) {

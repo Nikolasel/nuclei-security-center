@@ -53,6 +53,8 @@ dimensions:
 `GET /api/findings/export?format=json|csv|sarif|raw` = the lifecycle list exported in the same
 filters (SARIF is a hand-built 2.1.0 doc via `encoding/json`; `raw` emits the verbatim Nuclei
 JSONL of each finding's latest occurrence — Nuclei's native `out.jsonl`; see `internal/backend/export.go`).
+All four formats carry the lifecycle finding `id` as a shared join key (CSV column, JSON `id`,
+SARIF `properties.nsc_lifecycle_id`, raw `_nsc_lifecycle_id`) so raw joins back to the projected data.
 Workflow dispositions (investigating / in-progress) are intentionally deferred (see §8 "Beyond MVP").
 
 The JSON API is served under **`/api/*`**; the React SPA (in `web/`) is built by Vite and

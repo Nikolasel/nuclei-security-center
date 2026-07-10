@@ -140,6 +140,11 @@ curl -sb jar.txt "localhost:8080/api/findings/export?format=sarif&severity=criti
 curl -sb jar.txt "localhost:8080/api/findings/export?format=raw&severity=critical,high" -o findings.jsonl
 ```
 
+Every format carries the **lifecycle finding `id`** as a shared join key — a column in CSV,
+`id` in JSON, `properties.nsc_lifecycle_id` in SARIF, and `_nsc_lifecycle_id` on each raw
+JSONL line (a namespaced field that doesn't collide with Nuclei's) — so a raw export joins
+back to the projected triage data (and to `GET /api/findings/{id}`) on one key.
+
 The SPA offers the same four formats from an **Export** menu on the Findings view.
 
 **Schedules (Phase 2).** A schedule runs a target (+ optional template set) on a **cron**

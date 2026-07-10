@@ -352,15 +352,24 @@ func (s *Store) ExportLifecycleFindings(ctx context.Context, f LifecycleFilter) 
 	return out, rows.Err()
 }
 
-// ExportLifecycleRaw returns the verbatim Nuclei JSON of each matching finding's
-// latest occurrence (same filter + order as the list), for a raw JSONL export.
-// Findings whose latest occurrence is missing are skipped (INNER JOIN).
-func (s *Store) ExportLifecycleRaw(ctx context.Context, f LifecycleFilter) ([]json.RawMessage, error) {
+// RawExportRow pairs a lifecycle finding's id with the verbatim Nuclei JSON of
+// its latest occurrence, so a raw JSONL export stays joinable to the projected
+// (JSON/CSV/SARIF) exports on that id.
+type RawExportRow struct {
+	ID  int64
+	Raw json.RawMessage
+}
+
+// ExportLifecycleRaw returns each matching finding's lifecycle id + the verbatim
+// Nuclei JSON of its latest occurrence (same filter + order as the list), for a
+// raw JSONL export. Findings whose latest occurrence is missing are skipped
+// (INNER JOIN).
+func (s *Store) ExportLifecycleRaw(ctx context.Context, f LifecycleFilter) ([]RawExportRow, error) {
 	var args []any
 	where := lifecycleWhere(f, &args)
 	args = append(args, exportMaxRows)
 	limitPH := len(args)
-	query := fmt.Sprintf(`SELECT o.raw %s JOIN findings o ON o.id = l.latest_occurrence_id %s%s LIMIT $%d`,
+	query := fmt.Sprintf(`SELECT l.id, o.raw %s JOIN findings o ON o.id = l.latest_occurrence_id %s%s LIMIT $%d`,
 		lifecycleFrom, where, lcOrderBy, limitPH)
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -368,13 +377,13 @@ func (s *Store) ExportLifecycleRaw(ctx context.Context, f LifecycleFilter) ([]js
 	}
 	defer rows.Close()
 
-	var out []json.RawMessage
+	var out []RawExportRow
 	for rows.Next() {
-		var raw json.RawMessage
-		if err := rows.Scan(&raw); err != nil {
+		var r RawExportRow
+		if err := rows.Scan(&r.ID, &r.Raw); err != nil {
 			return nil, err
 		}
-		out = append(out, raw)
+		out = append(out, r)
 	}
 	return out, rows.Err()
 }

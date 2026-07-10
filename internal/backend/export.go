@@ -81,34 +81,52 @@ func (s *Server) handleExportFindings(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeFindingsRawJSONL emits one compact raw Nuclei JSON object per line — the
-// native out.jsonl shape. Each payload is already valid JSON from the store
-// (Postgres JSONB), so it is re-emitted compactly without a wrapping array.
-func writeFindingsRawJSONL(w io.Writer, raws []json.RawMessage) {
+// native out.jsonl shape — with the lifecycle finding id prepended as a
+// namespaced field so each line joins back to the projected exports. Each
+// payload is already valid JSON from the store (Postgres JSONB).
+func writeFindingsRawJSONL(w io.Writer, rows []store.RawExportRow) {
 	var buf bytes.Buffer
-	for _, raw := range raws {
+	for _, r := range rows {
 		buf.Reset()
-		// Compact strips the JSONB pretty-printing to one line; on the off chance
-		// a payload isn't compactable, fall back to writing it verbatim.
-		if err := json.Compact(&buf, raw); err != nil {
-			_, _ = w.Write(raw)
+		// Compact strips the JSONB pretty-printing to one line.
+		if err := json.Compact(&buf, r.Raw); err != nil {
+			// Not compactable (shouldn't happen) — emit verbatim, unjoined.
+			_, _ = w.Write(r.Raw)
+			_, _ = io.WriteString(w, "\n")
+			continue
+		}
+		b := buf.Bytes()
+		// Prepend "_nsc_lifecycle_id": <id> just inside the opening brace, keeping
+		// the rest of the Nuclei payload byte-for-byte. Guard the empty object.
+		if len(b) >= 2 && b[0] == '{' {
+			_, _ = fmt.Fprintf(w, `{%q:%d`, rawIDField, r.ID)
+			if b[1] == '}' { // "{}" → no trailing comma
+				_, _ = w.Write(b[1:])
+			} else {
+				_, _ = io.WriteString(w, ",")
+				_, _ = w.Write(b[1:])
+			}
 		} else {
-			_, _ = w.Write(buf.Bytes())
+			_, _ = w.Write(b) // non-object payload: leave as-is
 		}
 		_, _ = io.WriteString(w, "\n")
 	}
 }
 
-// writeFindingsCSV emits a flat, spreadsheet-friendly table.
+// writeFindingsCSV emits a flat, spreadsheet-friendly table. The leading `id` is
+// the lifecycle finding id — the shared key that joins to the JSON/SARIF/raw
+// exports (and the /api/findings/{id} route).
 func writeFindingsCSV(w io.Writer, rows []store.LifecycleRow) {
 	cw := csv.NewWriter(w)
 	defer cw.Flush()
 	_ = cw.Write([]string{
-		"template_id", "name", "severity", "effective_severity", "host", "matched_at",
+		"id", "template_id", "name", "severity", "effective_severity", "host", "matched_at",
 		"type", "detection_state", "effective_state", "disposition", "times_mitigated",
 		"cve", "tags", "first_seen_at", "last_seen_at",
 	})
 	for _, r := range rows {
 		_ = cw.Write([]string{
+			strconv.FormatInt(r.ID, 10),
 			r.TemplateID, r.Name, r.Severity, r.EffectiveSeverity, r.Host, r.MatchedAt,
 			r.Type, r.DetectionState, r.EffectiveState, r.Disposition, strconv.Itoa(r.TimesMitigated),
 			strings.Join(r.CVE, ";"), strings.Join(r.Tags, ";"),
@@ -116,6 +134,11 @@ func writeFindingsCSV(w io.Writer, rows []store.LifecycleRow) {
 		})
 	}
 }
+
+// rawIDField is the namespaced key carrying the lifecycle finding id in the raw
+// JSONL export, so each raw line joins back to the projected exports without
+// colliding with any Nuclei field.
+const rawIDField = "_nsc_lifecycle_id"
 
 // --- SARIF 2.1.0 (minimal, valid subset for code-scanning ingestion) ---
 
@@ -211,6 +234,7 @@ func writeFindingsSARIF(w io.Writer, rows []store.LifecycleRow) {
 			Level:   sarifLevel(r.EffectiveSeverity),
 			Message: sarifText{Text: firstNonEmpty(r.Name, r.TemplateID)},
 			Properties: map[string]any{
+				"nsc_lifecycle_id":   r.ID,
 				"severity":           r.Severity,
 				"effective_severity": r.EffectiveSeverity,
 				"detection_state":    r.DetectionState,

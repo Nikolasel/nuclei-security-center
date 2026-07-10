@@ -62,9 +62,10 @@ func (s *Server) Handler() http.Handler {
 	}
 	mux.HandleFunc("GET /api/auth/me", s.requireAuth(s.handleMe))
 
-	// Scans
+	// Scans. Mutations go through s.mutation (authz + a structured audit event);
+	// reads stay on requireRole. A scan submit is dispatch, not config.
 	mux.HandleFunc("GET /api/scans", s.requireRole(RoleViewer, s.handleListScans))
-	mux.HandleFunc("POST /api/scans", s.requireRole(RoleOperator, s.handleCreateScan))
+	mux.HandleFunc("POST /api/scans", s.mutation(eventScanDispatched, "scan.create", "scan", RoleOperator, s.handleCreateScan))
 	mux.HandleFunc("GET /api/scans/{id}", s.requireRole(RoleViewer, s.handleGetScan))
 	mux.HandleFunc("GET /api/scans/{id}/findings", s.requireRole(RoleViewer, s.handleListScanFindings))
 
@@ -73,31 +74,31 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/findings", s.requireRole(RoleViewer, s.handleListFindings))
 	mux.HandleFunc("GET /api/findings/export", s.requireRole(RoleViewer, s.handleExportFindings))
 	mux.HandleFunc("GET /api/findings/{id}", s.requireRole(RoleViewer, s.handleGetFinding))
-	mux.HandleFunc("PATCH /api/findings/{id}/disposition", s.requireRole(RoleOperator, s.handleSetDisposition))
-	mux.HandleFunc("PATCH /api/findings/{id}/severity", s.requireRole(RoleOperator, s.handleRecastSeverity))
+	mux.HandleFunc("PATCH /api/findings/{id}/disposition", s.mutation(eventFindingTriaged, "finding.disposition", "finding", RoleOperator, s.handleSetDisposition))
+	mux.HandleFunc("PATCH /api/findings/{id}/severity", s.mutation(eventFindingTriaged, "finding.recast", "finding", RoleOperator, s.handleRecastSeverity))
 
 	// Targets (config)
 	mux.HandleFunc("GET /api/targets", s.requireRole(RoleViewer, s.handleListTargets))
-	mux.HandleFunc("POST /api/targets", s.requireRole(RoleOperator, s.handleCreateTarget))
+	mux.HandleFunc("POST /api/targets", s.mutation(eventConfigChanged, "target.create", "target", RoleOperator, s.handleCreateTarget))
 	mux.HandleFunc("GET /api/targets/{id}", s.requireRole(RoleViewer, s.handleGetTarget))
-	mux.HandleFunc("PUT /api/targets/{id}", s.requireRole(RoleOperator, s.handleUpdateTarget))
-	mux.HandleFunc("DELETE /api/targets/{id}", s.requireRole(RoleAdmin, s.handleDeleteTarget))
+	mux.HandleFunc("PUT /api/targets/{id}", s.mutation(eventConfigChanged, "target.update", "target", RoleOperator, s.handleUpdateTarget))
+	mux.HandleFunc("DELETE /api/targets/{id}", s.mutation(eventConfigChanged, "target.delete", "target", RoleAdmin, s.handleDeleteTarget))
 
 	// Schedules (config) — cron-driven scans. Reads → viewer; create/edit/run →
-	// operator; delete → admin (matches targets/template-sets).
+	// operator; delete → admin (matches targets/template-sets). Run is a dispatch.
 	mux.HandleFunc("GET /api/schedules", s.requireRole(RoleViewer, s.handleListSchedules))
-	mux.HandleFunc("POST /api/schedules", s.requireRole(RoleOperator, s.handleCreateSchedule))
+	mux.HandleFunc("POST /api/schedules", s.mutation(eventConfigChanged, "schedule.create", "schedule", RoleOperator, s.handleCreateSchedule))
 	mux.HandleFunc("GET /api/schedules/{id}", s.requireRole(RoleViewer, s.handleGetSchedule))
-	mux.HandleFunc("PUT /api/schedules/{id}", s.requireRole(RoleOperator, s.handleUpdateSchedule))
-	mux.HandleFunc("POST /api/schedules/{id}/run", s.requireRole(RoleOperator, s.handleRunSchedule))
-	mux.HandleFunc("DELETE /api/schedules/{id}", s.requireRole(RoleAdmin, s.handleDeleteSchedule))
+	mux.HandleFunc("PUT /api/schedules/{id}", s.mutation(eventConfigChanged, "schedule.update", "schedule", RoleOperator, s.handleUpdateSchedule))
+	mux.HandleFunc("POST /api/schedules/{id}/run", s.mutation(eventScanDispatched, "schedule.run", "schedule", RoleOperator, s.handleRunSchedule))
+	mux.HandleFunc("DELETE /api/schedules/{id}", s.mutation(eventConfigChanged, "schedule.delete", "schedule", RoleAdmin, s.handleDeleteSchedule))
 
 	// Template sets (config)
 	mux.HandleFunc("GET /api/template-sets", s.requireRole(RoleViewer, s.handleListTemplateSets))
-	mux.HandleFunc("POST /api/template-sets", s.requireRole(RoleOperator, s.handleCreateTemplateSet))
+	mux.HandleFunc("POST /api/template-sets", s.mutation(eventConfigChanged, "template_set.create", "template_set", RoleOperator, s.handleCreateTemplateSet))
 	mux.HandleFunc("GET /api/template-sets/{id}", s.requireRole(RoleViewer, s.handleGetTemplateSet))
-	mux.HandleFunc("PUT /api/template-sets/{id}", s.requireRole(RoleOperator, s.handleUpdateTemplateSet))
-	mux.HandleFunc("DELETE /api/template-sets/{id}", s.requireRole(RoleAdmin, s.handleDeleteTemplateSet))
+	mux.HandleFunc("PUT /api/template-sets/{id}", s.mutation(eventConfigChanged, "template_set.update", "template_set", RoleOperator, s.handleUpdateTemplateSet))
+	mux.HandleFunc("DELETE /api/template-sets/{id}", s.mutation(eventConfigChanged, "template_set.delete", "template_set", RoleAdmin, s.handleDeleteTemplateSet))
 
 	// Unknown /api/* paths get a JSON-ish 404 rather than the SPA's index.html.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {

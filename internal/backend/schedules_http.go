@@ -11,7 +11,7 @@ import (
 func (s *Server) handleListSchedules(w http.ResponseWriter, r *http.Request) {
 	scs, err := s.store.ListSchedules(r.Context())
 	if err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	if scs == nil {
@@ -39,7 +39,7 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 	in.CreatedBy = identityFrom(r.Context()).Subject
 	sc, err := s.store.CreateSchedule(r.Context(), in)
 	if err != nil {
-		writeScheduleErr(w, err)
+		s.writeScheduleErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, sc)
@@ -48,7 +48,7 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 	sc, err := s.store.GetSchedule(r.Context(), r.PathValue("id"))
 	if err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, sc)
@@ -73,7 +73,7 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	in.NextRunAt = next
 	sc, err := s.store.UpdateSchedule(r.Context(), r.PathValue("id"), in)
 	if err != nil {
-		writeScheduleErr(w, err)
+		s.writeScheduleErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, sc)
@@ -81,7 +81,7 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteSchedule(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.DeleteSchedule(r.Context(), r.PathValue("id")); err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -93,7 +93,7 @@ func (s *Server) handleDeleteSchedule(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRunSchedule(w http.ResponseWriter, r *http.Request) {
 	sc, err := s.store.GetSchedule(r.Context(), r.PathValue("id"))
 	if err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	spec, link, err := s.resolveConfigSpec(r.Context(), sc.TargetID, sc.TemplateSetID)
@@ -105,7 +105,7 @@ func (s *Server) handleRunSchedule(w http.ResponseWriter, r *http.Request) {
 	link.ScheduleID = sc.ID
 	scanID, err := s.orch.Submit(r.Context(), spec, link)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.serverError(w, "run schedule", err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"scan_id": scanID})
@@ -114,10 +114,10 @@ func (s *Server) handleRunSchedule(w http.ResponseWriter, r *http.Request) {
 // writeScheduleErr maps store sentinels for schedule writes. An unknown target
 // or template set surfaces as ErrInvalidRef (a FK violation), reported as a 400
 // distinct from a 404 on the schedule itself; everything else falls through.
-func writeScheduleErr(w http.ResponseWriter, err error) {
+func (s *Server) writeScheduleErr(w http.ResponseWriter, err error) {
 	if errors.Is(err, store.ErrInvalidRef) {
 		http.Error(w, "unknown target_id or template_set_id", http.StatusBadRequest)
 		return
 	}
-	writeStoreErr(w, err)
+	s.writeStoreErr(w, err)
 }

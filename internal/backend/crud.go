@@ -14,7 +14,7 @@ import (
 func (s *Server) handleListTargets(w http.ResponseWriter, r *http.Request) {
 	ts, err := s.store.ListTargets(r.Context())
 	if err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	if ts == nil {
@@ -35,7 +35,7 @@ func (s *Server) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 	in.CreatedBy = identityFrom(r.Context()).Subject
 	t, err := s.store.CreateTarget(r.Context(), in)
 	if err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, t)
@@ -44,7 +44,7 @@ func (s *Server) handleCreateTarget(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetTarget(w http.ResponseWriter, r *http.Request) {
 	t, err := s.store.GetTarget(r.Context(), r.PathValue("id"))
 	if err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, t)
@@ -61,7 +61,7 @@ func (s *Server) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := s.store.UpdateTarget(r.Context(), r.PathValue("id"), in)
 	if err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, t)
@@ -69,7 +69,7 @@ func (s *Server) handleUpdateTarget(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteTarget(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.DeleteTarget(r.Context(), r.PathValue("id")); err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -80,7 +80,7 @@ func (s *Server) handleDeleteTarget(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListTemplateSets(w http.ResponseWriter, r *http.Request) {
 	ts, err := s.store.ListTemplateSets(r.Context())
 	if err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	if ts == nil {
@@ -101,7 +101,7 @@ func (s *Server) handleCreateTemplateSet(w http.ResponseWriter, r *http.Request)
 	in.CreatedBy = identityFrom(r.Context()).Subject
 	t, err := s.store.CreateTemplateSet(r.Context(), in)
 	if err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, t)
@@ -110,7 +110,7 @@ func (s *Server) handleCreateTemplateSet(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleGetTemplateSet(w http.ResponseWriter, r *http.Request) {
 	t, err := s.store.GetTemplateSet(r.Context(), r.PathValue("id"))
 	if err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, t)
@@ -127,7 +127,7 @@ func (s *Server) handleUpdateTemplateSet(w http.ResponseWriter, r *http.Request)
 	}
 	t, err := s.store.UpdateTemplateSet(r.Context(), r.PathValue("id"), in)
 	if err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, t)
@@ -135,7 +135,7 @@ func (s *Server) handleUpdateTemplateSet(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleDeleteTemplateSet(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.DeleteTemplateSet(r.Context(), r.PathValue("id")); err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -153,14 +153,25 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	return true
 }
 
-// writeStoreErr maps store sentinels to HTTP status codes.
-func writeStoreErr(w http.ResponseWriter, err error) {
+// writeStoreErr maps store sentinels to HTTP status codes. Non-sentinel errors
+// are treated as internal: the raw (often %w-wrapped pgx/pgconn) detail is logged
+// server-side and only a generic body reaches the caller, so SQL fragments and
+// constraint/column names never leak to an authenticated user (CWE-209).
+func (s *Server) writeStoreErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
 	case errors.Is(err, store.ErrConflict):
 		http.Error(w, "a resource with that name already exists", http.StatusConflict)
 	default:
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.serverError(w, "store error", err)
 	}
+}
+
+// serverError logs the internal error detail and returns a generic 500 body, so
+// internal detail is never surfaced to the client. op is a short server-side
+// label for the failing operation.
+func (s *Server) serverError(w http.ResponseWriter, op string, err error) {
+	s.log.Error(op, "err", err)
+	http.Error(w, "internal server error", http.StatusInternalServerError)
 }

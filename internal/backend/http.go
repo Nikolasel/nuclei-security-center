@@ -143,7 +143,7 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 
 	scanID, err := s.orch.Submit(r.Context(), spec, link)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.serverError(w, "submit scan", err)
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"scan_id": scanID})
@@ -232,7 +232,7 @@ func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	rows, err := s.store.ListScans(r.Context(), limit)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.serverError(w, "list scans", err)
 		return
 	}
 	if rows == nil {
@@ -248,7 +248,7 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "scan not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.serverError(w, "get scan", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, row)
@@ -269,7 +269,7 @@ func (s *Server) handleGetScanRaw(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "scan not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.serverError(w, "get scan raw key", err)
 		return
 	}
 	if key == "" {
@@ -283,7 +283,7 @@ func (s *Server) handleGetScanRaw(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "archived output is missing from storage", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.serverError(w, "get archived raw output", err)
 		return
 	}
 	defer obj.Close()
@@ -340,7 +340,7 @@ func (s *Server) handleListFindings(w http.ResponseWriter, r *http.Request) {
 	filter.Offset = offset
 	rows, total, err := s.store.ListLifecycleFindings(r.Context(), filter)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.serverError(w, "list lifecycle findings", err)
 		return
 	}
 	if rows == nil {
@@ -357,7 +357,7 @@ func (s *Server) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 	}
 	d, err := s.store.GetLifecycleFinding(r.Context(), id)
 	if err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
@@ -397,7 +397,7 @@ func (s *Server) handleSetDisposition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.SetDisposition(r.Context(), id, req.Disposition, strings.TrimSpace(req.Note), actorFrom(r), req.AcceptExpiresAt); err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	s.writeFinding(w, r, id)
@@ -427,7 +427,7 @@ func (s *Server) handleRecastSeverity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.store.RecastSeverity(r.Context(), id, sev, strings.TrimSpace(req.Note), actorFrom(r)); err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	s.writeFinding(w, r, id)
@@ -438,7 +438,7 @@ func (s *Server) handleRecastSeverity(w http.ResponseWriter, r *http.Request) {
 func (s *Server) writeFinding(w http.ResponseWriter, r *http.Request, id int64) {
 	d, err := s.store.GetLifecycleFinding(r.Context(), id)
 	if err != nil {
-		writeStoreErr(w, err)
+		s.writeStoreErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
@@ -461,7 +461,7 @@ func (s *Server) handleListScanFindings(w http.ResponseWriter, r *http.Request) 
 	}
 	rows, total, err := s.store.ListFindings(r.Context(), filter)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.serverError(w, "list scan findings", err)
 		return
 	}
 	if rows == nil {

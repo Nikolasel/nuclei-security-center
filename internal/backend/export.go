@@ -48,7 +48,7 @@ func (s *Server) handleExportFindings(w http.ResponseWriter, r *http.Request) {
 	if format == "raw" {
 		raws, err := s.store.ExportLifecycleRaw(r.Context(), filter)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			s.serverError(w, "export raw findings", err)
 			return
 		}
 		w.Header().Set("Content-Type", "application/x-ndjson")
@@ -58,7 +58,7 @@ func (s *Server) handleExportFindings(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := s.store.ExportLifecycleFindings(r.Context(), filter)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.serverError(w, "export findings", err)
 		return
 	}
 

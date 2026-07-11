@@ -8,19 +8,20 @@ Guidance for agentic runs in this repo. Keep it current when structure or conven
 scans, for a small internal security/eng team, built cloud-portable.
 Repo: `git@github.com:Nikolasel/nuclei-security-center.git`.
 
-**`docs/ARCHITECTURE.md` is the source of truth for design decisions and the phase plan.**
-Read it before making architectural changes. `README.md` covers running the stack.
+**`docs/ARCHITECTURE.md` is the source of truth for design decisions.** Read it before making
+architectural changes. `README.md` is the visitor-facing overview; the practical guides live
+under `docs/` (`API.md`, `CONFIGURATION.md`, `DEVELOPMENT.md`).
 
-Current status: **Phase 1 is complete** (targets/template-set CRUD, scan-from-config,
-OIDC/BFF auth with IdP-driven roles, and the React SPA). **Phase 2 is complete** — the
-**finding-lifecycle** slice (dedup + first/last-seen + a Tenable-style detection lifecycle +
-dispositions/recast), the **scheduling** slice (a `schedules` table + a backend cron ticker
-that dispatches due schedules to the same orchestrator path), and the **exports** slice
-(JSON/CSV/SARIF of the lifecycle list). **Phase 3 is complete** — the **audit-log**,
-**object-storage**, and **scope-guardrail** slices are done, and RBAC is enforced on every
-mutating endpoint. Next is **Phase 4** (cloud deploy + hardening). See §8 of the architecture doc.
+The product is a working alpha: a logged-in user manages targets/template-sets, runs scans
+(on demand or on a cron **schedule**), and triages a **Tenable-style finding lifecycle** (dedup +
+first/last-seen + detection state + dispositions/recast), exporting the lifecycle list as
+JSON/CSV/SARIF/raw. OIDC/BFF auth with IdP-driven roles fronts a React SPA. Cross-cutting: a
+structured **audit log**, per-scan **raw-output archival** to object storage, **RBAC** on every
+mutating endpoint, and a **scope guardrail** keeping scans inside approved targets. CI +
+container-image releases run on GitHub Actions (`.github/workflows/`). Future work is tracked as
+GitHub issues (see §8 of the architecture doc).
 
-**Scope guardrail (Phase 3, §6 — the most important guardrail):** a scan may only target
+**Scope guardrail (§6 — the most important guardrail):** a scan may only target
 hosts inside an approved `target` record. The union of all targets' hosts is the allowlist
 (`store.AllTargetHosts`); the ad-hoc `POST /api/scans` `spec` path validates host formats and
 matches every target against it (`internal/backend/scope.go`, `outOfScopeHosts`), rejecting
@@ -30,7 +31,7 @@ exact hostname (no wildcard), IP-in-CIDR, CIDR-within-CIDR, ports/URL-paths igno
 and schedule paths are in-scope by construction. The old implicit `scanme.sh` default scan
 (empty body) was **removed** — empty body now `400`s; provide `target_id` or `spec.targets`.
 
-**Object storage (Phase 3):** the verbatim Nuclei `out.jsonl` is archived per scan to an
+**Object storage:** the verbatim Nuclei `out.jsonl` is archived per scan to an
 S3-compatible bucket (MinIO locally; any S3 API in the cloud) via `github.com/minio/minio-go/v7`
 behind a small `ObjectStore` interface (`internal/backend/objectstore.go`, Put/Get; a fake
 in tests). The orchestrator **tees** the results stream to a temp file during ingest and
@@ -41,7 +42,7 @@ streams the archive back **through the BFF** (same-origin cookie — no presigne
 is `S3_ENDPOINT`/`S3_BUCKET`/`S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`/`S3_USE_SSL`/`S3_REGION`;
 unset `S3_ENDPOINT` ⇒ archiving disabled (dev), like unset `OIDC_ISSUER` disables auth.
 
-**Audit log (Phase 3):** every mutating API call emits one structured `slog` event
+**Audit log:** every mutating API call emits one structured `slog` event
 (`event=audit`) to **stdout** — no DB table, no in-app UI. The trail lives in the platform's
 log aggregator (CloudWatch / Log Analytics / Cloud Logging / Loki), which owns retention +
 querying; keeping it off the app DB means a DB compromise can't rewrite it. `internal/backend/
@@ -52,7 +53,7 @@ for detections — `access_denied` (any authz 403), `config_changed` (targets/te
 schedules CUD), `scan_dispatched` (scan submit or schedule run), `finding_triaged`
 (disposition/recast) — all at INFO (a denial is normal enforcement, not a fault).
 
-**Scheduling (Phase 2):** `schedules` (migration 0007) ties a `target_id` (+ optional
+**Scheduling:** `schedules` (migration 0007) ties a `target_id` (+ optional
 `template_set_id`) to a `cron` expression. A backend `Scheduler` ticker (`internal/backend/
 scheduler.go`, wakes each minute) selects rows where `enabled AND next_run_at <= now()`,
 dispatches each via `orch.Submit` with `ScanLink{Source:"schedule", ScheduleID:…}`, and
@@ -63,7 +64,7 @@ next fire time — no cron logic in SQL or long-lived in-memory schedulers. Endp
 admin), `POST /api/schedules/{id}/run` (operator, off-cycle dispatch, leaves cadence
 untouched).
 
-**Findings are two tables now (Phase 2):** `findings` is the immutable per-scan
+**Findings are two tables:** `findings` is the immutable per-scan
 **occurrence** log (holds the verbatim raw JSONL; answers "what did scan X observe");
 `finding_lifecycle` is the **deduplicated** entity keyed on `(target_id, template_id,
 matched_at)` that users triage. Ingest inserts an occurrence and upserts the lifecycle row
@@ -88,7 +89,7 @@ filters (SARIF is a hand-built 2.1.0 doc via `encoding/json`; `raw` emits the ve
 JSONL of each finding's latest occurrence — Nuclei's native `out.jsonl`; see `internal/backend/export.go`).
 All four formats carry the lifecycle finding `id` as a shared join key (CSV column, JSON `id`,
 SARIF `properties.nsc_lifecycle_id`, raw `_nsc_lifecycle_id`) so raw joins back to the projected data.
-Workflow dispositions (investigating / in-progress) are intentionally deferred (see §8 "Beyond MVP").
+Workflow dispositions (investigating / in-progress) are intentionally deferred (tracked as a GitHub issue).
 
 The JSON API is served under **`/api/*`**; the React SPA (in `web/`) is built by Vite and
 **embedded into the backend binary** (`go:embed`), served at `/` same-origin so the BFF
@@ -104,7 +105,7 @@ Three services, split so the scanner is a disposable, credential-less execution 
 - **scanner node** (`cmd/scanner`) — runs the `nuclei` **binary** (not the SDK) against a
   scan spec and serves results over HTTP. **Holds no DB credentials.** Bearer-token auth.
 - **Postgres** — data + (later) the dispatch queue/schedules. Findings stored as `JSONB`
-  plus the verbatim raw line; raw output also archived to S3-compatible storage (Phase 3).
+  plus the verbatim raw line; raw output also archived to S3-compatible storage.
 
 Traffic is strictly **backend → scanner** (dispatch, poll, pull). The node never calls back.
 
@@ -136,7 +137,8 @@ internal/store     Postgres access + embedded migrations (internal/store/migrati
 web/               React + TS + Vite SPA; embedded into the backend via go:embed (web/embed.go)
 deploy/            Dockerfile.backend (SPA build + distroless), Dockerfile.scanner, keycloak/ (seeded realm)
 docker-compose.yml postgres + minio + keycloak + scanner + backend
-docs/ARCHITECTURE.md   design + phased plan (source of truth)
+.github/workflows/ CI (build/vet/test + SPA) and release (images → GHCR)
+docs/ARCHITECTURE.md   design decisions (source of truth); API.md, CONFIGURATION.md, DEVELOPMENT.md are the practical guides
 ```
 
 The frontend build output `web/dist` is git-ignored except a committed placeholder
@@ -157,11 +159,14 @@ Go is installed via Homebrew; use `/opt/homebrew/bin/go` (may not be on PATH in 
 Run the full stack (requires Docker — see constraint below):
 
 ```sh
-cp .env.example .env    # set SCANNER_TOKEN
+cp .env.example .env    # set SCANNER_TOKEN + OIDC_CLIENT_SECRET
 docker compose up --build
-curl -s -X POST localhost:8080/scans                    # default: scans scanme.sh
-curl -s "localhost:8080/findings?scan_id=<id>" | jq
 ```
+
+Then log in at `http://localhost:8080`. The API is under `/api/*` behind the session cookie
+(there is **no** implicit default scan — every scan names a `target_id` or an in-scope `spec`).
+See `docs/API.md` for the endpoint walkthrough and `docs/CONFIGURATION.md` for auth-disabled
+dev mode used in headless `curl` testing.
 
 ## Environment constraints
 
@@ -177,12 +182,12 @@ curl -s "localhost:8080/findings?scan_id=<id>" | jq
 ## Conventions
 
 - Structured logging via `log/slog` (JSON handler).
-- Config via environment variables (see the table in `README.md`); required vars fail fast.
+- Config via environment variables (see the table in `docs/CONFIGURATION.md`); required vars fail fast.
 - Errors wrapped with `%w` and context; HTTP handlers return plain-text errors + status.
 - New schema changes go in a new numbered file under `internal/store/migrations/`; the
   runner applies unseen files in filename order and records them in `schema_migrations`.
 - Run `gofmt -w`, `go vet`, and `go test` before considering a change done.
-- **Dependency review (recurring):** at each phase boundary, scan for hand-rolled code
+- **Dependency review (recurring):** at a natural review boundary, scan for hand-rolled code
   that duplicates a mature library (per invariant #5) and for unused/heavy deps to drop.
   Introducing a dependency is a deliberate choice — prefer widely-used, actively-maintained
   libraries with a compatible license; note the rationale in the change.

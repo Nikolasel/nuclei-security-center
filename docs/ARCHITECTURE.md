@@ -1,4 +1,4 @@
-# Nuclei Security Center — Architecture & Build Plan
+# Nuclei Security Center — Architecture
 
 **Scope:** internal tool for a small security/eng team. Multi-user, auth required, no
 formal regulatory framework driving design. Must be **easy to run on any cloud**.
@@ -85,7 +85,7 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   nuclei_version, templates_commit, triggered_by`.
 - **findings** (occurrences) — the immutable per-scan observation log: `id, scan_id,
   target_id, dedup_key, template_id, name, severity, host, matched_at, raw_json`. Answers
-  "what did scan X observe"; feeds the raw archive (Phase 3 S3).
+  "what did scan X observe"; feeds the raw archive in object storage.
 - **finding_lifecycle** — the **deduplicated, triageable** entity keyed on
   `(target_id, template_id, matched_at)` so lifecycle survives across scans. Models a
   **Tenable Security Center-style** two-dimensional lifecycle:
@@ -100,7 +100,9 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
     Each carries a note/actor/timestamp audit trio.
   - The **effective state** (what the UI shows) overlays disposition on detection:
     accepted / false_positive win, else the detection state.
-- **audit_log** — `id, actor, action, entity, before, after, ts`. Written from day one.
+There is deliberately **no `audit_log` table**: the audit trail is emitted as structured
+`event=audit` log lines to stdout for the platform's log aggregator, not stored in the app DB
+(see §6). Keeping it off the database means a DB compromise can't rewrite the trail.
 
 ---
 
@@ -228,9 +230,9 @@ trade; the native-services path only wins if you're committed to one cloud forev
 - **Secrets:** target auth creds (if any) never in the DB plaintext or templates —
   behind a secrets interface (env/SOPS local, cloud secret manager in prod).
 - **Audit log** — every mutating call is emitted as a structured `event=audit` log line
-  to stdout (Phase 3), where the platform's log aggregator ingests/retains/queries it.
-  Off-DB by design, so a DB compromise can't rewrite the trail; a small `event_id`
-  vocabulary drives detections.
+  to stdout, where the platform's log aggregator ingests/retains/queries it. Off-DB by
+  design, so a DB compromise can't rewrite the trail; a small `event_id` vocabulary drives
+  detections.
 - **Authz on every mutating endpoint** — the three roles are enforced server-side.
 - Patch your own deps: a vuln scanner running on stale libraries is a bad look.
 
@@ -260,168 +262,16 @@ Also settled:
   transparently via a K8s service mesh** when a node lands in an untrusted segment. No PKI
   in the app.
 
-Nothing open — see §8 for the build plan.
+Nothing open.
 
 ---
 
-## 8. Phased build plan (1–2 devs, "small team internal" scope)
+## 8. Future directions
 
-Status legend: ✅ done · 🔜 next · ⬜ planned. Each phase ends at a demoable state.
-
-| Phase | Focus | Status | Effort |
-|---|---|---|---|
-| **0** | Core loop (the spine) | ✅ done | ~3–4 days |
-| **1** | CRUD + on-demand scans + auth + SPA | ✅ done | ~2–2.5 wks |
-| **2** | Scheduling + finding lifecycle | ✅ done | ~1–1.5 wks |
-| **3** | Storage + guardrails + RBAC | ⬜ | ~1 wk |
-| **4** | Cloud deploy + hardening | ⬜ | ~1–1.5 wks |
-
-**Total ≈ 6–8 focused weeks for one dev** to a solid internal MVP — well under the
-13–20 person-weeks in the original estimate, because the regulatory tail is out of scope.
-(The React SPA in Phase 1 is the largest single line item; an htmx UI would have been
-~a week less, a trade we took deliberately for richer triage interactivity.)
-
-### Phase 0 — Core loop ✅
-
-Proves the whole architecture end-to-end before any product surface is built.
-
-- **Built:** two-service split (backend + credential-less scanner node), shared wire
-  types, Postgres schema + embedded migration runner, scanner API (`/v1/scans` +
-  status/results/cancel, bearer auth), backend dispatch → poll → pull → ingest loop,
-  Docker Compose (postgres + minio + scanner + backend), Dockerfiles.
-- **Verified:** `go build/vet/test` clean; scanner API smoke-tested live (auth 401/202,
-  run→failed error capture, 404s); JSONL parse structs checked against real Nuclei output.
-- **Exit criteria (met in code; full loop pending local Docker):** `POST /scans` runs
-  Nuclei against `scanme.sh` and lands findings in Postgres.
-
-### Phase 1 — CRUD + on-demand scans + auth 🔜  (~2–2.5 wks)
-
-The first genuinely usable product slice.
-
-- **Backend:** targets CRUD (with the scope allowlist), template-set CRUD, replace the
-  hardcoded default spec with real scan-from-config, scan history endpoints. ✅ *(slice 1)*
-- **Auth:** OIDC via the BFF pattern (§6) — backend as confidential client, httpOnly
-  session cookie to the SPA. Wire one IdP (Keycloak locally). ✅ *(slice 2)* — roles
-  come from the IdP `groups` claim (admin/operator/viewer); server-side sessions +
-  single-use PKCE/state/nonce flow (migration 0003); requireAuth/requireRole guards
-  (reads→viewer, scans & config writes→operator, deletes→admin); auth-disabled dev
-  mode when `OIDC_ISSUER` is unset; compose ships a seeded Keycloak realm.
-- **Frontend:** React + TS + Vite SPA — targets/template-sets management, "run scan"
-  flow, findings table (server-side severity/host filters + pagination), a per-finding
-  **vulnerability detail page** (full parsed Nuclei output: classification/CVE, request/
-  response, curl reproducer, references, remediation, raw JSON), and a scan detail view.
-  ✅ *(slice 3)* — Tailwind + Radix; TanStack Query; role-gated controls; served
-  same-origin as an embedded build (`go:embed`) so the BFF cookie stays same-site; the
-  API moved under `/api/*`.
-- **Exit criteria (met):** a logged-in user defines a target + template set in the UI,
-  runs a scan, and browses the resulting findings.
-
-### Phase 2 — Scheduling + finding lifecycle ✅  (~1–1.5 wks)
-
-Turns point-in-time scans into a tracked signal. Built in three slices, one PR each.
-
-- **Lifecycle:** ✅ *(slice 1)* — findings split into two tables: `findings` stays the
-  immutable per-scan **occurrence** log (raw JSONL preserved), and a new
-  `finding_lifecycle` is the **deduplicated** entity keyed on `(target_id, template_id,
-  matched_at)` (migrations 0005/0006). Ingest inserts an occurrence + upserts the lifecycle
-  row. The lifecycle follows the **Tenable Security Center model** (§3): an automatic
-  **detection state** (New / Active / Resurfaced / Mitigated / Previously Mitigated),
-  derived at read time from scan observation vs. the target's latest completed scan and a
-  `times_mitigated` counter — so **closure is evidence-driven, not a manual "fixed."** The
-  only manual overlays are analyst **dispositions** — Accept Risk (optional
-  `accept_expires_at`; an expired acceptance falls back to detection) and False Positive —
-  plus **Recast Risk** (severity override). The **effective state** overlays disposition on
-  detection. API: `GET /api/findings` (dedup view, `state`/`disposition` + severity/host/
-  cve/tag filters), `GET /api/scans/{id}/findings` (occurrences),
-  `PATCH /api/findings/{id}/disposition` and `PATCH /api/findings/{id}/severity` (operator).
-  SPA: effective-state tabs, disposition filter, and an Accept-Risk / Recast triage panel.
-- **Scheduling:** ✅ *(slice 2)* — a `schedules` table (migration 0007) ties a target
-  (+ optional template set) to a cron expression; a backend **ticker** (`Scheduler`, wakes
-  each minute) dispatches the schedules whose `next_run_at` has arrived, through the same
-  orchestrator path as ad-hoc scans. **Postgres is the source of truth** (survives restart,
-  persists enable/disable, holds `next_run_at`); the `robfig/cron/v3` library is used only to
-  parse expressions and compute the next fire time — no cron logic lives in SQL or in memory.
-  Scans carry provenance (`source` = adhoc | schedule, `schedule_id`). API:
-  `GET/POST /api/schedules`, `GET/PUT/DELETE /api/schedules/{id}`, and
-  `POST /api/schedules/{id}/run` (off-cycle dispatch). SPA: a Schedules page with cron presets,
-  enable/disable, run-now, and next/last-run columns.
-- **Exports:** ✅ *(slice 3)* — the deduplicated lifecycle list exports as **JSON / CSV /
-  SARIF 2.1.0 / raw JSONL** via `GET /api/findings/export?format=…`, honoring the same filters
-  as the list (so "export what I'm looking at" works). CSV is a flat table; SARIF is a minimal
-  valid 2.1.0 doc (deduped rules + per-finding results, severity→level) for CI/code-scanning
-  ingestion, emitted via `encoding/json` (a fixed schema — no dependency). **Raw JSONL** emits
-  the verbatim Nuclei output of each finding's latest occurrence (Nuclei's native `out.jsonl`)
-  for tools that consume it — the projected formats carry our dedup + detection-state +
-  disposition overlay, raw carries the full original scanner payload. SPA: an Export menu on
-  the findings view.
-- **Exit criteria (met):** a nightly schedule runs unattended; the UI shows what's new vs.
-  resolved between runs, lets a user triage a finding, and exports the current view.
-
-### Phase 3 — Storage + guardrails + RBAC ✅  (~1 wk)
-
-Hardening and the security guardrails from §6.
-
-- **Object storage:** ✅ the verbatim Nuclei `out.jsonl` is archived per scan to an
-  S3-compatible bucket (MinIO in Compose; any S3 API in the cloud) via `minio-go` behind a
-  tiny `ObjectStore` interface (`internal/backend/objectstore.go`). The orchestrator tees
-  the results stream to a temp file during ingest and uploads `scans/<id>/raw.jsonl`
-  afterward — **best-effort**: the projected findings in Postgres stay the system of record,
-  so a storage blip logs but doesn't fail the scan. `scans.raw_object_key` (migration 0009)
-  records the key; the API exposes only `has_raw`. `GET /api/scans/{id}/raw` (viewer) streams
-  the archive back **through the BFF** (same-origin cookie, no presigned URLs leaking the
-  bucket). Enabled by `S3_ENDPOINT`; unset ⇒ archiving off (dev). Multi-cloud beyond the S3
-  API (e.g. Azure Blob) is a localized swap behind `ObjectStore` (e.g. `gocloud.dev/blob`).
-- **RBAC:** ✅ the three roles (admin / operator / viewer) are enforced server-side on every
-  mutating endpoint (`s.mutation` → `requireRole`): reads need viewer, writes/dispatch need
-  operator, deletes need admin. Roles come from the IdP (a groups claim), never in-app.
-- **Audit log:** ✅ every mutating API call emits one structured event (`event=audit`)
-  to stdout via `slog` — actor, `event_id`, fine-grained `action`, object type/id, method,
-  path, status, duration — so the platform's log aggregator (CloudWatch / Azure Log
-  Analytics / GCP Cloud Logging / Loki) owns retention, indexing, and querying. The trail
-  deliberately does **not** live in the app DB: the aggregator already solves that, and
-  keeping it off the app DB means a DB compromise can't rewrite it (§6's "SIEM shipping").
-  `event_id` is a small, stable vocabulary detections key off — `access_denied` (authz 403,
-  overriding whatever was attempted), `config_changed` (targets/template-sets/schedules CUD),
-  `scan_dispatched` (ad-hoc scan or schedule run), `finding_triaged` (disposition/recast);
-  all at INFO (a denial is the system working, not a fault). `internal/backend/audit.go`.
-- **Scope guardrail:** ✅ a scan can only target hosts inside an approved target record. The
-  union of all targets' hosts is the allowlist; ad-hoc `spec` scans are validated + matched
-  against it before dispatch (`internal/backend/scope.go`), and out-of-scope targets are
-  rejected `400`. Matching is host-granular and DNS-free — exact hostname (no wildcard),
-  IP-in-CIDR, CIDR-within-CIDR — and **fails closed** (no approved targets ⇒ nothing runs).
-  The stored-target path is in-scope by construction; the implicit `scanme.sh` default scan
-  was removed (an unapproved external host is exactly what this prevents). Per-zone scanner
-  selection is deferred to Phase 4 (multi-node).
-- **Exit criteria (met):** raw output is archived and downloadable; roles are enforced; an
-  out-of-scope target is rejected before dispatch.
-
-### Phase 4 — CI/CD + cloud deploy + hardening ⬜  (~1–1.5 wks)
-
-- **CI/CD:** ✅ GitHub Actions. A **CI** workflow (`.github/workflows/ci.yml`) runs on every
-  push to `main` and every PR — gofmt check, `go vet`, `go build`, `go test -race`, plus an
-  SPA typecheck/build job (`npm ci` + `npm run build`, which runs `tsc -b`). A **release**
-  workflow (`.github/workflows/release.yml`) fires on a `v*` tag: it gates on `go test`, then
-  builds and pushes the backend and scanner images to **private GHCR**
-  (`ghcr.io/nikolasel/nuclei-security-center-{backend,scanner}`, semver + `sha` tags) via
-  `docker/build-push-action` with a GHCR layer cache. Images are private by default (the repo
-  is public, the images are not).
-- **Deploy:** Helm chart (or Terraform) for the chosen cloud — managed Postgres + bucket +
-  IdP wiring; scanner nodes deployable per network zone.
-- **Service auth upgrade:** turn on mTLS via the service mesh where nodes sit in untrusted
-  segments (§7).
-- **Hardening + UAT:** dependency scan of our own stack, egress controls on scanner nodes,
-  bug-fix buffer.
-- **Exit criteria:** the stack runs on the target cloud from IaC, with segmented scanner
-  nodes and a passing hardening review.
-
-### Beyond MVP (deferred, not scheduled)
-
-- **OpenSearch** as a derived findings index if search/volume outgrows Postgres (§3a).
-- **Scanner node registry** with self-registration (vs. the static config list).
-- **Workflow dispositions** (Investigating / In progress) on top of the current Accept-Risk
-  / False-Positive set — deferred deliberately to keep the lifecycle purely detection-driven
-  (the Tenable model). Add if the team wants "who's working on this" tracking.
-- **Scoped disposition rules** — Accept/Recast applied as rules over a plugin/host/tag scope
-  (as Tenable does), vs. the current per-finding overlays.
-- **Regulatory tail** (only if scope changes): SSO federation, SIEM shipping of the audit
-  log, CMK/KMS, change-approval — additive to this design, not a rewrite.
+The alpha delivers the full scan → lifecycle → triage → export loop with the security
+guardrails above, plus CI and container-image releases (see
+[Development](DEVELOPMENT.md#continuous-integration--releases)). Larger follow-on work —
+cloud IaC deploy, mTLS between backend and nodes, a scanner-node registry, an OpenSearch
+derived index, scoped disposition rules, and the regulatory tail (SSO federation, SIEM
+shipping, CMK/KMS, change-approval) — is tracked as **GitHub issues**, each additive to this
+design rather than a rewrite. None of it changes the invariants in §6.

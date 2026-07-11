@@ -7,12 +7,18 @@ scans. Architecture and build plan: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 git clone git@github.com:Nikolasel/nuclei-security-center.git
 ```
 
-## Status: Phase 1 (usable product slice)
+## Status: Phases 1–3 complete
 
 A logged-in user manages targets + template sets, runs scans from them, and
 browses findings in a React UI. Under the hood: **backend dispatches → scanner
 node syncs templates + runs nuclei → backend polls, pulls results, and ingests
 findings into Postgres**, all behind OIDC/BFF auth.
+
+On top of that: a **Tenable-style finding lifecycle** (dedup + detection state +
+dispositions), **cron scheduling**, **exports** (JSON/CSV/SARIF/raw), a structured
+**audit log**, per-scan **raw-output archival** to object storage, and a **scope
+guardrail** that keeps scans inside approved targets. Next is Phase 4 (cloud deploy +
+hardening) — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ```
 browser ─▶ React SPA (served by backend at /) ─▶ /api/* (session cookie, roles)
@@ -57,17 +63,22 @@ The JSON API lives under `/api/*` and is guarded by the session cookie (see
 [Authentication](#authentication-oidcbff)). The examples below assume a cookie
 jar `jar.txt`, or [auth-disabled dev mode](#authentication-oidcbff) for headless use.
 
-**Scans.** With an empty body the backend runs its default scan against
-ProjectDiscovery's public test host `scanme.sh` — no infrastructure of your own needed.
+**Scans.** A scan must name a stored **target** (`target_id`) or an ad-hoc `spec`; every host
+it targets has to fall inside an approved target record (the [scope guardrail](#scope-guardrail)).
+Create a target first (see the **Config** examples below), then:
 
 ```sh
-# start a scan
-curl -sb jar.txt -X POST localhost:8080/api/scans          # => {"scan_id":"..."}
+# start a scan from a stored target
+curl -sb jar.txt -X POST localhost:8080/api/scans \
+  -H 'content-type: application/json' -d '{"target_id":"<id>"}'   # => {"scan_id":"..."}
 # check scan state (queued → running → complete)
 curl -sb jar.txt localhost:8080/api/scans/<scan_id>
 # occurrences observed by one scan (paginated envelope: {items,total,limit,offset})
 curl -sb jar.txt "localhost:8080/api/scans/<scan_id>/findings" | jq
 ```
+
+An empty body (or targets outside every approved target) is rejected `400` — there is no
+implicit default scan, so the scanner can't be fat-fingered at out-of-scope assets.
 
 **Findings lifecycle (Phase 2).** Findings are **deduplicated** across scans and
 tracked over time with a **Tenable Security Center-style** lifecycle. `GET /api/findings`
@@ -178,7 +189,9 @@ curl -sb jar.txt -X DELETE localhost:8080/api/schedules/<id>       # remove
 Reads need `viewer`; create/edit/run need `operator`; delete needs `admin`. The SPA exposes
 all of this on the **Schedules** page (cron presets, enable/disable toggle, run-now).
 
-Override the target/templates with an ad-hoc spec (note the `spec` wrapper):
+Override the target/templates with an ad-hoc spec (note the `spec` wrapper). Every host in
+`spec.targets` must still fall inside an approved target — here `scanme.sh` must already exist
+as a target host, or the request is rejected `400` (see [Scope guardrail](#scope-guardrail)):
 
 ```sh
 curl -sb jar.txt -X POST localhost:8080/api/scans -H 'content-type: application/json' -d '{
@@ -205,6 +218,20 @@ curl -sb jar.txt -X POST localhost:8080/api/scans -d '{"target_id":"<id>","templ
 Both resources support the full REST set: `GET|POST /api/targets`,
 `GET|PUT|DELETE /api/targets/{id}` (and likewise `/api/template-sets`). Deleting a
 target or template set nulls the link on past scans but never deletes scan history.
+
+## Scope guardrail
+
+A scan may only target hosts that fall inside an **approved target record** — the union of
+all your targets' hosts is the allowlist. This is the most important guardrail: for an active
+scanner, accidentally aiming at out-of-scope or third-party assets is the difference between a
+tool and an incident. Scans launched from a stored `target_id` (and schedules) are in scope by
+construction; ad-hoc `spec` scans are validated and matched against the allowlist before
+dispatch, and anything outside it is rejected `400` before the scanner is ever contacted.
+
+Matching is **host-granular and never resolves DNS**: exact hostname (no wildcard, so
+`example.com` does **not** authorize `sub.example.com`), IP-in-CIDR, and CIDR-within-CIDR;
+ports and URL paths are ignored (the asset is the host). It **fails closed** — with no
+approved targets, every scan is rejected until you add one.
 
 ## Authentication (OIDC/BFF)
 

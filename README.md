@@ -311,3 +311,25 @@ npm run build      # type-check + produce web/dist for embedding
 | `SESSION_TTL` | backend | `12h` | session lifetime (Go duration) |
 | `SESSION_COOKIE_NAME` | backend | `nsc_session` | session cookie name |
 | `COOKIE_SECURE` | backend | `false` | set the cookie `Secure` flag (enable behind TLS) |
+| `S3_ENDPOINT` | backend | – (unset ⇒ archiving **disabled**) | S3/MinIO endpoint `host:port` (no scheme); setting it enables raw-output archiving |
+| `S3_BUCKET` | backend | `nuclei-raw` | bucket for archived raw output (created on startup if absent) |
+| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | backend | – | S3 credentials |
+| `S3_REGION` | backend | `us-east-1` | S3 region |
+| `S3_USE_SSL` | backend | `false` | use TLS to the S3 endpoint |
+
+## Raw scan-output archive
+
+Each scan's verbatim Nuclei output (`out.jsonl`) is archived to an S3-compatible bucket —
+MinIO in the Compose stack, any S3 API in the cloud. Postgres remains the system of record
+for the projected findings; the bucket holds the bulky, write-once evidence. Archiving is
+**best-effort**: if the upload fails, the scan still succeeds (the findings are already
+ingested) and it's logged, not fatal.
+
+Download a completed scan's archive (streamed back through the backend, behind your session):
+
+```sh
+curl -s localhost:8080/api/scans/<scan-id>/raw -o scan.jsonl
+```
+
+The scan-detail page shows a **Download raw output** link once the archive exists (`has_raw`).
+With `S3_ENDPOINT` unset the feature is off and the endpoint returns 404.

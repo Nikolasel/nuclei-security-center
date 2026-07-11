@@ -17,8 +17,19 @@ OIDC/BFF auth with IdP-driven roles, and the React SPA). **Phase 2 is complete**
 dispositions/recast), the **scheduling** slice (a `schedules` table + a backend cron ticker
 that dispatches due schedules to the same orchestrator path), and the **exports** slice
 (JSON/CSV/SARIF of the lifecycle list). **Phase 3 is in progress** (storage + guardrails +
-RBAC); the **audit-log** slice is done. Remaining: object storage + scope guardrail.
+RBAC); the **audit-log** and **object-storage** slices are done. Remaining: scope guardrail.
 See §8 of the architecture doc.
+
+**Object storage (Phase 3):** the verbatim Nuclei `out.jsonl` is archived per scan to an
+S3-compatible bucket (MinIO locally; any S3 API in the cloud) via `github.com/minio/minio-go/v7`
+behind a small `ObjectStore` interface (`internal/backend/objectstore.go`, Put/Get; a fake
+in tests). The orchestrator **tees** the results stream to a temp file during ingest and
+uploads `scans/<id>/raw.jsonl` afterward — **best-effort**: Postgres stays the system of
+record, so an upload failure logs but never fails the scan. `scans.raw_object_key` (migration
+0009) stores the key; the API exposes only `has_raw`. `GET /api/scans/{id}/raw` (viewer)
+streams the archive back **through the BFF** (same-origin cookie — no presigned URLs). Config
+is `S3_ENDPOINT`/`S3_BUCKET`/`S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`/`S3_USE_SSL`/`S3_REGION`;
+unset `S3_ENDPOINT` ⇒ archiving disabled (dev), like unset `OIDC_ISSUER` disables auth.
 
 **Audit log (Phase 3):** every mutating API call emits one structured `slog` event
 (`event=audit`) to **stdout** — no DB table, no in-app UI. The trail lives in the platform's
@@ -110,7 +121,7 @@ cmd/backend        backend entrypoint (main + graceful shutdown + PG retry)
 cmd/scanner        scanner node entrypoint
 internal/types     wire contracts shared by both services + Nuclei JSONL parse structs
 internal/scanner   Runner (runs nuclei, process-group cancel/timeout) + HTTP API
-internal/backend   Orchestrator (dispatch/poll/ingest) + Scheduler (cron ticker) + ScannerClient + HTTP API + OIDC/BFF auth (auth.go, authz.go) + audit-log middleware (audit.go)
+internal/backend   Orchestrator (dispatch/poll/ingest + raw archive) + Scheduler (cron ticker) + ScannerClient + ObjectStore (objectstore.go, S3/MinIO) + HTTP API + OIDC/BFF auth (auth.go, authz.go) + audit-log middleware (audit.go)
 internal/store     Postgres access + embedded migrations (internal/store/migrations/*.sql)
 web/               React + TS + Vite SPA; embedded into the backend via go:embed (web/embed.go)
 deploy/            Dockerfile.backend (SPA build + distroless), Dockerfile.scanner, keycloak/ (seeded realm)

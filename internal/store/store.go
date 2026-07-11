@@ -149,13 +149,37 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 	return err
 }
 
-// ScanRow is a scan as returned to API callers.
+// SetScanRawObject records the bucket key of a scan's archived raw output. The
+// key is internal (a bucket path); the API exposes only ScanRow.HasRaw.
+func (s *Store) SetScanRawObject(ctx context.Context, scanID, key string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE scans SET raw_object_key = $1 WHERE id = $2`, key, scanID)
+	return err
+}
+
+// ScanRawKey returns the bucket key of a scan's archived raw output, or "" if the
+// scan has none. ErrNotFound if the scan itself is unknown.
+func (s *Store) ScanRawKey(ctx context.Context, id string) (string, error) {
+	var key *string
+	err := s.pool.QueryRow(ctx, `SELECT raw_object_key FROM scans WHERE id = $1`, id).Scan(&key)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", ErrNotFound
+		}
+		return "", err
+	}
+	return deref(key), nil
+}
+
+// ScanRow is a scan as returned to API callers. HasRaw reports whether the
+// verbatim Nuclei output was archived (and is thus downloadable).
 type ScanRow struct {
 	ID              string     `json:"id"`
 	State           string     `json:"state"`
 	NucleiVersion   string     `json:"nuclei_version,omitempty"`
 	TemplatesCommit string     `json:"templates_commit,omitempty"`
 	Error           string     `json:"error,omitempty"`
+	HasRaw          bool       `json:"has_raw"`
 	CreatedAt       time.Time  `json:"created_at"`
 	FinishedAt      *time.Time `json:"finished_at,omitempty"`
 }
@@ -163,11 +187,11 @@ type ScanRow struct {
 // GetScan returns one scan by id.
 func (s *Store) GetScan(ctx context.Context, id string) (ScanRow, error) {
 	var r ScanRow
-	var nucleiVersion, templatesCommit, errStr *string
+	var nucleiVersion, templatesCommit, errStr, rawKey *string
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, state, nuclei_version, templates_commit, error, created_at, finished_at
+		`SELECT id, state, nuclei_version, templates_commit, error, raw_object_key, created_at, finished_at
 		 FROM scans WHERE id = $1`, id,
-	).Scan(&r.ID, &r.State, &nucleiVersion, &templatesCommit, &errStr, &r.CreatedAt, &r.FinishedAt)
+	).Scan(&r.ID, &r.State, &nucleiVersion, &templatesCommit, &errStr, &rawKey, &r.CreatedAt, &r.FinishedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return ScanRow{}, ErrNotFound
@@ -177,6 +201,7 @@ func (s *Store) GetScan(ctx context.Context, id string) (ScanRow, error) {
 	r.NucleiVersion = deref(nucleiVersion)
 	r.TemplatesCommit = deref(templatesCommit)
 	r.Error = deref(errStr)
+	r.HasRaw = rawKey != nil
 	return r, nil
 }
 
@@ -186,7 +211,7 @@ func (s *Store) ListScans(ctx context.Context, limit int) ([]ScanRow, error) {
 		limit = 100
 	}
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, state, nuclei_version, templates_commit, error, created_at, finished_at
+		`SELECT id, state, nuclei_version, templates_commit, error, raw_object_key, created_at, finished_at
 		 FROM scans ORDER BY created_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
@@ -196,14 +221,15 @@ func (s *Store) ListScans(ctx context.Context, limit int) ([]ScanRow, error) {
 	var out []ScanRow
 	for rows.Next() {
 		var r ScanRow
-		var nucleiVersion, templatesCommit, errStr *string
+		var nucleiVersion, templatesCommit, errStr, rawKey *string
 		if err := rows.Scan(&r.ID, &r.State, &nucleiVersion, &templatesCommit, &errStr,
-			&r.CreatedAt, &r.FinishedAt); err != nil {
+			&rawKey, &r.CreatedAt, &r.FinishedAt); err != nil {
 			return nil, err
 		}
 		r.NucleiVersion = deref(nucleiVersion)
 		r.TemplatesCommit = deref(templatesCommit)
 		r.Error = deref(errStr)
+		r.HasRaw = rawKey != nil
 		out = append(out, r)
 	}
 	return out, rows.Err()

@@ -48,8 +48,14 @@ func main() {
 	}
 	log.Info("migrations applied")
 
+	archive, err := buildObjectStore(ctx, log)
+	if err != nil {
+		log.Error("configure object storage", "err", err)
+		os.Exit(1)
+	}
+
 	client := backend.NewScannerClient(scannerURL, scannerToken)
-	orch := backend.NewOrchestrator(st, client, log)
+	orch := backend.NewOrchestrator(st, client, archive, log)
 
 	auth, err := buildAuthenticator(ctx, st, log)
 	if err != nil {
@@ -62,7 +68,7 @@ func main() {
 		log.Warn("OIDC_ISSUER not set — authentication is DISABLED (dev mode); all requests act as an all-roles dev user")
 	}
 
-	apiSrv := backend.NewServer(st, orch, auth, web.Handler(), log)
+	apiSrv := backend.NewServer(st, orch, auth, archive, web.Handler(), log)
 
 	// The scheduler ticker dispatches cron schedules; the DB is its source of
 	// truth so it resumes cleanly across restarts.
@@ -139,6 +145,31 @@ func buildAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger) 
 	}
 	log.Info("OIDC auth enabled", "issuer", issuer, "client_id", clientID)
 	return auth, nil
+}
+
+// buildObjectStore wires the S3-compatible archive from the environment. If
+// S3_ENDPOINT is unset it returns (nil, nil) — archiving is disabled and scans
+// still ingest normally (dev mode). When set, the bucket is created if absent.
+func buildObjectStore(ctx context.Context, log *slog.Logger) (backend.ObjectStore, error) {
+	endpoint := os.Getenv("S3_ENDPOINT")
+	if endpoint == "" {
+		log.Warn("S3_ENDPOINT not set — raw-output archiving is DISABLED")
+		return nil, nil
+	}
+	cfg := backend.ObjectStoreConfig{
+		Endpoint:  endpoint,
+		Bucket:    envOr("S3_BUCKET", "nuclei-raw"),
+		AccessKey: os.Getenv("S3_ACCESS_KEY_ID"),
+		SecretKey: os.Getenv("S3_SECRET_ACCESS_KEY"),
+		Region:    envOr("S3_REGION", "us-east-1"),
+		UseSSL:    os.Getenv("S3_USE_SSL") == "true",
+	}
+	store, err := backend.NewObjectStore(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	log.Info("object storage enabled", "endpoint", endpoint, "bucket", cfg.Bucket)
+	return store, nil
 }
 
 // startSessionSweeper periodically deletes expired sessions and auth flows.

@@ -21,17 +21,18 @@ import (
 // OIDC/BFF auth (§6); when auth is nil (OIDC unconfigured) the guards fall back
 // to a dev identity with all roles, so local smoke tests still work.
 type Server struct {
-	store *store.Store
-	orch  *Orchestrator
-	auth  *Authenticator
-	spa   http.Handler
-	log   *slog.Logger
+	store   *store.Store
+	orch    *Orchestrator
+	auth    *Authenticator
+	archive ObjectStore // nil when object storage is not configured
+	spa     http.Handler
+	log     *slog.Logger
 }
 
 // NewServer builds the backend HTTP server. auth may be nil to disable auth; spa
 // is the handler for the embedded frontend (served for all non-/api routes).
-func NewServer(st *store.Store, orch *Orchestrator, auth *Authenticator, spa http.Handler, log *slog.Logger) *Server {
-	return &Server{store: st, orch: orch, auth: auth, spa: spa, log: log}
+func NewServer(st *store.Store, orch *Orchestrator, auth *Authenticator, archive ObjectStore, spa http.Handler, log *slog.Logger) *Server {
+	return &Server{store: st, orch: orch, auth: auth, archive: archive, spa: spa, log: log}
 }
 
 // defaultOptions are the sane rate/concurrency/timeout defaults applied when a
@@ -68,6 +69,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/scans", s.mutation(eventScanDispatched, "scan.create", "scan", RoleOperator, s.handleCreateScan))
 	mux.HandleFunc("GET /api/scans/{id}", s.requireRole(RoleViewer, s.handleGetScan))
 	mux.HandleFunc("GET /api/scans/{id}/findings", s.requireRole(RoleViewer, s.handleListScanFindings))
+	mux.HandleFunc("GET /api/scans/{id}/raw", s.requireRole(RoleViewer, s.handleGetScanRaw))
 
 	// Findings — the deduplicated, triageable lifecycle entities (§3). Analyst
 	// overlays (disposition, severity recast) are mutations → operator; reads → viewer.
@@ -229,6 +231,47 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, row)
+}
+
+// handleGetScanRaw streams a scan's archived verbatim Nuclei output (out.jsonl)
+// from object storage, through the BFF so it stays behind the session cookie
+// (same trust model as the exports — no presigned URLs leaking the bucket).
+func (s *Server) handleGetScanRaw(w http.ResponseWriter, r *http.Request) {
+	if s.archive == nil {
+		http.Error(w, "object storage is not configured", http.StatusNotFound)
+		return
+	}
+	id := r.PathValue("id")
+	key, err := s.store.ScanRawKey(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.Error(w, "scan not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if key == "" {
+		http.Error(w, "no archived output for this scan", http.StatusNotFound)
+		return
+	}
+
+	obj, err := s.archive.Get(r.Context(), key)
+	if err != nil {
+		if errors.Is(err, ErrObjectNotFound) {
+			http.Error(w, "archived output is missing from storage", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer obj.Close()
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="scan-%s.jsonl"`, id))
+	if _, err := io.Copy(w, obj); err != nil {
+		s.log.Warn("stream raw archive", "scan_id", id, "err", err)
+	}
 }
 
 // pageParams parses the shared limit/offset pagination knobs.

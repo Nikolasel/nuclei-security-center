@@ -57,8 +57,17 @@ export interface Scan {
   nuclei_version?: string;
   templates_commit?: string;
   error?: string;
+  /** whether the verbatim Nuclei output was archived to object storage. */
+  has_raw?: boolean;
   created_at: string;
   finished_at?: string;
+}
+
+/** scanRawUrl is the download URL for a scan's archived raw Nuclei output
+ *  (out.jsonl). The browser navigates to it so the same-origin session cookie
+ *  authenticates the download (like findingsExportUrl). */
+export function scanRawUrl(id: string): string {
+  return `/api/scans/${id}/raw`;
 }
 
 // Occurrence is one per-scan observation (the immutable scan-detail row). It

@@ -361,8 +361,16 @@ Turns point-in-time scans into a tracked signal. Built in three slices, one PR e
 
 Hardening and the security guardrails from §6.
 
-- **Object storage:** wire the S3-compatible interface (MinIO already in Compose) to
-  archive raw `out.jsonl`/SARIF per scan.
+- **Object storage:** ✅ the verbatim Nuclei `out.jsonl` is archived per scan to an
+  S3-compatible bucket (MinIO in Compose; any S3 API in the cloud) via `minio-go` behind a
+  tiny `ObjectStore` interface (`internal/backend/objectstore.go`). The orchestrator tees
+  the results stream to a temp file during ingest and uploads `scans/<id>/raw.jsonl`
+  afterward — **best-effort**: the projected findings in Postgres stay the system of record,
+  so a storage blip logs but doesn't fail the scan. `scans.raw_object_key` (migration 0009)
+  records the key; the API exposes only `has_raw`. `GET /api/scans/{id}/raw` (viewer) streams
+  the archive back **through the BFF** (same-origin cookie, no presigned URLs leaking the
+  bucket). Enabled by `S3_ENDPOINT`; unset ⇒ archiving off (dev). Multi-cloud beyond the S3
+  API (e.g. Azure Blob) is a localized swap behind `ObjectStore` (e.g. `gocloud.dev/blob`).
 - **RBAC:** enforce the three roles (admin / operator / viewer) on every mutating endpoint.
 - **Audit log:** ✅ every mutating API call emits one structured event (`event=audit`)
   to stdout via `slog` — actor, `event_id`, fine-grained `action`, object type/id, method,

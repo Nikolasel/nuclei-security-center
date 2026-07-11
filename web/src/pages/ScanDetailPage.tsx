@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { api } from "../api";
+import { api, scanRawUrl } from "../api";
 import { ScanFindingsView } from "../components/ScanFindingsView";
 import { Card, ErrorText, Spinner, StateBadge } from "../components/ui";
 
@@ -27,6 +27,14 @@ export function ScanDetailPage() {
         <h1 className="mt-1 flex items-center gap-3 text-xl font-semibold">
           <span className="font-mono text-base">{id.slice(0, 8)}</span>
           {scan.data && <StateBadge state={scan.data.state} />}
+          {scan.data?.has_raw && (
+            <a
+              href={scanRawUrl(id)}
+              className="ml-auto text-sm font-normal text-indigo-600 hover:underline dark:text-indigo-400"
+            >
+              Download raw output (JSONL)
+            </a>
+          )}
         </h1>
       </div>
 

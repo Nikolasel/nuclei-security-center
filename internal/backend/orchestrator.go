@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
@@ -16,24 +18,30 @@ import (
 // pulls and ingests the results. The backend is the system of record; the node
 // is stateless. (Phase 0 targets a single node; a registry comes later.)
 type Orchestrator struct {
-	store  *store.Store
-	client *ScannerClient
-	log    *slog.Logger
+	store    *store.Store
+	client   *ScannerClient
+	archiver ObjectStore // nil when object storage is not configured
+	log      *slog.Logger
 
 	pollInterval time.Duration
 	maxPolls     int
 }
 
-// NewOrchestrator wires the store and scanner client together.
-func NewOrchestrator(st *store.Store, client *ScannerClient, log *slog.Logger) *Orchestrator {
+// NewOrchestrator wires the store and scanner client together. archiver may be
+// nil, in which case raw output is ingested but not archived.
+func NewOrchestrator(st *store.Store, client *ScannerClient, archiver ObjectStore, log *slog.Logger) *Orchestrator {
 	return &Orchestrator{
 		store:        st,
 		client:       client,
+		archiver:     archiver,
 		log:          log,
 		pollInterval: 3 * time.Second,
 		maxPolls:     600, // ~30 min ceiling at 3s
 	}
 }
+
+// rawObjectKey is the bucket key under which a scan's verbatim out.jsonl lives.
+func rawObjectKey(scanID string) string { return "scans/" + scanID + "/raw.jsonl" }
 
 // Submit records a scan (optionally linked to the config it came from), then
 // runs the dispatch/poll/ingest loop in the background. It returns the backend
@@ -108,6 +116,8 @@ func (o *Orchestrator) pollToDone(ctx context.Context, nodeScanID string) (types
 
 // ingest streams the node's JSONL results and writes each finding to Postgres.
 // targetID scopes the deduplicated lifecycle entity (empty for ad-hoc scans).
+// When an archiver is configured, the verbatim stream is tee'd to a temp file
+// and uploaded to object storage after a successful ingest (see archiveRaw).
 func (o *Orchestrator) ingest(ctx context.Context, scanID, targetID, nodeScanID string) error {
 	body, err := o.client.Results(ctx, nodeScanID)
 	if err != nil {
@@ -115,7 +125,21 @@ func (o *Orchestrator) ingest(ctx context.Context, scanID, targetID, nodeScanID 
 	}
 	defer body.Close()
 
-	sc := bufio.NewScanner(body)
+	// Tee the raw byte stream to a temp file so we can archive the exact output
+	// the node produced — independent of whether every line parses.
+	reader := io.Reader(body)
+	var raw *os.File
+	if o.archiver != nil {
+		if raw, err = os.CreateTemp("", "nsc-raw-*.jsonl"); err != nil {
+			o.log.Warn("raw archive: temp file, skipping archive", "scan_id", scanID, "err", err)
+		} else {
+			defer os.Remove(raw.Name())
+			defer raw.Close()
+			reader = io.TeeReader(body, raw)
+		}
+	}
+
+	sc := bufio.NewScanner(reader)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024) // findings can be large
 	n := 0
 	for sc.Scan() {
@@ -129,9 +153,9 @@ func (o *Orchestrator) ingest(ctx context.Context, scanID, targetID, nodeScanID 
 			continue
 		}
 		// Copy the line: bufio.Scanner reuses its buffer on the next Scan.
-		raw := make([]byte, len(line))
-		copy(raw, line)
-		if err := o.store.IngestFinding(ctx, scanID, targetID, f, raw); err != nil {
+		rawLine := make([]byte, len(line))
+		copy(rawLine, line)
+		if err := o.store.IngestFinding(ctx, scanID, targetID, f, rawLine); err != nil {
 			return err
 		}
 		n++
@@ -140,7 +164,36 @@ func (o *Orchestrator) ingest(ctx context.Context, scanID, targetID, nodeScanID 
 		return fmt.Errorf("read results stream: %w", err)
 	}
 	o.log.Info("ingested findings", "scan_id", scanID, "count", n)
+
+	if raw != nil {
+		o.archiveRaw(ctx, scanID, raw)
+	}
 	return nil
+}
+
+// archiveRaw uploads the tee'd raw output to object storage and records its key.
+// It is best-effort: the projected findings are already the system of record, so
+// a storage blip must not fail an otherwise-good scan — it's logged, not fatal.
+func (o *Orchestrator) archiveRaw(ctx context.Context, scanID string, raw *os.File) {
+	size, err := raw.Seek(0, io.SeekEnd)
+	if err != nil {
+		o.log.Warn("raw archive: size", "scan_id", scanID, "err", err)
+		return
+	}
+	if _, err := raw.Seek(0, io.SeekStart); err != nil {
+		o.log.Warn("raw archive: rewind", "scan_id", scanID, "err", err)
+		return
+	}
+	key := rawObjectKey(scanID)
+	if err := o.archiver.Put(ctx, key, raw, size, "application/x-ndjson"); err != nil {
+		o.log.Warn("raw archive: upload", "scan_id", scanID, "err", err)
+		return
+	}
+	if err := o.store.SetScanRawObject(ctx, scanID, key); err != nil {
+		o.log.Warn("raw archive: record key", "scan_id", scanID, "err", err)
+		return
+	}
+	o.log.Info("archived raw output", "scan_id", scanID, "key", key, "bytes", size)
 }
 
 func (o *Orchestrator) failScan(ctx context.Context, scanID, reason string) {

@@ -92,12 +92,17 @@ func main() {
 	waitForShutdown(log, srv)
 }
 
-// buildAuthenticator wires the OIDC/BFF authenticator from the environment. If
-// OIDC_ISSUER is unset it returns (nil, nil) — auth-disabled dev mode. When the
-// issuer is set, the remaining required OIDC vars must be present.
+// buildAuthenticator wires the OIDC/BFF authenticator from the environment.
+// Auth is fail-closed: an unset OIDC_ISSUER is a hard error unless dev mode is
+// explicitly opted into with AUTH_DISABLED=true (in which case it returns
+// (nil, nil)). When the issuer is set, the remaining required OIDC vars must be
+// present.
 func buildAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger) (*backend.Authenticator, error) {
 	issuer := os.Getenv("OIDC_ISSUER")
 	if issuer == "" {
+		if os.Getenv("AUTH_DISABLED") != "true" {
+			return nil, errors.New("OIDC_ISSUER is required; set AUTH_DISABLED=true to explicitly run without authentication (dev only)")
+		}
 		return nil, nil
 	}
 
@@ -136,15 +141,25 @@ func buildAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger) 
 		},
 		SessionTTL:   ttl,
 		CookieName:   envOr("SESSION_COOKIE_NAME", "nsc_session"),
-		SecureCookie: os.Getenv("COOKIE_SECURE") == "true",
+		SecureCookie: secureCookieEnabled(),
 	}
 
 	auth, err := backend.NewAuthenticator(ctx, st, log, cfg)
 	if err != nil {
 		return nil, err
 	}
+	if !cfg.SecureCookie {
+		log.Warn("COOKIE_SECURE=false — the session cookie will lack the Secure attribute and can be sent over plaintext HTTP; use only in local dev")
+	}
 	log.Info("OIDC auth enabled", "issuer", issuer, "client_id", clientID)
 	return auth, nil
+}
+
+// secureCookieEnabled defaults the session-cookie Secure flag to true, so a TLS
+// deployment is secure even if the flag is forgotten. It is disabled only by an
+// explicit COOKIE_SECURE=false (mirroring the AUTH_DISABLED dev opt-out).
+func secureCookieEnabled() bool {
+	return os.Getenv("COOKIE_SECURE") != "false"
 }
 
 // buildObjectStore wires the S3-compatible archive from the environment. If

@@ -85,14 +85,20 @@ func (c *ScannerClient) Status(ctx context.Context, nodeScanID string) (types.Sc
 	return st, nil
 }
 
+// resultsClientTimeout bounds the entire results fetch, including streaming the
+// body. It backstops the run context so a node that accepts the request but then
+// dribbles or stalls the stream can't hold the fetch open indefinitely.
+const resultsClientTimeout = 45 * time.Minute
+
 // Results streams the node's JSONL results. The caller must close the reader.
-// A dedicated client (no timeout) is used since result sets can stream a while.
+// A dedicated client (with a generous timeout) is used since result sets can
+// stream a while.
 func (c *ScannerClient) Results(ctx context.Context, nodeScanID string) (io.ReadCloser, error) {
 	req, err := c.newReq(ctx, http.MethodGet, "/v1/scans/"+nodeScanID+"/results", nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := (&http.Client{}).Do(req)
+	resp, err := (&http.Client{Timeout: resultsClientTimeout}).Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -43,6 +43,55 @@ func NewOrchestrator(st *store.Store, client *ScannerClient, archiver ObjectStor
 // rawObjectKey is the bucket key under which a scan's verbatim out.jsonl lives.
 func rawObjectKey(scanID string) string { return "scans/" + scanID + "/raw.jsonl" }
 
+// Ingest quotas. The node/results stream is otherwise trusted for volume: a
+// compromised node, or a target crafted to make Nuclei emit an enormous number
+// of findings, could drive unbounded DB writes and temp-file growth. These cap
+// the total bytes read and the findings ingested per scan (CWE-400/CWE-770).
+const (
+	maxResultsBytes    = 512 << 20 // 512 MiB total results-stream ceiling
+	maxFindingsPerScan = 100_000   // per-scan finding-count ceiling
+)
+
+// scanFindingLines reads JSONL findings from r under a byte cap (maxBytes) and a
+// count cap (maxCount), invoking emit for each parsed finding with a private
+// copy of its raw line. Unparseable lines are skipped (counted, not fatal).
+// Exceeding either cap returns an error after the work done so far, so a
+// misbehaving stream aborts rather than consuming unbounded resources.
+func scanFindingLines(r io.Reader, maxBytes int64, maxCount int, emit func(types.NucleiFinding, []byte) error) (ingested, skipped int, err error) {
+	// +1 so we can distinguish "exactly at the cap" from "over the cap".
+	limited := &io.LimitedReader{R: r, N: maxBytes + 1}
+	sc := bufio.NewScanner(limited)
+	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024) // findings can be large
+	for sc.Scan() {
+		line := sc.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		if ingested >= maxCount {
+			return ingested, skipped, fmt.Errorf("results exceeded the %d-finding cap", maxCount)
+		}
+		var f types.NucleiFinding
+		if json.Unmarshal(line, &f) != nil {
+			skipped++
+			continue
+		}
+		// Copy the line: bufio.Scanner reuses its buffer on the next Scan.
+		rawLine := make([]byte, len(line))
+		copy(rawLine, line)
+		if e := emit(f, rawLine); e != nil {
+			return ingested, skipped, e
+		}
+		ingested++
+	}
+	if e := sc.Err(); e != nil {
+		return ingested, skipped, fmt.Errorf("read results stream: %w", e)
+	}
+	if limited.N <= 0 {
+		return ingested, skipped, fmt.Errorf("results stream exceeded the %d-byte cap", maxBytes)
+	}
+	return ingested, skipped, nil
+}
+
 // Submit records a scan (optionally linked to the config it came from), then
 // runs the dispatch/poll/ingest loop in the background. It returns the backend
 // scan id immediately.
@@ -139,29 +188,15 @@ func (o *Orchestrator) ingest(ctx context.Context, scanID, targetID, nodeScanID 
 		}
 	}
 
-	sc := bufio.NewScanner(reader)
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024) // findings can be large
-	n := 0
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var f types.NucleiFinding
-		if err := json.Unmarshal(line, &f); err != nil {
-			o.log.Warn("skip unparseable finding line", "scan_id", scanID, "err", err)
-			continue
-		}
-		// Copy the line: bufio.Scanner reuses its buffer on the next Scan.
-		rawLine := make([]byte, len(line))
-		copy(rawLine, line)
-		if err := o.store.IngestFinding(ctx, scanID, targetID, f, rawLine); err != nil {
-			return err
-		}
-		n++
+	n, skipped, err := scanFindingLines(reader, maxResultsBytes, maxFindingsPerScan,
+		func(f types.NucleiFinding, rawLine []byte) error {
+			return o.store.IngestFinding(ctx, scanID, targetID, f, rawLine)
+		})
+	if skipped > 0 {
+		o.log.Warn("skipped unparseable finding lines", "scan_id", scanID, "skipped", skipped)
 	}
-	if err := sc.Err(); err != nil {
-		return fmt.Errorf("read results stream: %w", err)
+	if err != nil {
+		return err
 	}
 	o.log.Info("ingested findings", "scan_id", scanID, "count", n)
 

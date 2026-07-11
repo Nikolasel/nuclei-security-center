@@ -70,7 +70,10 @@ func TestSafeReturnTo(t *testing.T) {
 			t.Errorf("safeReturnTo(%q) rejected a valid relative path", p)
 		}
 	}
-	bad := []string{"", "//evil.com", "https://evil.com", "relative", "/"}
+	bad := []string{
+		"", "//evil.com", "https://evil.com", "relative", "/",
+		`/\evil.com`, `/\/evil.com`, `\/evil.com`, `\\evil.com`, `/\`,
+	}
 	for _, p := range bad {
 		if safeReturnTo(p) != "" {
 			t.Errorf("safeReturnTo(%q) = %q, want \"\" (open-redirect guard)", p, safeReturnTo(p))

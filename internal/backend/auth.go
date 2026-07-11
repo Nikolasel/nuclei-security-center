@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -259,12 +260,20 @@ func randToken() string {
 }
 
 // safeReturnTo only allows relative, single-slash-rooted paths to prevent open
-// redirects via the return_to parameter.
+// redirects via the return_to parameter. It is deny-by-default: the value must
+// start with a single '/' and must not be reinterpretable as a scheme-relative
+// ("//host") or absolute URL. The backslash variant ("/\host") is rejected
+// explicitly because WHATWG-URL browsers normalize '\' to '/', turning it into
+// a scheme-relative //host redirect (CWE-601).
 func safeReturnTo(p string) string {
-	if len(p) >= 2 && p[0] == '/' && p[1] != '/' {
-		return p
+	if len(p) < 2 || p[0] != '/' || p[1] == '/' || p[1] == '\\' {
+		return ""
 	}
-	return ""
+	u, err := url.Parse(p)
+	if err != nil || u.IsAbs() || u.Host != "" {
+		return ""
+	}
+	return p
 }
 
 func firstNonEmpty(vals ...string) string {

@@ -42,13 +42,34 @@ const dedupSep = "\x1f"
 
 // DedupKey is the stable identity of a deduplicated finding: (target, template,
 // matched_at) per ARCHITECTURE.md §3. Ad-hoc scans (no target) collapse to "-".
-// This MUST match the backfill formula in migration 0005 exactly.
+// This MUST match the backfill formula in migration 0005 exactly for real data.
+//
+// matched_at is influenced by the scanned host and is not otherwise validated for
+// control characters, so each component is first stripped of them — including the
+// 0x1f separator itself. Without this, a crafted matched_at embedding 0x1f could
+// shift the component boundaries and forge a collision with a different
+// (target, template, matched_at) tuple, merging/overwriting its lifecycle entity
+// (CWE-345/CWE-707). Real components (UUIDs, Nuclei template ids, URL matched-at)
+// carry no control characters, so this is a no-op for them and the key stays
+// byte-identical to the migration 0005 backfill.
 func DedupKey(targetID, templateID, matchedAt string) string {
 	t := targetID
 	if t == "" {
 		t = "-"
 	}
-	return t + dedupSep + templateID + dedupSep + matchedAt
+	return sanitizeKeyComponent(t) + dedupSep + sanitizeKeyComponent(templateID) + dedupSep + sanitizeKeyComponent(matchedAt)
+}
+
+// sanitizeKeyComponent drops ASCII control characters (C0 range plus DEL),
+// guaranteeing no component can contain the dedup separator and so keeping the
+// delimiter-joined key injective.
+func sanitizeKeyComponent(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // IngestFinding records one finding observation: it inserts an immutable

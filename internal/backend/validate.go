@@ -49,6 +49,58 @@ func validateTemplateSet(t *store.TemplateSet) error {
 	t.Severities = trimAll(t.Severities)
 	t.Tags = trimAll(t.Tags)
 	t.Paths = trimAll(t.Paths)
+	return validateTemplateSelector(t.Paths, t.GitRef)
+}
+
+// gitRefRe constrains a template repo ref to a conservative character set. Git
+// itself forbids "..", a leading "-", and whitespace in ref names; we enforce a
+// safe subset explicitly since this value reaches the scanner node.
+var gitRefRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
+
+// validateTemplateSelector checks operator-supplied template selectors that
+// steer which templates the credential-less node loads (they become
+// `nuclei -templates <path>` / the pinned repo ref). Unlike target hosts, these
+// were previously only trimmed; without this, an absolute or `..` path could
+// point the engine at an arbitrary filesystem location on the node. Paths must
+// be relative and traversal-free; GitRef must match a safe ref pattern.
+func validateTemplateSelector(paths []string, gitRef string) error {
+	for _, p := range paths {
+		if err := validateTemplatePath(p); err != nil {
+			return fmt.Errorf("template path %q: %w", p, err)
+		}
+	}
+	if gitRef != "" {
+		if strings.Contains(gitRef, "..") || !gitRefRe.MatchString(gitRef) {
+			return fmt.Errorf("invalid git ref %q", gitRef)
+		}
+	}
+	return nil
+}
+
+// validateTemplatePath rejects anything that isn't a relative, traversal-free
+// path. Paths are interpreted on the node under a template root, so an absolute
+// path, a `..` segment, a leading `-` (flag-like), or `~` is refused.
+func validateTemplatePath(p string) error {
+	if p == "" {
+		return errors.New("empty")
+	}
+	if strings.ContainsAny(p, " \t\r\n") {
+		return errors.New("contains whitespace")
+	}
+	if strings.HasPrefix(p, "/") {
+		return errors.New("must be a relative path")
+	}
+	if strings.HasPrefix(p, "-") {
+		return errors.New("must not start with '-'")
+	}
+	if strings.HasPrefix(p, "~") {
+		return errors.New("must not start with '~'")
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return errors.New("must not contain '..'")
+		}
+	}
 	return nil
 }
 

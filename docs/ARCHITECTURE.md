@@ -395,8 +395,16 @@ Hardening and the security guardrails from §6.
 - **Exit criteria (met):** raw output is archived and downloadable; roles are enforced; an
   out-of-scope target is rejected before dispatch.
 
-### Phase 4 — Cloud deploy + hardening ⬜  (~1–1.5 wks)
+### Phase 4 — CI/CD + cloud deploy + hardening ⬜  (~1–1.5 wks)
 
+- **CI/CD:** ✅ GitHub Actions. A **CI** workflow (`.github/workflows/ci.yml`) runs on every
+  push to `main` and every PR — gofmt check, `go vet`, `go build`, `go test -race`, plus an
+  SPA typecheck/build job (`npm ci` + `npm run build`, which runs `tsc -b`). A **release**
+  workflow (`.github/workflows/release.yml`) fires on a `v*` tag: it gates on `go test`, then
+  builds and pushes the backend and scanner images to **private GHCR**
+  (`ghcr.io/nikolasel/nuclei-security-center-{backend,scanner}`, semver + `sha` tags) via
+  `docker/build-push-action` with a GHCR layer cache. Images are private by default (the repo
+  is public, the images are not).
 - **Deploy:** Helm chart (or Terraform) for the chosen cloud — managed Postgres + bucket +
   IdP wiring; scanner nodes deployable per network zone.
 - **Service auth upgrade:** turn on mTLS via the service mesh where nodes sit in untrusted

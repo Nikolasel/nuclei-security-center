@@ -76,8 +76,15 @@ func (s *Scheduler) Start(ctx context.Context) {
 	}()
 }
 
-// tick dispatches every schedule that is currently due. Ticks never overlap (one
-// goroutine, synchronous), so a schedule can't be double-dispatched within a tick.
+// maxDispatchPerTick caps how many schedules one tick dispatches, so a large due
+// set (e.g. many schedules all cron'd to the same minute) can't produce an
+// unbounded dispatch burst against the scanner node (CWE-770). Undispatched due
+// schedules keep their past next_run_at and are simply re-selected next tick.
+const maxDispatchPerTick = 20
+
+// tick dispatches the currently-due schedules, up to maxDispatchPerTick. Ticks
+// never overlap (one goroutine, synchronous), so a schedule can't be
+// double-dispatched within a tick.
 func (s *Scheduler) tick(ctx context.Context) {
 	now := time.Now()
 	due, err := s.store.DueSchedules(ctx, now)
@@ -85,9 +92,23 @@ func (s *Scheduler) tick(ctx context.Context) {
 		s.log.Error("list due schedules", "err", err)
 		return
 	}
+	if len(due) > maxDispatchPerTick {
+		s.log.Warn("due schedules exceed the per-tick cap; deferring the remainder to the next tick",
+			"due", len(due), "cap", maxDispatchPerTick)
+		due = capDueSchedules(due, maxDispatchPerTick)
+	}
 	for _, sc := range due {
 		s.dispatch(ctx, sc, now)
 	}
+}
+
+// capDueSchedules returns at most max schedules from due, preserving order (the
+// store returns them ordered by next_run_at, so the most-overdue go first).
+func capDueSchedules(due []store.Schedule, max int) []store.Schedule {
+	if len(due) > max {
+		return due[:max]
+	}
+	return due
 }
 
 // dispatch runs one schedule and advances its next fire time. Even on failure the

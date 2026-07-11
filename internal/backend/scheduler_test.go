@@ -102,3 +102,29 @@ func TestValidateSchedule(t *testing.T) {
 		}
 	}
 }
+
+func TestCapDueSchedules(t *testing.T) {
+	mk := func(n int) []store.Schedule {
+		out := make([]store.Schedule, n)
+		for i := range out {
+			out[i] = store.Schedule{ID: string(rune('a' + i))}
+		}
+		return out
+	}
+
+	// Over the cap: truncated to exactly max, preserving order.
+	over := mk(maxDispatchPerTick + 5)
+	got := capDueSchedules(over, maxDispatchPerTick)
+	if len(got) != maxDispatchPerTick {
+		t.Errorf("len = %d, want %d", len(got), maxDispatchPerTick)
+	}
+	if got[0].ID != over[0].ID {
+		t.Errorf("order not preserved: got[0]=%q want %q", got[0].ID, over[0].ID)
+	}
+
+	// At or under the cap: returned unchanged.
+	under := mk(3)
+	if len(capDueSchedules(under, maxDispatchPerTick)) != 3 {
+		t.Error("under-cap slice should be returned in full")
+	}
+}

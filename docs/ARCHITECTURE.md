@@ -357,7 +357,7 @@ Turns point-in-time scans into a tracked signal. Built in three slices, one PR e
 - **Exit criteria (met):** a nightly schedule runs unattended; the UI shows what's new vs.
   resolved between runs, lets a user triage a finding, and exports the current view.
 
-### Phase 3 — Storage + guardrails + RBAC ⬜  (~1 wk)
+### Phase 3 — Storage + guardrails + RBAC ✅  (~1 wk)
 
 Hardening and the security guardrails from §6.
 
@@ -371,7 +371,9 @@ Hardening and the security guardrails from §6.
   the archive back **through the BFF** (same-origin cookie, no presigned URLs leaking the
   bucket). Enabled by `S3_ENDPOINT`; unset ⇒ archiving off (dev). Multi-cloud beyond the S3
   API (e.g. Azure Blob) is a localized swap behind `ObjectStore` (e.g. `gocloud.dev/blob`).
-- **RBAC:** enforce the three roles (admin / operator / viewer) on every mutating endpoint.
+- **RBAC:** ✅ the three roles (admin / operator / viewer) are enforced server-side on every
+  mutating endpoint (`s.mutation` → `requireRole`): reads need viewer, writes/dispatch need
+  operator, deletes need admin. Roles come from the IdP (a groups claim), never in-app.
 - **Audit log:** ✅ every mutating API call emits one structured event (`event=audit`)
   to stdout via `slog` — actor, `event_id`, fine-grained `action`, object type/id, method,
   path, status, duration — so the platform's log aggregator (CloudWatch / Azure Log
@@ -382,9 +384,15 @@ Hardening and the security guardrails from §6.
   overriding whatever was attempted), `config_changed` (targets/template-sets/schedules CUD),
   `scan_dispatched` (ad-hoc scan or schedule run), `finding_triaged` (disposition/recast);
   all at INFO (a denial is the system working, not a fault). `internal/backend/audit.go`.
-- **Scope guardrail:** hard-enforce that a scan can only target hosts inside an approved
-  target record; per-zone scanner selection.
-- **Exit criteria:** raw output is archived and downloadable; roles are enforced; an
+- **Scope guardrail:** ✅ a scan can only target hosts inside an approved target record. The
+  union of all targets' hosts is the allowlist; ad-hoc `spec` scans are validated + matched
+  against it before dispatch (`internal/backend/scope.go`), and out-of-scope targets are
+  rejected `400`. Matching is host-granular and DNS-free — exact hostname (no wildcard),
+  IP-in-CIDR, CIDR-within-CIDR — and **fails closed** (no approved targets ⇒ nothing runs).
+  The stored-target path is in-scope by construction; the implicit `scanme.sh` default scan
+  was removed (an unapproved external host is exactly what this prevents). Per-zone scanner
+  selection is deferred to Phase 4 (multi-node).
+- **Exit criteria (met):** raw output is archived and downloadable; roles are enforced; an
   out-of-scope target is rejected before dispatch.
 
 ### Phase 4 — Cloud deploy + hardening ⬜  (~1–1.5 wks)

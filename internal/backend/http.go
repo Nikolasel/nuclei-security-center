@@ -41,12 +41,6 @@ func defaultOptions() types.ScanOptions {
 	return types.ScanOptions{RateLimit: 150, Concurrency: 25, TimeoutSec: 600}
 }
 
-// DefaultSpec is the fallback scan (ProjectDiscovery's public test host), used
-// when POST /scans is called with an empty body — handy for smoke tests.
-func DefaultSpec() types.ScanSpec {
-	return types.ScanSpec{Targets: []string{"scanme.sh"}, Options: defaultOptions()}
-}
-
 // Handler returns the backend router. The JSON API lives under /api/*; the SPA
 // (embedded static build) is served at / with client-route fallback. /healthz
 // stays at the root for infra probes. Authorization per endpoint: reads need
@@ -170,14 +164,41 @@ func (s *Server) buildScanSpec(ctx context.Context, req createScanRequest) (type
 		if len(spec.Targets) == 0 {
 			return types.ScanSpec{}, store.ScanLink{}, errors.New("spec.targets must not be empty")
 		}
+		// An ad-hoc spec bypasses the stored-target allowlist, so validate the
+		// host formats and enforce the scope guardrail (§6) here: every target
+		// must fall inside an approved target record.
+		for i, h := range spec.Targets {
+			h = strings.TrimSpace(h)
+			if err := validateHost(h); err != nil {
+				return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("target %q: %w", h, err)
+			}
+			spec.Targets[i] = h
+		}
+		if err := s.enforceScope(ctx, spec.Targets); err != nil {
+			return types.ScanSpec{}, store.ScanLink{}, err
+		}
 		if spec.Options == (types.ScanOptions{}) {
 			spec.Options = defaultOptions()
 		}
 		return spec, store.ScanLink{}, nil
 
 	default:
-		return DefaultSpec(), store.ScanLink{}, nil
+		return types.ScanSpec{}, store.ScanLink{}, errors.New("provide target_id (a stored target) or spec.targets")
 	}
+}
+
+// enforceScope rejects a scan whose targets aren't all covered by an approved
+// target record — the scope guardrail (§6). It fails closed: with no approved
+// targets, every host is out of scope.
+func (s *Server) enforceScope(ctx context.Context, targets []string) error {
+	approved, err := s.store.AllTargetHosts(ctx)
+	if err != nil {
+		return fmt.Errorf("load approved scope: %w", err)
+	}
+	if bad := outOfScopeHosts(approved, targets); len(bad) > 0 {
+		return fmt.Errorf("out of scope (not inside any approved target): %s", strings.Join(bad, ", "))
+	}
+	return nil
 }
 
 // resolveConfigSpec builds a scan spec + config link from a stored target and an

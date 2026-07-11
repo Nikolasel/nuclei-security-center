@@ -16,9 +16,19 @@ OIDC/BFF auth with IdP-driven roles, and the React SPA). **Phase 2 is complete**
 **finding-lifecycle** slice (dedup + first/last-seen + a Tenable-style detection lifecycle +
 dispositions/recast), the **scheduling** slice (a `schedules` table + a backend cron ticker
 that dispatches due schedules to the same orchestrator path), and the **exports** slice
-(JSON/CSV/SARIF of the lifecycle list). **Phase 3 is in progress** (storage + guardrails +
-RBAC); the **audit-log** and **object-storage** slices are done. Remaining: scope guardrail.
-See §8 of the architecture doc.
+(JSON/CSV/SARIF of the lifecycle list). **Phase 3 is complete** — the **audit-log**,
+**object-storage**, and **scope-guardrail** slices are done, and RBAC is enforced on every
+mutating endpoint. Next is **Phase 4** (cloud deploy + hardening). See §8 of the architecture doc.
+
+**Scope guardrail (Phase 3, §6 — the most important guardrail):** a scan may only target
+hosts inside an approved `target` record. The union of all targets' hosts is the allowlist
+(`store.AllTargetHosts`); the ad-hoc `POST /api/scans` `spec` path validates host formats and
+matches every target against it (`internal/backend/scope.go`, `outOfScopeHosts`), rejecting
+out-of-scope targets with `400` before dispatch. Matching is host-granular and DNS-free —
+exact hostname (no wildcard), IP-in-CIDR, CIDR-within-CIDR, ports/URL-paths ignored — and
+**fails closed** (no approved targets ⇒ every scan rejected). The stored-target (`target_id`)
+and schedule paths are in-scope by construction. The old implicit `scanme.sh` default scan
+(empty body) was **removed** — empty body now `400`s; provide `target_id` or `spec.targets`.
 
 **Object storage (Phase 3):** the verbatim Nuclei `out.jsonl` is archived per scan to an
 S3-compatible bucket (MinIO locally; any S3 API in the cloud) via `github.com/minio/minio-go/v7`

@@ -84,6 +84,27 @@ func (s *Store) ListTargets(ctx context.Context) ([]Target, error) {
 	return out, rows.Err()
 }
 
+// AllTargetHosts returns the union of every target's hosts — the approved-scope
+// allowlist a scan's targets must fall inside (§6). Order is unspecified and
+// duplicates are possible; callers treat it as a set.
+func (s *Store) AllTargetHosts(ctx context.Context) ([]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT hosts FROM targets`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var hosts []string
+		if err := rows.Scan(&hosts); err != nil {
+			return nil, err
+		}
+		out = append(out, hosts...)
+	}
+	return out, rows.Err()
+}
+
 // UpdateTarget updates a target's mutable fields and returns the fresh row.
 func (s *Store) UpdateTarget(ctx context.Context, id string, in Target) (Target, error) {
 	in.Tags = orEmpty(in.Tags)

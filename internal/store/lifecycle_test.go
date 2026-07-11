@@ -29,6 +29,31 @@ func TestDedupKey(t *testing.T) {
 	}
 }
 
+// TestDedupKeyControlCharInjection asserts a matched_at carrying the 0x1f
+// separator can't be steered to collide with a different (target,template,
+// matched_at) tuple's key.
+func TestDedupKeyControlCharInjection(t *testing.T) {
+	// Raw concatenation would make these two tuples share a key:
+	//   A: ("t", "a", "b\x1fc")   -> t \x1f a \x1f b \x1f c
+	//   B: ("t", "a\x1fb", "c")   -> t \x1f a \x1f b \x1f c
+	a := DedupKey("t", "a", "b\x1fc")
+	b := DedupKey("t", "a\x1fb", "c")
+	if a == b {
+		t.Fatalf("distinct tuples collide after 0x1f injection: %q", a)
+	}
+
+	// The separator must not survive inside any component.
+	if got := DedupKey("t", "a", "b\x1fc"); got != "t\x1fa\x1fbc" {
+		t.Errorf("control char not stripped: %q", got)
+	}
+
+	// A realistic value (no control chars) is untouched — key parity with the
+	// migration 0005 backfill is preserved.
+	if got := DedupKey("uuid", "cve-2021-1", "https://h/p"); got != "uuid\x1fcve-2021-1\x1fhttps://h/p" {
+		t.Errorf("realistic key changed: %q", got)
+	}
+}
+
 func TestValidDisposition(t *testing.T) {
 	for _, d := range []string{"none", "false_positive", "accepted"} {
 		if !ValidDisposition(d) {

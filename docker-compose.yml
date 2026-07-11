@@ -81,6 +81,10 @@ services:
       OIDC_DISCOVERY_URL: "http://keycloak:8080/realms/nsc"
       OIDC_CLIENT_ID: "nuclei-backend"
       OIDC_CLIENT_SECRET: "${OIDC_CLIENT_SECRET:-dev-oidc-secret-change-me}"
+      # This local stack serves plaintext http://localhost:8080, so the session
+      # cookie must not be Secure (browsers withhold Secure cookies over HTTP).
+      # Secure defaults to true; keep TLS deployments on the default.
+      COOKIE_SECURE: "false"
       # S3-compatible object storage for raw scan-output archival. The backend
       # creates the bucket on startup (retrying until MinIO is ready).
       S3_ENDPOINT: "minio:9000"

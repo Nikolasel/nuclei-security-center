@@ -15,7 +15,8 @@ deployment.
 | `SCANNER_ADDR` | scanner | `:8081` | listen address |
 | `NUCLEI_PATH` | scanner | `nuclei` | path to the nuclei binary |
 | `SCANNER_WORK_DIR` | scanner | – (unset ⇒ a private `0700` temp dir) | per-scan working dirs; leave unset for an auto-created process-exclusive dir, or point at a mounted private volume |
-| `OIDC_ISSUER` | backend | – (unset ⇒ auth **disabled**) | OIDC issuer URL; setting it enables auth |
+| `OIDC_ISSUER` | backend | – (required unless `AUTH_DISABLED=true`) | OIDC issuer URL; setting it enables auth |
+| `AUTH_DISABLED` | backend | `false` | explicit opt-out to run **without** auth (dev only); required when `OIDC_ISSUER` is unset, else the backend refuses to start |
 | `OIDC_DISCOVERY_URL` | backend | = `OIDC_ISSUER` | internal metadata URL when it differs from the browser-facing issuer (Docker) |
 | `OIDC_CLIENT_ID` | backend | – (required if issuer set) | confidential client id |
 | `OIDC_CLIENT_SECRET` | backend | – (required if issuer set) | confidential client secret |
@@ -27,7 +28,7 @@ deployment.
 | `OIDC_ADMIN_GROUP` / `OIDC_OPERATOR_GROUP` / `OIDC_VIEWER_GROUP` | backend | `admin` / `operator` / `viewer` | group value → role mapping |
 | `SESSION_TTL` | backend | `12h` | session lifetime (Go duration) |
 | `SESSION_COOKIE_NAME` | backend | `nsc_session` | session cookie name |
-| `COOKIE_SECURE` | backend | `false` | set the cookie `Secure` flag (enable behind TLS) |
+| `COOKIE_SECURE` | backend | `true` | session cookie `Secure` flag; set `COOKIE_SECURE=false` **only** for local plaintext-HTTP dev |
 | `S3_ENDPOINT` | backend | – (unset ⇒ archiving **disabled**) | S3/MinIO endpoint `host:port` (no scheme); setting it enables raw-output archiving |
 | `S3_BUCKET` | backend | `nuclei-raw` | bucket for archived raw output (created on startup if absent) |
 | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | backend | – | S3 credentials |
@@ -59,10 +60,11 @@ Keycloak's own admin console is at `http://localhost:8082` (`admin`/`admin`).
 Because protected endpoints authenticate via the **session cookie** (not a bearer token), drive
 the API from the browser or a cookie jar populated by a real login.
 
-> **Pure-API smoke testing without auth:** unset `OIDC_ISSUER` (comment it out in
-> `docker-compose.yml`) to run the backend in **auth-disabled dev mode** — every request acts as
+> **Pure-API smoke testing without auth:** leave `OIDC_ISSUER` unset **and** set
+> `AUTH_DISABLED=true` to run the backend in **auth-disabled dev mode** — every request acts as
 > an all-roles dev user, so the `curl` examples in the [API reference](API.md) work directly. The
-> backend logs a loud warning in this mode.
+> backend logs a loud warning in this mode. Without the explicit `AUTH_DISABLED=true`, a missing
+> `OIDC_ISSUER` is a fatal startup error (auth fails closed).
 
 To point at a real IdP (Cognito, Entra, Keycloak, …), set `OIDC_ISSUER`, `OIDC_CLIENT_ID`,
 `OIDC_CLIENT_SECRET`, and `APP_BASE_URL`, register the `OIDC_REDIRECT_URL` with the provider, and

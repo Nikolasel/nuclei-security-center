@@ -68,6 +68,47 @@ func TestWriteFindingsCSV(t *testing.T) {
 	}
 }
 
+func TestWriteFindingsCSVFormulaInjection(t *testing.T) {
+	t0 := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+	rows := []store.LifecycleRow{{
+		ID: 1, TemplateID: "t", Name: "n", Severity: "high", EffectiveSeverity: "high",
+		// Scanned-host-influenced fields carrying formula payloads.
+		Host:      `=cmd|'/c calc'!A1`,
+		MatchedAt: `@SUM(1+1)`,
+		Type:      "http", DetectionState: "active", EffectiveState: "active",
+		Disposition: "none", FirstSeenAt: t0, LastSeenAt: t0,
+	}}
+	var buf bytes.Buffer
+	writeFindingsCSV(&buf, rows)
+
+	recs, err := csv.NewReader(&buf).ReadAll()
+	if err != nil {
+		t.Fatalf("csv parse: %v", err)
+	}
+	host, matchedAt := recs[1][5], recs[1][6]
+	if host != `'=cmd|'/c calc'!A1` {
+		t.Errorf("host cell not neutralized: %q", host)
+	}
+	if matchedAt != `'@SUM(1+1)` {
+		t.Errorf("matched_at cell not neutralized: %q", matchedAt)
+	}
+}
+
+func TestNeutralizeCSVCell(t *testing.T) {
+	dangerous := []string{"=1", "+1", "-1", "@x", "\tx", "\rx"}
+	for _, s := range dangerous {
+		if got := neutralizeCSVCell(s); got != "'"+s {
+			t.Errorf("neutralizeCSVCell(%q) = %q, want quoted", s, got)
+		}
+	}
+	safe := []string{"", "scanme.sh", "101", "high", "https://scanme.sh/x", "cve;rce"}
+	for _, s := range safe {
+		if got := neutralizeCSVCell(s); got != s {
+			t.Errorf("neutralizeCSVCell(%q) = %q, want unchanged", s, got)
+		}
+	}
+}
+
 func TestWriteFindingsRawJSONL(t *testing.T) {
 	// Pretty-printed input (as Postgres JSONB hands back), a compact one, and an
 	// empty object — all must come out as one compact object per line, each with

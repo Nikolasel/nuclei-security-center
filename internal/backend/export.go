@@ -119,13 +119,13 @@ func writeFindingsRawJSONL(w io.Writer, rows []store.RawExportRow) {
 func writeFindingsCSV(w io.Writer, rows []store.LifecycleRow) {
 	cw := csv.NewWriter(w)
 	defer cw.Flush()
-	_ = cw.Write([]string{
+	writeCSVRecord(cw, []string{
 		"id", "template_id", "name", "severity", "effective_severity", "host", "matched_at",
 		"type", "detection_state", "effective_state", "disposition", "times_mitigated",
 		"cve", "tags", "first_seen_at", "last_seen_at",
 	})
 	for _, r := range rows {
-		_ = cw.Write([]string{
+		writeCSVRecord(cw, []string{
 			strconv.FormatInt(r.ID, 10),
 			r.TemplateID, r.Name, r.Severity, r.EffectiveSeverity, r.Host, r.MatchedAt,
 			r.Type, r.DetectionState, r.EffectiveState, r.Disposition, strconv.Itoa(r.TimesMitigated),
@@ -133,6 +133,33 @@ func writeFindingsCSV(w io.Writer, rows []store.LifecycleRow) {
 			r.FirstSeenAt.UTC().Format(time.RFC3339), r.LastSeenAt.UTC().Format(time.RFC3339),
 		})
 	}
+}
+
+// writeCSVRecord neutralizes every cell before writing it, so untrusted
+// finding content (host/matched_at are influenced by the scanned host) can't
+// smuggle a spreadsheet formula into the export.
+func writeCSVRecord(cw *csv.Writer, cells []string) {
+	for i, c := range cells {
+		cells[i] = neutralizeCSVCell(c)
+	}
+	_ = cw.Write(cells)
+}
+
+// neutralizeCSVCell defuses CSV formula injection (CWE-1236). A spreadsheet
+// (Excel/Sheets/LibreOffice) evaluates a cell whose first character is one of
+// = + - @ (or a leading tab/CR), so e.g. a host of `=HYPERLINK(...)` or a
+// legacy DDE payload would execute on the analyst's workstation. Prefixing a
+// single quote forces the value to be treated as literal text. encoding/csv
+// only handles delimiter/quote/newline correctness — not this.
+func neutralizeCSVCell(s string) string {
+	if s == "" {
+		return s
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + s
+	}
+	return s
 }
 
 // rawIDField is the namespaced key carrying the lifecycle finding id in the raw

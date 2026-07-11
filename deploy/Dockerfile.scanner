@@ -12,7 +12,9 @@ RUN CGO_ENABLED=0 go build -trimpath -o /out/scanner ./cmd/scanner
 #      so the node needs nothing else to sync templates and run scans ----
 FROM projectdiscovery/nuclei:latest
 COPY --from=build /out/scanner /usr/local/bin/scanner
-ENV NUCLEI_PATH=nuclei \
-    SCANNER_WORK_DIR=/tmp/nuclei-scans
+# SCANNER_WORK_DIR is intentionally left unset: the node then creates a private,
+# process-exclusive work dir (0700, unguessable name) under the system temp dir.
+# Set it explicitly only to point at a mounted private volume.
+ENV NUCLEI_PATH=nuclei
 EXPOSE 8081
 ENTRYPOINT ["/usr/local/bin/scanner"]

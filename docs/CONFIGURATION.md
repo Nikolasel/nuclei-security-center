@@ -11,10 +11,10 @@ deployment.
 | `BACKEND_ADDR` | backend | `:8080` | listen address |
 | `DATABASE_URL` | backend | – (required) | Postgres DSN |
 | `SCANNER_URL` | backend | `http://localhost:8081` | scanner node base URL |
-| `SCANNER_TOKEN` | both | – (required) | bearer token for backend → node calls |
+| `SCANNER_TOKEN` | both | – (required, **min 32 chars**) | bearer token for backend → node calls; the node refuses to start below the floor. Mint from a CSPRNG, e.g. `openssl rand -base64 24` |
 | `SCANNER_ADDR` | scanner | `:8081` | listen address |
 | `NUCLEI_PATH` | scanner | `nuclei` | path to the nuclei binary |
-| `SCANNER_WORK_DIR` | scanner | `/tmp/nuclei-scans` | per-scan working dirs |
+| `SCANNER_WORK_DIR` | scanner | – (unset ⇒ a private `0700` temp dir) | per-scan working dirs; leave unset for an auto-created process-exclusive dir, or point at a mounted private volume |
 | `OIDC_ISSUER` | backend | – (unset ⇒ auth **disabled**) | OIDC issuer URL; setting it enables auth |
 | `OIDC_DISCOVERY_URL` | backend | = `OIDC_ISSUER` | internal metadata URL when it differs from the browser-facing issuer (Docker) |
 | `OIDC_CLIENT_ID` | backend | – (required if issuer set) | confidential client id |

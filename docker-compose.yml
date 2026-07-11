@@ -61,7 +61,7 @@ services:
       dockerfile: deploy/Dockerfile.scanner
     environment:
       SCANNER_ADDR: ":8081"
-      SCANNER_TOKEN: "${SCANNER_TOKEN:-dev-scanner-token-change-me}"
+      SCANNER_TOKEN: "${SCANNER_TOKEN:-dev-scanner-token-change-me-0123456789ab}"
     ports:
       - "8081:8081"
 
@@ -73,7 +73,7 @@ services:
       BACKEND_ADDR: ":8080"
       DATABASE_URL: "postgres://nuclei:nuclei@postgres:5432/nuclei?sslmode=disable"
       SCANNER_URL: "http://scanner:8081"
-      SCANNER_TOKEN: "${SCANNER_TOKEN:-dev-scanner-token-change-me}"
+      SCANNER_TOKEN: "${SCANNER_TOKEN:-dev-scanner-token-change-me-0123456789ab}"
       # OIDC/BFF auth. Browser-facing issuer (localhost:8082) differs from the
       # in-network discovery URL (keycloak:8080); see OIDC_DISCOVERY_URL.
       APP_BASE_URL: "http://localhost:8080"

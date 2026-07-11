@@ -19,3 +19,4 @@
 
 # OS
 .DS_Store
+.security-scans/

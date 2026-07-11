@@ -1,0 +1,49 @@
+# Dependabot keeps dependencies patched across every ecosystem in the repo.
+# Weekly cadence; minor/patch bumps are grouped into one PR per ecosystem to
+# cut review noise, while majors come as individual PRs so they get scrutiny.
+# Security updates are raised regardless of schedule.
+version: 2
+updates:
+  # Backend + scanner Go modules
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "go"]
+    groups:
+      go-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # React SPA (web/)
+  - package-ecosystem: "npm"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "javascript"]
+    groups:
+      npm-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # GitHub Actions used by the CI + release workflows
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "ci"]
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Base images for the backend + scanner containers
+  - package-ecosystem: "docker"
+    directory: "/deploy"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies", "docker"]
+    groups:
+      docker-images:
+        patterns: ["*"]

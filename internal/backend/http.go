@@ -177,6 +177,14 @@ func (s *Server) buildScanSpec(ctx context.Context, req createScanRequest) (type
 		if err := s.enforceScope(ctx, spec.Targets); err != nil {
 			return types.ScanSpec{}, store.ScanLink{}, err
 		}
+		// The scope guardrail covers hosts, not template sources. Validate the
+		// template selectors with the same rules as stored template sets so an
+		// ad-hoc spec can't steer `nuclei -templates` to an arbitrary path/ref.
+		spec.Templates.GitRef = strings.TrimSpace(spec.Templates.GitRef)
+		spec.Templates.Paths = trimAll(spec.Templates.Paths)
+		if err := validateTemplateSelector(spec.Templates.Paths, spec.Templates.GitRef); err != nil {
+			return types.ScanSpec{}, store.ScanLink{}, err
+		}
 		if spec.Options == (types.ScanOptions{}) {
 			spec.Options = defaultOptions()
 		}

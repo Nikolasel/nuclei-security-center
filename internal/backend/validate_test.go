@@ -88,3 +88,23 @@ func TestValidateTemplateSet(t *testing.T) {
 		t.Errorf("severities not cleaned: %v", ts.Severities)
 	}
 }
+
+func TestValidateTemplateSetRejectsBadPathsAndRefs(t *testing.T) {
+	badPaths := []string{"/etc", "../../x", "a/../b", "-templates", "~/x", "has space"}
+	for _, p := range badPaths {
+		if err := validateTemplateSet(&store.TemplateSet{Name: "s", Paths: []string{p}}); err == nil {
+			t.Errorf("path %q accepted, want rejected", p)
+		}
+	}
+	badRefs := []string{"a b", "..", "main..evil", "-x", "$(id)", "a;b"}
+	for _, r := range badRefs {
+		if err := validateTemplateSet(&store.TemplateSet{Name: "s", GitRef: r}); err == nil {
+			t.Errorf("gitref %q accepted, want rejected", r)
+		}
+	}
+	// Legit relative paths and refs pass.
+	ok := &store.TemplateSet{Name: "s", Paths: []string{"http/cves", "misconfiguration/x.yaml"}, GitRef: "v9.6.3"}
+	if err := validateTemplateSet(ok); err != nil {
+		t.Errorf("valid template set rejected: %v", err)
+	}
+}

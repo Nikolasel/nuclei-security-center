@@ -12,6 +12,7 @@ import {
   type NucleiRaw,
 } from "../api";
 import { hasRole, useMe } from "../auth";
+import { safeHref } from "../util";
 import { Button, Card, ErrorText, FindingStateBadge, Input, Pill, Select, SeverityBadge, Spinner } from "../components/ui";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -248,9 +249,9 @@ export function FindingDetailPage() {
           </Meta>
           <Meta label="Type">{raw.type || f.type || "—"}</Meta>
           <Meta label="Template">
-            {raw["template-url"] ? (
+            {safeHref(raw["template-url"]) ? (
               <a
-                href={raw["template-url"]}
+                href={safeHref(raw["template-url"])}
                 target="_blank"
                 rel="noreferrer"
                 className="font-mono text-xs text-indigo-600 hover:underline dark:text-indigo-400"
@@ -377,18 +378,25 @@ export function FindingDetailPage() {
       {info.reference?.length ? (
         <Section title="References">
           <ul className="space-y-1 text-sm">
-            {info.reference.map((r) => (
-              <li key={r}>
-                <a
-                  href={r}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="break-all text-indigo-600 hover:underline dark:text-indigo-400"
-                >
-                  {r}
-                </a>
-              </li>
-            ))}
+            {info.reference.map((r) => {
+              const href = safeHref(r);
+              return (
+                <li key={r}>
+                  {href ? (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="break-all text-indigo-600 hover:underline dark:text-indigo-400"
+                    >
+                      {r}
+                    </a>
+                  ) : (
+                    <span className="break-all text-slate-600 dark:text-slate-400">{r}</span>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </Section>
       ) : null}

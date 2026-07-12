@@ -2,6 +2,8 @@ module github.com/Nikolasel/nuclei-security-center
 
 go 1.25.0
 
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
 require (
 	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/google/uuid v1.6.0

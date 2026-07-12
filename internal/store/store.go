@@ -140,6 +140,26 @@ func (s *Store) MarkFailed(ctx context.Context, scanID, reason string) error {
 	return err
 }
 
+// FailOrphanedScans marks every scan left in queued/running state as failed.
+// The orchestrator drives a scan from a single in-process goroutine (see
+// internal/backend/orchestrator.go) with no persisted resume state, so any
+// scan still queued/running when the backend starts up was orphaned by the
+// previous process exiting (crash, deploy, OOM) mid-run — nothing will ever
+// finish driving it otherwise, and it would sit in the UI as "running"
+// forever. Called once at startup, after migrations. Returns the count
+// reconciled.
+func (s *Store) FailOrphanedScans(ctx context.Context, reason string) (int64, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE scans SET state = $1, error = $2, finished_at = now()
+		 WHERE state IN ($3, $4)`,
+		types.ScanFailed, reason, types.ScanQueued, types.ScanRunning,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // MarkComplete records successful completion and the versions that ran.
 func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templatesCommit string) error {
 	_, err := s.pool.Exec(ctx,

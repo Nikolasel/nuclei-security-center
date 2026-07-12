@@ -136,7 +136,10 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 		return
 	}
 
-	if err := o.store.MarkComplete(ctx, scanID, status.NucleiVersion, status.TemplatesCommit); err != nil {
+	err = retryWrite(ctx, terminalWriteAttempts, terminalWriteDelay, func() error {
+		return o.store.MarkComplete(ctx, scanID, status.NucleiVersion, status.TemplatesCommit)
+	})
+	if err != nil {
 		log.Error("mark complete", "err", err)
 	}
 	log.Info("scan complete", "findings", status.FindingCount)
@@ -233,7 +236,40 @@ func (o *Orchestrator) archiveRaw(ctx context.Context, scanID string, raw *os.Fi
 
 func (o *Orchestrator) failScan(ctx context.Context, scanID, reason string) {
 	o.log.Error("scan failed", "scan_id", scanID, "reason", reason)
-	if err := o.store.MarkFailed(ctx, scanID, reason); err != nil {
+	err := retryWrite(ctx, terminalWriteAttempts, terminalWriteDelay, func() error {
+		return o.store.MarkFailed(ctx, scanID, reason)
+	})
+	if err != nil {
 		o.log.Error("mark failed", "scan_id", scanID, "err", err)
 	}
+}
+
+// terminalWriteAttempts/terminalWriteDelay bound the retry of a scan's
+// terminal-state write (MarkFailed/MarkComplete). A scan's outcome shouldn't
+// be lost to a brief database blip (e.g. an Aurora auto-pause/resume cycle) —
+// but a genuinely down database must not be retried forever, so orphaned
+// scans are also swept on backend startup (see store.FailOrphanedScans).
+const (
+	terminalWriteAttempts = 5
+	terminalWriteDelay    = 3 * time.Second
+)
+
+// retryWrite calls fn until it succeeds, ctx is done, or attempts is
+// exhausted, waiting delay between tries. It returns fn's last error.
+func retryWrite(ctx context.Context, attempts int, delay time.Duration, fn func() error) error {
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = fn(); err == nil {
+			return nil
+		}
+		if i == attempts-1 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(delay):
+		}
+	}
+	return err
 }

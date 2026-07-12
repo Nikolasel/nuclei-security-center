@@ -1,9 +1,11 @@
 package backend
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
@@ -58,5 +60,55 @@ func TestScanFindingLinesEmitError(t *testing.T) {
 		func(types.NucleiFinding, []byte) error { return sentinel })
 	if !errors.Is(err, sentinel) {
 		t.Errorf("err = %v, want the emit error propagated", err)
+	}
+}
+
+func TestRetryWriteSucceedsAfterTransientErrors(t *testing.T) {
+	var calls int
+	err := retryWrite(context.Background(), 5, time.Millisecond, func() error {
+		calls++
+		if calls < 3 {
+			return errors.New("transient")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if calls != 3 {
+		t.Errorf("calls = %d, want 3 (stop retrying on first success)", calls)
+	}
+}
+
+func TestRetryWriteExhaustsAttempts(t *testing.T) {
+	sentinel := errors.New("db down")
+	var calls int
+	err := retryWrite(context.Background(), 3, time.Millisecond, func() error {
+		calls++
+		return sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Errorf("err = %v, want the last error returned", err)
+	}
+	if calls != 3 {
+		t.Errorf("calls = %d, want exactly 3 (the attempts cap)", calls)
+	}
+}
+
+func TestRetryWriteStopsOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var calls int
+	err := retryWrite(ctx, 5, 50*time.Millisecond, func() error {
+		calls++
+		if calls == 1 {
+			cancel()
+		}
+		return errors.New("still down")
+	})
+	if err == nil {
+		t.Fatal("err = nil, want the underlying error")
+	}
+	if calls != 1 {
+		t.Errorf("calls = %d, want 1 (cancel should stop further retries)", calls)
 	}
 }

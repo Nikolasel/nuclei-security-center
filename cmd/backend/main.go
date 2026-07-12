@@ -48,6 +48,12 @@ func main() {
 	}
 	log.Info("migrations applied")
 
+	if n, err := st.FailOrphanedScans(ctx, "orphaned: backend restarted while scan was in progress"); err != nil {
+		log.Error("reconcile orphaned scans", "err", err)
+	} else if n > 0 {
+		log.Warn("reconciled orphaned scans", "count", n)
+	}
+
 	archive, err := buildObjectStore(ctx, log)
 	if err != nil {
 		log.Error("configure object storage", "err", err)

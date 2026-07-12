@@ -123,6 +123,54 @@ line (a namespaced field that doesn't collide with Nuclei's) — so a raw export
 projected triage data (and to `GET /api/findings/{id}`) on one key. The SPA offers the same four
 formats from an **Export** menu on the Findings view.
 
+## Downstream tooling (DefectDojo, etc.)
+
+NSC deliberately doesn't ship built-in integrations for any specific downstream
+vulnerability-management tool — dashboards, SLA tracking, ticketing, and remediation
+workflows are explicitly out of scope (closed as "well covered by DefectDojo or a similar
+VM tool downstream" — see #11, #12, #14, #16, #17, #20). `/api/findings/export` is the
+general-purpose extension point: it's a normal, filterable, session-cookie-authenticated
+REST endpoint, so anything downstream round-trips through NSC's existing API and the
+other tool's own API — no NSC code or config coupled to one vendor.
+
+**Worked example — DefectDojo.** DefectDojo ships a native **"Nuclei Scan"** import
+parser that consumes exactly the `format=raw` shape above (Nuclei's own `out.jsonl`), so
+no translation step is needed:
+
+```sh
+# 1. pull NSC's raw export for the view you want to push (same filters as /api/findings)
+curl -sb jar.txt "localhost:8080/api/findings/export?format=raw&target_id=$TARGET_ID" -o findings.jsonl
+
+# 2. hand it to DefectDojo's reimport-scan API — "reimport" (not "import") so repeat runs
+#    dedupe/update within DefectDojo's own engagement instead of creating duplicates each time
+curl -s "$DEFECTDOJO_URL/api/v2/reimport-scan/" \
+  -H "Authorization: Token $DEFECTDOJO_API_KEY" \
+  -F "scan_type=Nuclei Scan" \
+  -F "product_name=$DD_PRODUCT" \
+  -F "engagement_name=$DD_ENGAGEMENT" \
+  -F "file=@findings.jsonl"
+```
+
+Run that as a small script — cron, CI job, whatever your team already uses for scheduled
+glue — after a scan (or its schedule) completes. A few things worth being explicit about,
+since none of this lives in NSC:
+
+- **Target ↔ Product/Engagement mapping** is a decision made in the script or on the
+  DefectDojo side (by name, by a lookup table, however your team organizes DefectDojo) —
+  NSC has no concept of it and stores nothing DefectDojo-specific.
+- **Auth is the same session cookie as everything else** — NSC has no separate
+  service-token surface for the API (see [Configuration →
+  Authentication](CONFIGURATION.md#authentication-oidcbff)). An unattended puller
+  authenticates like any other user, typically via a dedicated service account in your
+  IdP.
+- **The push is your automation's problem to make reliable**, not NSC's — retries,
+  failure alerting, and backoff belong in the script/job, the same way you'd treat any
+  other external integration you own.
+
+The same pattern covers any tool that can consume one of the four export formats — the
+SARIF example above for GitHub code scanning is the same idea (pull an export, push it to
+the other system's API) applied to a different consumer.
+
 ## Schedules
 
 A schedule runs a target (+ optional template set) on a **cron** cadence, unattended. A backend

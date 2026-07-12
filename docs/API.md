@@ -162,7 +162,7 @@ since none of this lives in NSC:
   service-token surface for the API (see [Configuration →
   Authentication](CONFIGURATION.md#authentication-oidcbff)). An unattended puller
   authenticates like any other user, typically via a dedicated service account in your
-  IdP.
+  IdP, until there's a lighter-weight option (tracked as #70).
 - **The push is your automation's problem to make reliable**, not NSC's — retries,
   failure alerting, and backoff belong in the script/job, the same way you'd treat any
   other external integration you own.

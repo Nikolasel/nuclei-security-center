@@ -64,3 +64,8 @@ docker-compose.yml   postgres + minio + keycloak + scanner + backend
 - **[API reference](docs/API.md)** — REST endpoints for scans, findings, dispositions, exports, and schedules.
 - **[Configuration](docs/CONFIGURATION.md)** — environment variables, OIDC/BFF auth, and object storage.
 - **[Development](docs/DEVELOPMENT.md)** — local dev workflow, auth-disabled mode, tests, and CI/CD.
+
+## License
+
+[AGPL-3.0](LICENSE) — copyleft, including the network-use clause. Anyone running a
+modified version as a service must publish the source of their modifications.

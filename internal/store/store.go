@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -24,9 +25,45 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+// Options tunes how the store connects to Postgres.
+type Options struct {
+	// PasswordFile, if non-empty, is read on every new connection to supply the
+	// password, overriding whatever password the DSN carries. This tolerates
+	// rotating database credentials (e.g. AWS RDS-managed master passwords,
+	// Vault dynamic secrets): as long as something keeps the file fresh, a new
+	// pooled connection picks up the rotated password without a process
+	// restart. The rest of the DSN (host/user/database) still comes from the
+	// DSN, keeping the connection parts separate from the password source.
+	PasswordFile string
+}
+
 // Open connects to Postgres and returns a Store. The caller must Close it.
 func Open(ctx context.Context, dsn string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+	return OpenWithOptions(ctx, dsn, Options{})
+}
+
+// OpenWithOptions is Open with connection tuning (see Options).
+func OpenWithOptions(ctx context.Context, dsn string, opts Options) (*Store, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("parse postgres dsn: %w", err)
+	}
+	if opts.PasswordFile != "" {
+		// BeforeConnect runs before pgx establishes each new pooled connection,
+		// so re-reading the file here means a rotated password is applied to
+		// every fresh connection without restarting the process. Using the
+		// pool's own hook keeps this a library capability rather than
+		// hand-rolled reconnect/auth-failure logic (invariant #5).
+		cfg.BeforeConnect = func(_ context.Context, cc *pgx.ConnConfig) error {
+			pw, err := readPasswordFile(opts.PasswordFile)
+			if err != nil {
+				return err
+			}
+			cc.Password = pw
+			return nil
+		}
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("connect postgres: %w", err)
 	}
@@ -35,6 +72,17 @@ func Open(ctx context.Context, dsn string) (*Store, error) {
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
 	return &Store{pool: pool}, nil
+}
+
+// readPasswordFile reads a password from a file, trimming a single trailing
+// newline (files rendered by secret stores or shell redirection commonly carry
+// one). Interior and leading whitespace is preserved in case it is significant.
+func readPasswordFile(path string) (string, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read database password file %q: %w", path, err)
+	}
+	return strings.TrimRight(string(b), "\r\n"), nil
 }
 
 // Close releases the pool.

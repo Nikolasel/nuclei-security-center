@@ -34,8 +34,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	storeOpts := store.Options{PasswordFile: os.Getenv("DATABASE_PASSWORD_FILE")}
+
 	ctx := context.Background()
-	st, err := openStoreWithRetry(ctx, dsn, log)
+	st, err := openStoreWithRetry(ctx, dsn, storeOpts, log)
 	if err != nil {
 		log.Error("connect store", "err", err)
 		os.Exit(1)
@@ -223,10 +225,10 @@ func splitCSV(s string) []string {
 }
 
 // openStoreWithRetry tolerates Postgres not being ready yet (compose startup).
-func openStoreWithRetry(ctx context.Context, dsn string, log *slog.Logger) (*store.Store, error) {
+func openStoreWithRetry(ctx context.Context, dsn string, opts store.Options, log *slog.Logger) (*store.Store, error) {
 	var lastErr error
 	for i := 0; i < 30; i++ {
-		st, err := store.Open(ctx, dsn)
+		st, err := store.OpenWithOptions(ctx, dsn, opts)
 		if err == nil {
 			return st, nil
 		}

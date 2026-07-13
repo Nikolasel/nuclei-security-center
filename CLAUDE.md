@@ -51,7 +51,9 @@ audit.go` wraps every mutating route with `s.mutation(eventID, action, objectTyp
 object type+id / method / path / status / duration. `event_id` is a small fixed vocabulary
 for detections — `access_denied` (any authz 403), `config_changed` (targets/template-sets/
 schedules CUD), `scan_dispatched` (scan submit or schedule run), `finding_triaged`
-(disposition/recast) — all at INFO (a denial is normal enforcement, not a fault).
+(disposition/recast), `service_account_changed` (API-token create/rotate/revoke) — all at
+INFO (a denial is normal enforcement, not a fault). Each event also carries `actor_type`
+(`user` vs `service_account`) so headless token callers are never conflated with people.
 
 **Scheduling:** `schedules` (migration 0007) ties a `target_id` (+ optional
 `template_set_id`) to a `cron` expression. A backend `Scheduler` ticker (`internal/backend/

@@ -58,8 +58,11 @@ back into the app with a session cookie. The raw endpoints: `GET /api/auth/login
 flow, `GET /api/auth/me` returns your identity + roles, `POST /api/auth/logout` ends the session.
 Keycloak's own admin console is at `http://localhost:8082` (`admin`/`admin`).
 
-Because protected endpoints authenticate via the **session cookie** (not a bearer token), drive
-the API from the browser or a cookie jar populated by a real login.
+Because protected endpoints authenticate via the **session cookie**, interactive callers drive
+the API from the browser or a cookie jar populated by a real login. **Headless automation**
+(cron/CI) instead uses a **service-account token** presented as `Authorization: Bearer <token>` —
+an NSC-local, role-scoped, revocable credential minted by an admin, with no IdP involvement. See
+[API → Service accounts](API.md#service-accounts).
 
 > **Pure-API smoke testing without auth:** leave `OIDC_ISSUER` unset **and** set
 > `AUTH_DISABLED=true` to run the backend in **auth-disabled dev mode** — every request acts as

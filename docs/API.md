@@ -1,7 +1,9 @@
 # API reference
 
-The JSON API lives under `/api/*` and is guarded by the session cookie (see
-[Configuration → Authentication](CONFIGURATION.md#authentication-oidcbff)). The examples
+The JSON API lives under `/api/*`. Interactive callers authenticate with the session cookie
+(see [Configuration → Authentication](CONFIGURATION.md#authentication-oidcbff)); headless
+automation authenticates with a **service-account token** presented as
+`Authorization: Bearer <token>` (see [Service accounts](#service-accounts)). The examples
 below assume a cookie jar `jar.txt` populated by a real login, or
 [auth-disabled dev mode](CONFIGURATION.md#authentication-oidcbff) for headless use.
 
@@ -158,11 +160,10 @@ since none of this lives in NSC:
 - **Target ↔ Product/Engagement mapping** is a decision made in the script or on the
   DefectDojo side (by name, by a lookup table, however your team organizes DefectDojo) —
   NSC has no concept of it and stores nothing DefectDojo-specific.
-- **Auth is the same session cookie as everything else** — NSC has no separate
-  service-token surface for the API (see [Configuration →
-  Authentication](CONFIGURATION.md#authentication-oidcbff)). An unattended puller
-  authenticates like any other user, typically via a dedicated service account in your
-  IdP, until there's a lighter-weight option (tracked as #70).
+- **Auth uses a service-account token** — mint one with an `Authorization: Bearer` token
+  scoped to `viewer` (export is a read) and revoke it independently of any human login.
+  See [Service accounts](#service-accounts) below. (The session cookie still works too, but
+  a token is the right fit for unattended pullers.)
 - **The push is your automation's problem to make reliable**, not NSC's — retries,
   failure alerting, and backoff belong in the script/job, the same way you'd treat any
   other external integration you own.
@@ -235,6 +236,51 @@ Matching is **host-granular and never resolves DNS**: exact hostname (no wildcar
 and URL paths are ignored (the asset is the host). It **fails closed** — with no approved
 targets, every scan is rejected until you add one.
 
+## Service accounts
+
+Service accounts are NSC-local identities for **headless/automation** access — a cron job or CI
+step pulling `/api/findings/export`, for instance — so a script doesn't have to impersonate a
+human login. They are additive to, not a replacement for, the OIDC/BFF session cookie, which
+stays the only path for interactive users.
+
+Each account is scoped to **one role** (the same `viewer` / `operator` / `admin` RBAC as the
+session cookie) and authenticates with a bearer token. Managing them is **admin-only**. The token
+is shown **once**, at creation and on rotation — only its SHA-256 hash is stored, so a lost token
+is rotated, never recovered.
+
+```sh
+# Create (admin). ttl_days is optional: omitted => 90 days; 0 => no expiry.
+curl -sb jar.txt -X POST localhost:8080/api/service-accounts \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"defectdojo-export","role":"viewer","ttl_days":90}'
+# => 201 { "id":"…", "name":"defectdojo-export", "role":"viewer",
+#          "token_prefix":"nsc_AbCdEfG", "expires_at":"…",
+#          "token":"nsc_…"  }   <-- copy the token now; it is never shown again
+
+# Use it — no cookie, just the bearer token:
+curl -H "Authorization: Bearer $NSC_TOKEN" \
+  "localhost:8080/api/findings/export?format=raw&target_id=$TARGET_ID"
+
+# List (admin) — never returns tokens, only prefixes + last_used_at.
+curl -sb jar.txt localhost:8080/api/service-accounts
+
+# Rotate (admin) — mints a new token and invalidates the old one immediately.
+curl -sb jar.txt -X POST localhost:8080/api/service-accounts/$ID/rotate
+
+# Revoke (admin) — deletes the account; the token stops working at once.
+curl -sb jar.txt -X DELETE localhost:8080/api/service-accounts/$ID
+```
+
+| Method & path | Role | Purpose |
+|---|---|---|
+| `GET /api/service-accounts` | admin | list accounts (no tokens) |
+| `POST /api/service-accounts` | admin | create; returns the token once |
+| `POST /api/service-accounts/{id}/rotate` | admin | mint a new token, invalidate the old |
+| `DELETE /api/service-accounts/{id}` | admin | revoke (delete) the account |
+
+A bad or expired bearer token is rejected with `401` — it never silently falls through to cookie
+auth. Token calls appear in the [audit log](#audit-log) as `actor_type=service_account`.
+
 ## Audit log
 
 Every mutating API call (create / update / delete / scan-dispatch / triage) emits one structured
@@ -243,9 +289,11 @@ design. In the cloud the container's stdout is already shipped to a log aggregat
 Azure Log Analytics, GCP Cloud Logging, Loki, …); that system owns retention, indexing, and
 querying, and because the trail lives off the app database a DB compromise can't rewrite it.
 
-Each event carries the actor (`actor_subject` / `actor_email`), an `event_id`, the fine-grained
-`action`, the object (`object_type` / `object_id`), `method`, `path`, `status`, and
-`duration_ms`. `event_id` is a small, stable vocabulary to build detections on:
+Each event carries the actor (`actor_subject` / `actor_email` / `actor_type`), an `event_id`, the
+fine-grained `action`, the object (`object_type` / `object_id`), `method`, `path`, `status`, and
+`duration_ms`. `actor_type` is `service_account` for token callers (their `actor_subject` is
+`svc:<name>`) and `user` for interactive logins, so automation is never conflated with a person.
+`event_id` is a small, stable vocabulary to build detections on:
 
 | `event_id` | emitted when |
 |---|---|
@@ -253,6 +301,7 @@ Each event carries the actor (`actor_subject` / `actor_email`), an `event_id`, t
 | `config_changed` | a target, template set, or schedule is created / updated / deleted |
 | `scan_dispatched` | a scan is submitted (ad-hoc) or a schedule is run |
 | `finding_triaged` | a finding's disposition or severity recast changes |
+| `service_account_changed` | a service-account token is created / rotated / revoked |
 
 All audit events log at **INFO** — a denial is authorization working as intended, not a fault —
 so alerting keys off `event_id` / `status`, not the log level. Tail them locally with:

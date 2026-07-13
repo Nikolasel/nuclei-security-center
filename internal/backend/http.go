@@ -96,6 +96,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/template-sets/{id}", s.mutation(eventConfigChanged, "template_set.update", "template_set", RoleOperator, s.handleUpdateTemplateSet))
 	mux.HandleFunc("DELETE /api/template-sets/{id}", s.mutation(eventConfigChanged, "template_set.delete", "template_set", RoleAdmin, s.handleDeleteTemplateSet))
 
+	// Service accounts (#70) — NSC-local API-token identities for headless
+	// automation. Managing these credentials is admin-only; create/rotate/revoke
+	// are audited under a dedicated security event id. The token itself is only
+	// ever returned in the create/rotate response body, never on list.
+	mux.HandleFunc("GET /api/service-accounts", s.requireRole(RoleAdmin, s.handleListServiceAccounts))
+	mux.HandleFunc("POST /api/service-accounts", s.mutation(eventServiceAccountChanged, "service_account.create", "service_account", RoleAdmin, s.handleCreateServiceAccount))
+	mux.HandleFunc("POST /api/service-accounts/{id}/rotate", s.mutation(eventServiceAccountChanged, "service_account.rotate", "service_account", RoleAdmin, s.handleRotateServiceAccount))
+	mux.HandleFunc("DELETE /api/service-accounts/{id}", s.mutation(eventServiceAccountChanged, "service_account.revoke", "service_account", RoleAdmin, s.handleDeleteServiceAccount))
+
 	// Unknown /api/* paths get a JSON-ish 404 rather than the SPA's index.html.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)

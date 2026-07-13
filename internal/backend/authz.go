@@ -52,12 +52,25 @@ func identityFrom(ctx context.Context) store.Identity {
 // handlers behave uniformly. It holds every role.
 var devIdentity = store.Identity{Subject: "dev", Roles: []string{RoleAdmin, RoleOperator, RoleViewer}}
 
-// requireAuth resolves the session cookie to an identity and injects it into the
-// request context, or 401s. With auth disabled it injects devIdentity.
+// requireAuth resolves the caller to an identity and injects it into the request
+// context, or 401s. With auth disabled it injects devIdentity. With auth enabled
+// a caller authenticates either with a service-account bearer token (headless
+// automation, #70) or the OIDC/BFF session cookie (interactive users) — the
+// bearer token is tried first when present, and a bad token is rejected rather
+// than silently falling through to the cookie.
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.auth == nil {
 			next(w, r.WithContext(withIdentity(r.Context(), devIdentity)))
+			return
+		}
+		if tok, ok := bearerToken(r); ok {
+			id, err := s.resolveServiceToken(r.Context(), tok)
+			if err != nil {
+				http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+				return
+			}
+			next(w, r.WithContext(withIdentity(r.Context(), id)))
 			return
 		}
 		id, ok := s.auth.identityFromRequest(r)

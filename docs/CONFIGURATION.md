@@ -32,7 +32,7 @@ deployment.
 | `COOKIE_SECURE` | backend | `true` | session cookie `Secure` flag; set `COOKIE_SECURE=false` **only** for local plaintext-HTTP dev |
 | `S3_ENDPOINT` | backend | – (unset ⇒ archiving **disabled**) | S3/MinIO endpoint `host:port` (no scheme); setting it enables raw-output archiving |
 | `S3_BUCKET` | backend | `nuclei-raw` | bucket for archived raw output (created on startup if absent) |
-| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | backend | – | S3 credentials |
+| `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | backend | – (empty ⇒ ambient credentials) | S3 static credentials; leave `S3_ACCESS_KEY_ID` empty to use the instance's ambient credential chain (env / shared file / EC2·ECS·EKS IAM role) instead |
 | `S3_REGION` | backend | `us-east-1` | S3 region |
 | `S3_USE_SSL` | backend | `false` | use TLS to the S3 endpoint |
 
@@ -85,6 +85,14 @@ object store — S3, GCS (S3 API), or Azure Blob:
 | AWS | S3 | `s3.<region>.amazonaws.com` |
 | GCP | GCS (S3-compat) | `storage.googleapis.com` |
 | Azure | Blob | via an S3 gateway or an `ObjectStore` swap (`gocloud.dev/blob`) |
+
+**Credentials.** Provide `S3_ACCESS_KEY_ID` + `S3_SECRET_ACCESS_KEY` for static keys (MinIO
+locally, GCS, or any store that only takes keys). **Leave `S3_ACCESS_KEY_ID` empty** to use the
+instance's *ambient* credential chain instead — environment variables, the shared AWS credentials
+file, then the EC2/ECS/EKS instance-metadata IAM role. On AWS this means the backend archives raw
+output using the IAM role already attached to its compute, with **no long-lived IAM user or static
+keys** to mint, store in Terraform state, or rotate. Static keys win whenever `S3_ACCESS_KEY_ID`
+is set, so local dev and keyed stores are unaffected.
 
 ## Rotating database credentials
 

@@ -94,7 +94,11 @@ func (m *HealthMonitor) poll(ctx context.Context) {
 	for _, n := range nodes {
 		live[n.ID] = true
 		pctx, cancel := context.WithTimeout(ctx, pollTimeout)
-		caps, err := NewScannerClient(n.Endpoint, n.Token).Capabilities(pctx)
+		var caps types.Capabilities
+		client, err := clientForNode(n)
+		if err == nil {
+			caps, err = client.Capabilities(pctx)
+		}
 		cancel()
 
 		m.mu.Lock()

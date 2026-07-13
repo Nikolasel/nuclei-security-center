@@ -21,12 +21,17 @@ import (
 
 // ScanZoneConfig is the config form of a scanner node: a name, the CIDR ranges it
 // serves, and the endpoint + token that reaches it. (Kept as the SCAN_ZONES wire
-// shape for backward compatibility — a "zone" and a "node" are one entity.)
+// shape for backward compatibility — a "zone" and a "node" are one entity.) The
+// optional TLS fields seed per-node mTLS (#26) so a segmented node can be brought
+// up over mTLS straight from config; thereafter the DB is the source of truth.
 type ScanZoneConfig struct {
-	Name  string   `json:"name"`
-	CIDRs []string `json:"cidrs"`
-	URL   string   `json:"url"`
-	Token string   `json:"token"`
+	Name          string   `json:"name"`
+	CIDRs         []string `json:"cidrs"`
+	URL           string   `json:"url"`
+	Token         string   `json:"token"`
+	TLSServerCA   string   `json:"tls_server_ca"`
+	TLSClientCert string   `json:"tls_client_cert"`
+	TLSClientKey  string   `json:"tls_client_key"`
 }
 
 // SeedScannerNodes seeds the scanner_nodes table from config on startup. The
@@ -107,10 +112,13 @@ func parseNodeConfig(defaultURL, defaultToken, zonesJSON string) ([]store.Scanne
 				cidrs = append(cidrs, strings.TrimSpace(cidr))
 			}
 			nodes = append(nodes, store.ScannerNode{
-				Name:     name,
-				Endpoint: c.URL,
-				Token:    c.Token,
-				CIDRs:    cidrs,
+				Name:          name,
+				Endpoint:      c.URL,
+				Token:         c.Token,
+				CIDRs:         cidrs,
+				TLSServerCA:   c.TLSServerCA,
+				TLSClientCert: c.TLSClientCert,
+				TLSClientKey:  c.TLSClientKey,
 			})
 		}
 	}
@@ -158,7 +166,10 @@ func validateNodeConfig(nodes []store.ScannerNode) error {
 func nodeDiffersFromConfig(stored store.ScannerNode, cfg store.ScannerNode) bool {
 	return stored.Endpoint != cfg.Endpoint ||
 		stored.Token != cfg.Token ||
-		!sameStringSet(stored.CIDRs, cfg.CIDRs)
+		!sameStringSet(stored.CIDRs, cfg.CIDRs) ||
+		stored.TLSServerCA != cfg.TLSServerCA ||
+		stored.TLSClientCert != cfg.TLSClientCert ||
+		stored.TLSClientKey != cfg.TLSClientKey
 }
 
 func sameStringSet(a, b []string) bool {

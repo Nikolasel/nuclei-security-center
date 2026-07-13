@@ -16,6 +16,8 @@ deployment.
 | `SCANNER_TOKEN` | both | – (required, **min 32 chars**) | bearer token for backend → node calls; the node refuses to start below the floor. Mint from a CSPRNG, e.g. `openssl rand -base64 24` |
 | `NODE_HEALTH_INTERVAL` | backend | `30s` | how often the backend polls each node's `/v1/capabilities` for liveness (Go duration); a node stays healthy for 3× this after its last successful poll. See [Scanner node registry](#scanner-node-registry) |
 | `SCANNER_ADDR` | scanner | `:8081` | listen address |
+| `SCANNER_TLS_CERT` / `SCANNER_TLS_KEY` | scanner | – (unset ⇒ plain HTTP) | node server certificate; setting both makes the node serve HTTPS. See [Service auth: TLS & mTLS](#service-auth-tls--mtls) |
+| `SCANNER_CLIENT_CA` | scanner | – | PEM CA bundle; when set the node **requires + verifies** a client cert (mTLS) |
 | `NUCLEI_PATH` | scanner | `nuclei` | path to the nuclei binary |
 | `SCANNER_WORK_DIR` | scanner | – (unset ⇒ a private `0700` temp dir) | per-scan working dirs; leave unset for an auto-created process-exclusive dir, or point at a mounted private volume |
 | `OIDC_ISSUER` | backend | – (required unless `AUTH_DISABLED=true`) | OIDC issuer URL; setting it enables auth |
@@ -140,9 +142,14 @@ networks:
 ```json
 [
   {"name":"corp","cidrs":["10.0.0.0/8"],"url":"http://scanner-corp:8081","token":"…"},
-  {"name":"dmz","cidrs":["192.168.1.0/24"],"url":"http://scanner-dmz:8081","token":"…"}
+  {"name":"dmz","cidrs":["192.168.1.0/24"],"url":"https://scanner-dmz:8081","token":"…",
+   "tls_server_ca":"-----BEGIN CERTIFICATE-----\n…","tls_client_cert":"…","tls_client_key":"…"}
 ]
 ```
+
+A zone may also carry the optional per-node mTLS material (`tls_server_ca` / `tls_client_cert` /
+`tls_client_key`) to bootstrap a segmented node over mTLS from config — see
+[Service auth: TLS & mTLS](#service-auth-tls--mtls).
 
 - **Seed-only:** at startup a config entry is inserted **only if its name is not already in the
   DB**. An admin's edit to a node always survives restart; editing the config file afterward only
@@ -165,4 +172,38 @@ error when its matching node is known-unhealthy, rather than dispatching into a 
 not-yet-polled node dispatches optimistically. Liveness is in-memory only (recomputed from the last
 poll — never persisted, invariant #4).
 
-A **nodes admin UI** is tracked separately (#99).
+The **nodes admin UI** (#99) lets an admin manage this registry — and each node's mTLS material
+(below) — under **Scanner Nodes**.
+
+## Service auth: TLS & mTLS
+
+The backend→scanner path authenticates with a shared bearer token (`SCANNER_TOKEN`) over the
+transport. For nodes in an **untrusted network segment**, upgrade that transport to **mutual TLS**
+so a node accepts dispatch only over a mutually-authenticated connection — the bearer token still
+applies on top (defense in depth).
+
+**On the node** (serve HTTPS, then require client certs) — process env, since the scanner isn't in
+the registry:
+
+- `SCANNER_TLS_CERT` + `SCANNER_TLS_KEY` — the node's server certificate; setting both switches the
+  node from HTTP to HTTPS.
+- `SCANNER_CLIENT_CA` — a PEM CA bundle. When set, the node requires **and verifies** a client
+  certificate (`RequireAndVerifyClientCert`): a client without a valid cert is rejected at the TLS
+  handshake, before any request is served.
+
+**On the backend** (present a client cert, pin the node) — **per node in the registry** (#26), set
+via the API/UI (or seeded from `SCAN_ZONES`), so different segments can use different certs:
+
+- `tls_server_ca` — a PEM CA bundle to verify (pin) the node's server certificate; optional (falls
+  back to the system roots).
+- `tls_client_cert` + `tls_client_key` — the client certificate the backend presents to this node.
+  Provide both together. The **key is a write-only secret** (like the bearer token): never returned
+  by the API, and blank on edit keeps the stored one. The CA and client cert are public and are
+  returned on reads. Point the node's endpoint at `https://…` to actually use them.
+
+Leaving a node's TLS fields empty keeps the current plain-HTTP + bearer-token behavior for that
+node. A broken keypair (or an unreachable HTTPS endpoint) surfaces as an **unhealthy** node with the
+TLS error in the nodes UI, rather than a silent dispatch failure. Certificate **issuance and
+rotation** are a deployment concern (a mesh CA, cert-manager, or SPIFFE/SPIRE); in a **service
+mesh** the sidecar can terminate mTLS instead, in which case leave these unset and let the mesh
+handle it — the app code is unchanged either way.

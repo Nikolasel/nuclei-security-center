@@ -18,23 +18,38 @@ import (
 // for hostname targets and IPs matching no other node. Token is the bearer token
 // the backend uses to reach the node — write-only at the API layer (never
 // serialized back out); the `omitempty` tag lets read paths blank it.
+//
+// The TLS fields configure optional per-node mTLS (#26): TLSServerCA pins the
+// node's server certificate, and TLSClientCert/TLSClientKey are the client
+// certificate the backend presents to that node. The CA and client cert are
+// public (returned on reads); TLSClientKey is a secret, handled write-only like
+// Token (blanked on reads, blank-keeps-stored on update). All empty ⇒ plain
+// HTTP/token, unchanged.
 type ScannerNode struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Endpoint  string    `json:"endpoint"`
-	Token     string    `json:"token,omitempty"`
-	CIDRs     []string  `json:"cidrs"`
-	Tags      []string  `json:"tags"`
-	CreatedBy string    `json:"created_by,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Endpoint      string    `json:"endpoint"`
+	Token         string    `json:"token,omitempty"`
+	CIDRs         []string  `json:"cidrs"`
+	Tags          []string  `json:"tags"`
+	TLSServerCA   string    `json:"tls_server_ca,omitempty"`
+	TLSClientCert string    `json:"tls_client_cert,omitempty"`
+	TLSClientKey  string    `json:"tls_client_key,omitempty"`
+	CreatedBy     string    `json:"created_by,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
+
+// nodeColumns is the full column list for scanner_nodes reads, in the order
+// scanNode expects.
+const nodeColumns = `id, name, endpoint, token, cidrs, tags,
+	tls_server_ca, tls_client_cert, tls_client_key,
+	created_by, created_at, updated_at`
 
 // ListScannerNodes returns all nodes ordered by name.
 func (s *Store) ListScannerNodes(ctx context.Context) ([]ScannerNode, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, name, endpoint, token, cidrs, tags, created_by, created_at, updated_at
-		 FROM scanner_nodes ORDER BY lower(name)`)
+		`SELECT `+nodeColumns+` FROM scanner_nodes ORDER BY lower(name)`)
 	if err != nil {
 		return nil, err
 	}
@@ -45,8 +60,7 @@ func (s *Store) ListScannerNodes(ctx context.Context) ([]ScannerNode, error) {
 // GetScannerNode returns one node by id, or ErrNotFound.
 func (s *Store) GetScannerNode(ctx context.Context, id string) (ScannerNode, error) {
 	n, err := scanNode(s.pool.QueryRow(ctx,
-		`SELECT id, name, endpoint, token, cidrs, tags, created_by, created_at, updated_at
-		 FROM scanner_nodes WHERE id = $1`, id))
+		`SELECT `+nodeColumns+` FROM scanner_nodes WHERE id = $1`, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ScannerNode{}, ErrNotFound
 	}
@@ -72,10 +86,12 @@ func (s *Store) CreateScannerNode(ctx context.Context, in ScannerNode) (ScannerN
 		return ScannerNode{}, err
 	}
 	err = tx.QueryRow(ctx,
-		`INSERT INTO scanner_nodes (id, name, endpoint, token, cidrs, tags, created_by)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`INSERT INTO scanner_nodes
+		   (id, name, endpoint, token, cidrs, tags, tls_server_ca, tls_client_cert, tls_client_key, created_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		 RETURNING created_at, updated_at`,
-		in.ID, in.Name, in.Endpoint, in.Token, in.CIDRs, in.Tags, nullStr(in.CreatedBy),
+		in.ID, in.Name, in.Endpoint, in.Token, in.CIDRs, in.Tags,
+		in.TLSServerCA, in.TLSClientCert, in.TLSClientKey, nullStr(in.CreatedBy),
 	).Scan(&in.CreatedAt, &in.UpdatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -108,10 +124,20 @@ func (s *Store) UpdateScannerNode(ctx context.Context, id string, in ScannerNode
 		return ScannerNode{}, err
 	}
 	n, err := scanNode(tx.QueryRow(ctx,
-		`UPDATE scanner_nodes SET name = $2, endpoint = $3, token = COALESCE(NULLIF($4, ''), token), cidrs = $5, tags = $6, updated_at = now()
+		`UPDATE scanner_nodes SET
+		   name = $2,
+		   endpoint = $3,
+		   token = COALESCE(NULLIF($4, ''), token),
+		   cidrs = $5,
+		   tags = $6,
+		   tls_server_ca = $7,
+		   tls_client_cert = $8,
+		   tls_client_key = COALESCE(NULLIF($9, ''), tls_client_key),
+		   updated_at = now()
 		 WHERE id = $1
-		 RETURNING id, name, endpoint, token, cidrs, tags, created_by, created_at, updated_at`,
-		id, in.Name, in.Endpoint, in.Token, in.CIDRs, in.Tags))
+		 RETURNING `+nodeColumns,
+		id, in.Name, in.Endpoint, in.Token, in.CIDRs, in.Tags,
+		in.TLSServerCA, in.TLSClientCert, in.TLSClientKey))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ScannerNode{}, ErrNotFound
@@ -270,8 +296,7 @@ func lockAndListNodes(ctx context.Context, tx pgx.Tx) ([]ScannerNode, error) {
 		return nil, err
 	}
 	rows, err := tx.Query(ctx,
-		`SELECT id, name, endpoint, token, cidrs, tags, created_by, created_at, updated_at
-		 FROM scanner_nodes`)
+		`SELECT `+nodeColumns+` FROM scanner_nodes`)
 	if err != nil {
 		return nil, err
 	}
@@ -323,6 +348,7 @@ func scanNode(row rowScanner) (ScannerNode, error) {
 	var n ScannerNode
 	var createdBy *string
 	if err := row.Scan(&n.ID, &n.Name, &n.Endpoint, &n.Token, &n.CIDRs, &n.Tags,
+		&n.TLSServerCA, &n.TLSClientCert, &n.TLSClientKey,
 		&createdBy, &n.CreatedAt, &n.UpdatedAt); err != nil {
 		return ScannerNode{}, err
 	}

@@ -36,6 +36,14 @@ function NodeModal({ existing, onClose }: { existing?: ScannerNode; onClose: () 
   const [token, setToken] = useState("");
   const [cidrs, setCidrs] = useState((existing?.cidrs ?? []).join("\n"));
   const [tags, setTags] = useState((existing?.tags ?? []).join(", "));
+  // Per-node mTLS (#26). The server CA and client cert are public, so they are
+  // returned and pre-filled; the client key is write-only, so it starts blank and
+  // a blank value on edit keeps the stored key (like the token).
+  const hasTLS = Boolean(existing?.tls_server_ca || existing?.tls_client_cert);
+  const [showTLS, setShowTLS] = useState(hasTLS);
+  const [serverCA, setServerCA] = useState(existing?.tls_server_ca ?? "");
+  const [clientCert, setClientCert] = useState(existing?.tls_client_cert ?? "");
+  const [clientKey, setClientKey] = useState("");
 
   const save = useMutation({
     mutationFn: () => {
@@ -46,6 +54,10 @@ function NodeModal({ existing, onClose }: { existing?: ScannerNode; onClose: () 
         token: token.trim() || undefined,
         cidrs: parseList(cidrs),
         tags: parseList(tags),
+        tls_server_ca: serverCA.trim(),
+        tls_client_cert: clientCert.trim(),
+        // Blank client key on edit keeps the stored one (write-only secret).
+        tls_client_key: clientKey.trim() || undefined,
       };
       return editing ? api.updateNode(existing.id, body) : api.createNode(body);
     },
@@ -95,6 +107,61 @@ function NodeModal({ existing, onClose }: { existing?: ScannerNode; onClose: () 
         <Field label="Tags (comma separated)">
           <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="corp, internal" />
         </Field>
+
+        <div className="border-t border-neutral-200 pt-3 dark:border-neutral-800">
+          <button
+            type="button"
+            onClick={() => setShowTLS((v) => !v)}
+            className="flex w-full items-center justify-between text-left text-sm font-medium text-neutral-700 dark:text-neutral-300"
+          >
+            <span>Mutual TLS (optional){hasTLS ? " · configured" : ""}</span>
+            <span className="text-neutral-400">{showTLS ? "–" : "+"}</span>
+          </button>
+          {showTLS && (
+            <div className="mt-3 space-y-4">
+              <p className="text-xs text-neutral-500">
+                For a node in an untrusted segment: pin its server certificate and present a client
+                certificate. Use an <code>https://</code> endpoint above. Paste PEM material. Leave
+                empty for plain HTTP + bearer token.
+              </p>
+              <Field label="Server CA (PEM — pins the node's server cert)">
+                <textarea
+                  value={serverCA}
+                  onChange={(e) => setServerCA(e.target.value)}
+                  rows={3}
+                  placeholder="-----BEGIN CERTIFICATE-----"
+                  className="w-full rounded-md border border-neutral-300 bg-white px-3 py-1.5 font-mono text-xs dark:border-neutral-700 dark:bg-neutral-800"
+                />
+              </Field>
+              <Field label="Client certificate (PEM — presented to the node)">
+                <textarea
+                  value={clientCert}
+                  onChange={(e) => setClientCert(e.target.value)}
+                  rows={3}
+                  placeholder="-----BEGIN CERTIFICATE-----"
+                  className="w-full rounded-md border border-neutral-300 bg-white px-3 py-1.5 font-mono text-xs dark:border-neutral-700 dark:bg-neutral-800"
+                />
+              </Field>
+              <Field
+                label={
+                  editing
+                    ? "Client private key (PEM — leave blank to keep current)"
+                    : "Client private key (PEM)"
+                }
+              >
+                <textarea
+                  value={clientKey}
+                  onChange={(e) => setClientKey(e.target.value)}
+                  rows={3}
+                  placeholder={editing && hasTLS ? "unchanged" : "-----BEGIN PRIVATE KEY-----"}
+                  autoComplete="off"
+                  className="w-full rounded-md border border-neutral-300 bg-white px-3 py-1.5 font-mono text-xs dark:border-neutral-700 dark:bg-neutral-800"
+                />
+              </Field>
+            </div>
+          )}
+        </div>
+
         {save.isError && <ErrorText error={save.error} />}
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>
@@ -170,7 +237,17 @@ export function NodesPage() {
                       <HealthBadge healthy={n.healthy} error={n.health_error} />
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">
-                      {n.endpoint}
+                      <div className="flex items-center gap-2">
+                        <span>{n.endpoint}</span>
+                        {(n.tls_client_cert || n.tls_server_ca) && (
+                          <span
+                            className="rounded bg-neutral-200 px-1.5 py-0.5 font-sans text-[10px] font-medium uppercase tracking-wide text-neutral-600 dark:bg-neutral-700 dark:text-neutral-300"
+                            title="mutual TLS configured"
+                          >
+                            mTLS
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">
                       {n.cidrs.length ? n.cidrs.join(", ") : <span className="text-neutral-400">catch-all</span>}

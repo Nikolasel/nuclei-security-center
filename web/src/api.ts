@@ -35,6 +35,11 @@ export interface ScannerNode {
   endpoint: string;
   cidrs: string[];
   tags: string[];
+  /** optional per-node mTLS (#26). `tls_server_ca` pins the node's server cert and
+   *  `tls_client_cert` is the cert the backend presents — both public, returned
+   *  here. The client key is a write-only secret and is never returned. */
+  tls_server_ca?: string;
+  tls_client_cert?: string;
   healthy?: boolean | null;
   last_seen?: string;
   nuclei_version?: string;
@@ -46,14 +51,18 @@ export interface ScannerNode {
   updated_at: string;
 }
 
-/** ScannerNodeInput is the create/edit payload. `token` is the write-only bearer
- *  secret — required on create; on edit, leave it blank to keep the stored one. */
+/** ScannerNodeInput is the create/edit payload. `token` and `tls_client_key` are
+ *  write-only secrets — required-together-or-omitted on create; on edit, leave
+ *  them blank to keep the stored values. The server CA / client cert are public. */
 export interface ScannerNodeInput {
   name: string;
   endpoint: string;
   token?: string;
   cidrs: string[];
   tags: string[];
+  tls_server_ca?: string;
+  tls_client_cert?: string;
+  tls_client_key?: string;
 }
 
 export interface TemplateSet {

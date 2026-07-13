@@ -17,10 +17,11 @@ import (
 
 // Orchestrator dispatches scans to a scanner node, polls to completion, then
 // pulls and ingests the results. The backend is the system of record; the node
-// is stateless. (Phase 0 targets a single node; a registry comes later.)
+// is stateless. The Dispatcher selects the node by scan zone (#15); a
+// single-zone deployment routes every scan to one node as before.
 type Orchestrator struct {
 	store    *store.Store
-	client   *ScannerClient
+	dispatch *Dispatcher
 	archiver ObjectStore // nil when object storage is not configured
 	log      *slog.Logger
 
@@ -35,12 +36,12 @@ type Orchestrator struct {
 	progress   map[string]*types.ScanProgress
 }
 
-// NewOrchestrator wires the store and scanner client together. archiver may be
+// NewOrchestrator wires the store and zone dispatcher together. archiver may be
 // nil, in which case raw output is ingested but not archived.
-func NewOrchestrator(st *store.Store, client *ScannerClient, archiver ObjectStore, log *slog.Logger) *Orchestrator {
+func NewOrchestrator(st *store.Store, dispatch *Dispatcher, archiver ObjectStore, log *slog.Logger) *Orchestrator {
 	return &Orchestrator{
 		store:        st,
-		client:       client,
+		dispatch:     dispatch,
 		archiver:     archiver,
 		log:          log,
 		pollInterval: 3 * time.Second,
@@ -145,7 +146,16 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 
 	log := o.log.With("scan_id", scanID)
 
-	nodeScanID, err := o.client.StartScan(ctx, spec)
+	// Pick the scanner node whose zone reaches the scan's targets (#15).
+	client, zoneName, err := o.dispatch.ClientFor(spec.Targets)
+	if err != nil {
+		// No node was contacted yet, so no version is known to record.
+		o.failScan(ctx, scanID, "dispatch: "+err.Error(), "", "")
+		return
+	}
+	log = log.With("zone", zoneName)
+
+	nodeScanID, err := client.StartScan(ctx, spec)
 	if err != nil {
 		// No status response yet at this point -- nothing to record.
 		o.failScan(ctx, scanID, "dispatch: "+err.Error(), "", "")
@@ -156,7 +166,7 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 	}
 	log.Info("scan dispatched", "node_scan_id", nodeScanID)
 
-	status, err := o.pollToDone(ctx, scanID, nodeScanID)
+	status, err := o.pollToDone(ctx, client, scanID, nodeScanID)
 	if err != nil {
 		// pollToDone returns a zero-value status on error, so there's genuinely
 		// nothing to record here either.
@@ -183,14 +193,14 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 		// best-effort before recording the failure, so a large multi-host scan
 		// that overruns its timeout doesn't lose every finding from the hosts
 		// that did finish in time.
-		if err := o.ingest(ctx, scanID, targetID, nodeScanID); err != nil {
+		if err := o.ingest(ctx, client, scanID, targetID, nodeScanID); err != nil {
 			log.Warn("partial ingest after scan failure", "err", err)
 		}
 		o.failScan(ctx, scanID, "node reported failure: "+status.Error, status.NucleiVersion, status.TemplatesCommit)
 		return
 	}
 
-	if err := o.ingest(ctx, scanID, targetID, nodeScanID); err != nil {
+	if err := o.ingest(ctx, client, scanID, targetID, nodeScanID); err != nil {
 		o.failScan(ctx, scanID, "ingest: "+err.Error(), status.NucleiVersion, status.TemplatesCommit)
 		return
 	}
@@ -204,16 +214,17 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 	log.Info("scan complete", "findings", status.FindingCount)
 }
 
-// pollToDone polls the node until the scan reaches a terminal state, caching the
-// live progress from each poll under scanID so the API can render a progress bar.
-func (o *Orchestrator) pollToDone(ctx context.Context, scanID, nodeScanID string) (types.ScanStatus, error) {
+// pollToDone polls the given node until the scan reaches a terminal state,
+// caching the live progress from each poll under scanID so the API can render a
+// progress bar.
+func (o *Orchestrator) pollToDone(ctx context.Context, client *ScannerClient, scanID, nodeScanID string) (types.ScanStatus, error) {
 	for i := 0; i < o.maxPolls; i++ {
 		select {
 		case <-ctx.Done():
 			return types.ScanStatus{}, ctx.Err()
 		case <-time.After(o.pollInterval):
 		}
-		st, err := o.client.Status(ctx, nodeScanID)
+		st, err := client.Status(ctx, nodeScanID)
 		if err != nil {
 			// Transient node/network blips shouldn't kill the run; keep polling.
 			o.log.Warn("poll status failed", "node_scan_id", nodeScanID, "err", err)
@@ -231,8 +242,8 @@ func (o *Orchestrator) pollToDone(ctx context.Context, scanID, nodeScanID string
 // targetID scopes the deduplicated lifecycle entity (empty for ad-hoc scans).
 // When an archiver is configured, the verbatim stream is tee'd to a temp file
 // and uploaded to object storage after a successful ingest (see archiveRaw).
-func (o *Orchestrator) ingest(ctx context.Context, scanID, targetID, nodeScanID string) error {
-	body, err := o.client.Results(ctx, nodeScanID)
+func (o *Orchestrator) ingest(ctx context.Context, client *ScannerClient, scanID, targetID, nodeScanID string) error {
+	body, err := client.Results(ctx, nodeScanID)
 	if err != nil {
 		return err
 	}
@@ -300,12 +311,19 @@ func (o *Orchestrator) archiveRaw(ctx context.Context, scanID string, raw *os.Fi
 // authority), so a node that can't be reached only means the run keeps burning
 // until its own timeout — never a correctness problem. Errors are logged, not
 // returned.
+//
+// With scan zones (#15) the node that ran a given scan isn't known from the
+// node scan id alone, so the cancel is broadcast to every zone's node: the node
+// actually running it aborts, the rest 404 harmlessly. In a single-zone
+// deployment this is exactly one node, as before.
 func (o *Orchestrator) SignalNodeCancel(ctx context.Context, nodeScanID string) {
 	if nodeScanID == "" {
 		return // never dispatched (still queued) — nothing running on a node
 	}
-	if err := o.client.Cancel(ctx, nodeScanID); err != nil {
-		o.log.Warn("signal node cancel", "node_scan_id", nodeScanID, "err", err)
+	for _, client := range o.dispatch.Clients() {
+		if err := client.Cancel(ctx, nodeScanID); err != nil {
+			o.log.Warn("signal node cancel", "node_scan_id", nodeScanID, "err", err)
+		}
 	}
 }
 

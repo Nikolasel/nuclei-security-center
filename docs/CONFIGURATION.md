@@ -11,7 +11,8 @@ deployment.
 | `BACKEND_ADDR` | backend | `:8080` | listen address |
 | `DATABASE_URL` | backend | – (required) | Postgres DSN |
 | `DATABASE_PASSWORD_FILE` | backend | – (unset ⇒ use the DSN's password) | path to a file holding **only** the DB password; re-read on every new connection so a rotated credential is picked up without restarting. See [Rotating database credentials](#rotating-database-credentials) |
-| `SCANNER_URL` | backend | `http://localhost:8081` | scanner node base URL |
+| `SCANNER_URL` | backend | `http://localhost:8081` | scanner node base URL (the **default** scan zone) |
+| `SCAN_ZONES` | backend | – (unset ⇒ single default zone) | JSON array of CIDR-mapped scanner nodes for segmented networks; see [Scan zones](#scan-zones) |
 | `SCANNER_TOKEN` | both | – (required, **min 32 chars**) | bearer token for backend → node calls; the node refuses to start below the floor. Mint from a CSPRNG, e.g. `openssl rand -base64 24` |
 | `SCANNER_ADDR` | scanner | `:8081` | listen address |
 | `NUCLEI_PATH` | scanner | `nuclei` | path to the nuclei binary |
@@ -119,3 +120,30 @@ secret-store specifics live at the deployment edge. A single trailing newline is
 and leading whitespace is preserved.
 
 If `DATABASE_PASSWORD_FILE` is unset, the password in `DATABASE_URL` is used as before.
+
+## Scan zones
+
+By default the backend dispatches every scan to the single node at `SCANNER_URL`. In a segmented
+network, a node often has line-of-sight to only part of the address space, so you want a scan
+routed to a node that can actually reach the target (the Tenable "scan zone" model).
+
+Set `SCAN_ZONES` to a JSON array of zones, each mapping CIDR ranges to the node that serves them:
+
+```json
+[
+  {"name":"corp","cidrs":["10.0.0.0/8"],"url":"http://scanner-corp:8081","token":"…"},
+  {"name":"dmz","cidrs":["192.168.1.0/24"],"url":"http://scanner-dmz:8081","token":"…"}
+]
+```
+
+- Each zone carries its **own** node URL + bearer token — the scanner boundary is unchanged
+  (traffic stays one-way backend→node; the node holds no DB credentials).
+- `SCANNER_URL` / `SCANNER_TOKEN` remain the **default** zone: a target that falls in no zone
+  CIDR — including a hostname target, since zone matching is DNS-free like the scope guardrail —
+  is dispatched there. With `SCAN_ZONES` unset, every scan uses the default zone (unchanged
+  single-node behavior).
+- Zone selection is by the scan's targets: all IP/CIDR targets must fall in the **same** zone; a
+  scan whose targets span two zones is rejected (split it, one zone at a time).
+
+Static zone configuration is the first step; scanner-node **self-registration** into a dynamic
+registry is tracked separately (#22).

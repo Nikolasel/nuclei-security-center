@@ -62,8 +62,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	client := backend.NewScannerClient(scannerURL, scannerToken)
-	orch := backend.NewOrchestrator(st, client, archive, log)
+	// Zone-aware dispatch (#15): SCANNER_URL/SCANNER_TOKEN are the default zone;
+	// optional SCAN_ZONES (JSON) adds CIDR-mapped nodes for segmented networks.
+	dispatch, err := backend.BuildDispatcher(os.Getenv("SCAN_ZONES"), scannerURL, scannerToken)
+	if err != nil {
+		log.Error("configure scan zones", "err", err)
+		os.Exit(1)
+	}
+	orch := backend.NewOrchestrator(st, dispatch, archive, log)
 
 	auth, err := buildAuthenticator(ctx, st, log)
 	if err != nil {

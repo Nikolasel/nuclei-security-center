@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
@@ -25,6 +26,13 @@ type Orchestrator struct {
 
 	pollInterval time.Duration
 	maxPolls     int
+
+	// progress caches the latest live progress per running scan (#66), refreshed
+	// each poll. It is ephemeral by design — never persisted (invariant #4) — so
+	// the API can render a progress bar without a node round-trip per request or
+	// any new Postgres storage. Entries are removed when a scan ends.
+	progressMu sync.Mutex
+	progress   map[string]*types.ScanProgress
 }
 
 // NewOrchestrator wires the store and scanner client together. archiver may be
@@ -37,7 +45,31 @@ func NewOrchestrator(st *store.Store, client *ScannerClient, archiver ObjectStor
 		log:          log,
 		pollInterval: 3 * time.Second,
 		maxPolls:     600, // ~30 min ceiling at 3s
+		progress:     make(map[string]*types.ScanProgress),
 	}
+}
+
+// Progress returns the latest cached live progress for a running scan, or nil
+// when none is known (scan not running, or the node hasn't reported stats yet).
+func (o *Orchestrator) Progress(scanID string) *types.ScanProgress {
+	o.progressMu.Lock()
+	defer o.progressMu.Unlock()
+	return o.progress[scanID]
+}
+
+func (o *Orchestrator) setProgress(scanID string, p *types.ScanProgress) {
+	if p == nil {
+		return
+	}
+	o.progressMu.Lock()
+	o.progress[scanID] = p
+	o.progressMu.Unlock()
+}
+
+func (o *Orchestrator) clearProgress(scanID string) {
+	o.progressMu.Lock()
+	delete(o.progress, scanID)
+	o.progressMu.Unlock()
 }
 
 // rawObjectKey is the bucket key under which a scan's verbatim out.jsonl lives.
@@ -108,6 +140,8 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 	// Detached from the request context; give the whole run a generous ceiling.
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
 	defer cancel()
+	// Live progress is only meaningful while the scan runs; drop it at the end.
+	defer o.clearProgress(scanID)
 
 	log := o.log.With("scan_id", scanID)
 
@@ -122,7 +156,7 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 	}
 	log.Info("scan dispatched", "node_scan_id", nodeScanID)
 
-	status, err := o.pollToDone(ctx, nodeScanID)
+	status, err := o.pollToDone(ctx, scanID, nodeScanID)
 	if err != nil {
 		// pollToDone returns a zero-value status on error, so there's genuinely
 		// nothing to record here either.
@@ -159,8 +193,9 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 	log.Info("scan complete", "findings", status.FindingCount)
 }
 
-// pollToDone polls the node until the scan reaches a terminal state.
-func (o *Orchestrator) pollToDone(ctx context.Context, nodeScanID string) (types.ScanStatus, error) {
+// pollToDone polls the node until the scan reaches a terminal state, caching the
+// live progress from each poll under scanID so the API can render a progress bar.
+func (o *Orchestrator) pollToDone(ctx context.Context, scanID, nodeScanID string) (types.ScanStatus, error) {
 	for i := 0; i < o.maxPolls; i++ {
 		select {
 		case <-ctx.Done():
@@ -173,6 +208,7 @@ func (o *Orchestrator) pollToDone(ctx context.Context, nodeScanID string) (types
 			o.log.Warn("poll status failed", "node_scan_id", nodeScanID, "err", err)
 			continue
 		}
+		o.setProgress(scanID, st.Progress)
 		if st.State == types.ScanComplete || st.State == types.ScanFailed {
 			return st, nil
 		}

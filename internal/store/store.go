@@ -275,6 +275,10 @@ type ScanRow struct {
 	HasRaw          bool       `json:"has_raw"`
 	CreatedAt       time.Time  `json:"created_at"`
 	FinishedAt      *time.Time `json:"finished_at,omitempty"`
+	// Progress is live scan progress (#66), attached by the API layer for running
+	// scans from the orchestrator's in-memory cache — never read from or written
+	// to the database.
+	Progress *types.ScanProgress `json:"progress,omitempty"`
 }
 
 // scanSelect is the shared projection for ScanRow reads. The LEFT JOIN surfaces

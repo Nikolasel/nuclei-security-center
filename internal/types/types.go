@@ -42,12 +42,29 @@ type ScanOptions struct {
 
 // ScanStatus is the response from GET /v1/scans/{id} on the scanner node.
 type ScanStatus struct {
-	ID              string    `json:"id"`
-	State           ScanState `json:"state"`
-	NucleiVersion   string    `json:"nuclei_version,omitempty"`
-	TemplatesCommit string    `json:"templates_commit,omitempty"`
-	FindingCount    int       `json:"finding_count"`
-	Error           string    `json:"error,omitempty"`
+	ID              string        `json:"id"`
+	State           ScanState     `json:"state"`
+	NucleiVersion   string        `json:"nuclei_version,omitempty"`
+	TemplatesCommit string        `json:"templates_commit,omitempty"`
+	FindingCount    int           `json:"finding_count"`
+	Error           string        `json:"error,omitempty"`
+	Progress        *ScanProgress `json:"progress,omitempty"`
+}
+
+// ScanProgress is a live snapshot of a running scan's progress, parsed from
+// Nuclei's periodic -stats-json output on the scanner node (#66). It is
+// ephemeral/in-memory — never persisted (the node is stateless per run; the
+// backend caches the latest snapshot only while the scan runs). Percent is the
+// most useful signal (Nuclei's own completion estimate, request-based); the
+// counts contextualize it. All fields are best-effort — an omitted stats field
+// stays zero.
+type ScanProgress struct {
+	Percent  float64 `json:"percent"`
+	Requests int64   `json:"requests,omitempty"`
+	Total    int64   `json:"total,omitempty"`
+	Hosts    int64   `json:"hosts,omitempty"`
+	RPS      int64   `json:"rps,omitempty"`
+	Matched  int64   `json:"matched,omitempty"`
 }
 
 // StartScanResponse is the 202 body from POST /v1/scans.

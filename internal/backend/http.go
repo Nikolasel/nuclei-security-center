@@ -271,6 +271,12 @@ func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []store.ScanRow{}
 	}
+	// Attach live progress (#66) to running scans from the orchestrator's cache.
+	for i := range rows {
+		if rows[i].State == string(types.ScanRunning) {
+			rows[i].Progress = s.orch.Progress(rows[i].ID)
+		}
+	}
 	writeJSON(w, http.StatusOK, rows)
 }
 
@@ -283,6 +289,9 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		}
 		s.serverError(w, "get scan", err)
 		return
+	}
+	if row.State == string(types.ScanRunning) {
+		row.Progress = s.orch.Progress(row.ID)
 	}
 	writeJSON(w, http.StatusOK, row)
 }

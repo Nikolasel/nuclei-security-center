@@ -87,6 +87,17 @@ export const DEFAULT_TOKEN_TTL_DAYS = 90;
 
 export type ScanState = "queued" | "running" | "complete" | "failed" | "cancelled";
 
+// ScanProgress is live progress for a running scan (#66), parsed from Nuclei's
+// -stats-json on the scanner node. Present only while a scan is running.
+export interface ScanProgress {
+  percent: number;
+  requests?: number;
+  total?: number;
+  hosts?: number;
+  rps?: number;
+  matched?: number;
+}
+
 export interface Scan {
   id: string;
   state: ScanState;
@@ -99,6 +110,8 @@ export interface Scan {
   error?: string;
   /** whether the verbatim Nuclei output was archived to object storage. */
   has_raw?: boolean;
+  /** live progress; present only for running scans. */
+  progress?: ScanProgress;
   created_at: string;
   finished_at?: string;
 }

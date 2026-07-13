@@ -1,0 +1,76 @@
+package scanner
+
+import (
+	"bytes"
+	"sync"
+	"testing"
+
+	"github.com/Nikolasel/nuclei-security-center/internal/types"
+)
+
+func TestParseNucleiStatsStringNumbers(t *testing.T) {
+	// Nuclei's clistats commonly encodes the numbers as JSON strings.
+	line := []byte(`{"duration":"0:00:12","errors":"0","hosts":"2","matched":"3","percent":"45","requests":"450","rps":"37","templates":"1000","total":"1000"}`)
+	p, ok := parseNucleiStats(line)
+	if !ok {
+		t.Fatal("expected a stats line")
+	}
+	if p.Percent != 45 || p.Requests != 450 || p.Total != 1000 || p.Hosts != 2 || p.RPS != 37 || p.Matched != 3 {
+		t.Fatalf("parsed wrong: %+v", p)
+	}
+}
+
+func TestParseNucleiStatsPlainNumbers(t *testing.T) {
+	// Other versions emit plain JSON numbers.
+	line := []byte(`{"percent":50.5,"requests":500,"total":1000,"hosts":1}`)
+	p, ok := parseNucleiStats(line)
+	if !ok {
+		t.Fatal("expected a stats line")
+	}
+	if p.Percent != 50.5 || p.Requests != 500 || p.Total != 1000 {
+		t.Fatalf("parsed wrong: %+v", p)
+	}
+}
+
+func TestParseNucleiStatsNotStats(t *testing.T) {
+	for _, line := range []string{
+		``,
+		`[INF] Running nuclei on 2 hosts`,
+		`{"template-id":"x","host":"h"}`, // a finding line, not stats (no total/percent)
+		`not json at all`,
+		`{"percent":"10"}`, // missing total
+	} {
+		if _, ok := parseNucleiStats([]byte(line)); ok {
+			t.Errorf("line %q wrongly parsed as stats", line)
+		}
+	}
+}
+
+func TestStatsWriterSeparatesStatsFromErrors(t *testing.T) {
+	var errBuf bytes.Buffer
+	var mu sync.Mutex
+	var last *types.ScanProgress
+	sw := &statsWriter{
+		setProgress: func(p types.ScanProgress) {
+			mu.Lock()
+			prog := p
+			last = &prog
+			mu.Unlock()
+		},
+		errOut: &errBuf,
+	}
+
+	// Interleave an error line, a stats line, and a partial line (no newline).
+	sw.Write([]byte("[FTL] boom\n"))
+	sw.Write([]byte(`{"percent":"75","total":"1000","requests":"750"}` + "\n"))
+	sw.Write([]byte("trailing without newline"))
+	sw.flush()
+
+	if last == nil || last.Percent != 75 {
+		t.Fatalf("progress not captured: %+v", last)
+	}
+	got := errBuf.String()
+	if got != "[FTL] boom\ntrailing without newline\n" {
+		t.Fatalf("error output = %q", got)
+	}
+}

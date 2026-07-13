@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { hasRole, useMe } from "../auth";
-import { Button, Card, ErrorText, Field, Input, Modal, Spinner, StateBadge } from "../components/ui";
+import { Button, Card, ErrorText, Field, Input, Modal, ProgressBar, Spinner, StateBadge } from "../components/ui";
 
 // Mirrors the backend's defaultOptions() (internal/backend/http.go) — shown as
 // the field's placeholder/starting value, not hardcoded into the request, so
@@ -179,6 +179,11 @@ export function ScansPage() {
                     </td>
                     <td className="px-3 py-2">
                       <StateBadge state={s.state} />
+                      {s.state === "running" && s.progress && (
+                        <div className="mt-1 w-40">
+                          <ProgressBar percent={s.progress.percent} />
+                        </div>
+                      )}
                     </td>
                     <td className="px-3 py-2 text-neutral-500">{new Date(s.created_at).toLocaleString()}</td>
                     <td className="px-3 py-2 text-neutral-500">

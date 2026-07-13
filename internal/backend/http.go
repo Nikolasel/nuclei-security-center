@@ -112,6 +112,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/service-accounts/{id}/rotate", s.mutation(eventServiceAccountChanged, "service_account.rotate", "service_account", RoleAdmin, s.handleRotateServiceAccount))
 	mux.HandleFunc("DELETE /api/service-accounts/{id}", s.mutation(eventServiceAccountChanged, "service_account.revoke", "service_account", RoleAdmin, s.handleDeleteServiceAccount))
 
+	// Scanner nodes (#22). register is the one node→backend call — a node
+	// self-registering/heartbeating, authenticated by the shared scanner token
+	// (not the session cookie). list is for operators (viewer).
+	mux.HandleFunc("POST /api/nodes/register", s.handleRegisterNode)
+	mux.HandleFunc("GET /api/nodes", s.requireRole(RoleViewer, s.handleListNodes))
+
 	// Unknown /api/* paths get a JSON-ish 404 rather than the SPA's index.html.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)

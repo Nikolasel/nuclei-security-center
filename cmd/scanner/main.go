@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,6 +40,24 @@ func main() {
 	if err != nil {
 		log.Error("init runner", "err", err)
 		os.Exit(1)
+	}
+
+	// Optional self-registration with the backend's node registry (#22). Enabled
+	// only when BACKEND_URL + NODE_ENDPOINT are set; otherwise the node is reached
+	// via the backend's static SCANNER_URL config as before.
+	regCtx, regStop := context.WithCancel(context.Background())
+	defer regStop()
+	if r := scanner.NewRegistrar(scanner.RegistrarConfig{
+		BackendURL: os.Getenv("BACKEND_URL"),
+		Token:      token,
+		Name:       envOr("NODE_NAME", ""),
+		Endpoint:   os.Getenv("NODE_ENDPOINT"),
+		Zone:       os.Getenv("NODE_ZONE"),
+		Tags:       splitCSV(os.Getenv("NODE_TAGS")),
+		Version:    runner.NucleiVersion,
+	}, log); r != nil {
+		r.Start(regCtx)
+		log.Info("node self-registration enabled", "backend", os.Getenv("BACKEND_URL"), "endpoint", os.Getenv("NODE_ENDPOINT"))
 	}
 
 	srv := &http.Server{
@@ -95,4 +114,15 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// splitCSV splits a comma-separated env value, trimming spaces and dropping empties.
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

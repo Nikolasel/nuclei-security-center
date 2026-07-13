@@ -81,6 +81,21 @@ curl -sb jar.txt -X POST localhost:8080/api/scans -H 'content-type: application/
 }'
 ```
 
+## Scanner nodes
+
+Scanner nodes can **self-register** with the backend so new capacity comes online without a
+backend config change (see [Configuration → Node registry](CONFIGURATION.md#node-registry)).
+
+- `POST /api/nodes/register` — a node→backend heartbeat carrying `{name, endpoint, zone, tags,
+  nuclei_version}`. Authenticated with the shared **`SCANNER_TOKEN`** bearer (not the session
+  cookie — a node has no user identity). This is the only call a node makes to the backend; scan
+  traffic stays strictly backend→node.
+- `GET /api/nodes` (viewer) — lists registered nodes with a computed `healthy` flag and
+  `last_heartbeat`, for operators.
+
+Dispatch prefers a healthy registered node (round-robin), falling back to the static `SCANNER_URL`
+when none is registered.
+
 ## Findings lifecycle
 
 Findings are **deduplicated** across scans and tracked over time with a **Tenable Security

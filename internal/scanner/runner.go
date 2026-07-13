@@ -217,6 +217,10 @@ func (r *Runner) syncTemplates() {
 	_ = cmd.Run()
 }
 
+// NucleiVersion returns the engine version string (best-effort), for the node
+// registry's capability reporting (#22).
+func (r *Runner) NucleiVersion() string { return r.nucleiVersion() }
+
 var versionRe = regexp.MustCompile(`v?\d+\.\d+\.\d+`)
 
 // nucleiVersion returns the engine version string, or "" if it can't be read.

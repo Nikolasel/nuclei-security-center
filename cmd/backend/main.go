@@ -69,7 +69,11 @@ func main() {
 		log.Error("configure scan zones", "err", err)
 		os.Exit(1)
 	}
-	orch := backend.NewOrchestrator(st, dispatch, archive, log)
+	// Scanner node registry (#22): self-registered nodes are preferred for
+	// dispatch (round-robin), with the zone dispatcher as the fallback. NODE_TTL
+	// bounds how long a node stays healthy after its last heartbeat.
+	registry := backend.NewRegistry(nodeHeartbeatTTL())
+	orch := backend.NewOrchestrator(st, dispatch, registry, scannerToken, archive, log)
 
 	auth, err := buildAuthenticator(ctx, st, log)
 	if err != nil {
@@ -260,4 +264,16 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// nodeHeartbeatTTL is how long a registered scanner node stays healthy after its
+// last heartbeat (#22). Default 90s tolerates a missed heartbeat or two at the
+// scanner's 30s registration cadence. Override with NODE_TTL (Go duration).
+func nodeHeartbeatTTL() time.Duration {
+	if v := os.Getenv("NODE_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 90 * time.Second
 }

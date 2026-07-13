@@ -17,13 +17,17 @@ import (
 
 // Orchestrator dispatches scans to a scanner node, polls to completion, then
 // pulls and ingests the results. The backend is the system of record; the node
-// is stateless. The Dispatcher selects the node by scan zone (#15); a
-// single-zone deployment routes every scan to one node as before.
+// is stateless. Node selection is layered: a healthy self-registered node from
+// the registry (#22, round-robin) is preferred; with none registered, the zone
+// Dispatcher (#15) resolves the node from the target's CIDR. A single-node
+// deployment with neither configured routes every scan to the default zone.
 type Orchestrator struct {
-	store    *store.Store
-	dispatch *Dispatcher
-	archiver ObjectStore // nil when object storage is not configured
-	log      *slog.Logger
+	store     *store.Store
+	dispatch  *Dispatcher
+	registry  *Registry   // nil disables registry-based dispatch
+	nodeToken string      // shared token used to reach registered nodes
+	archiver  ObjectStore // nil when object storage is not configured
+	log       *slog.Logger
 
 	pollInterval time.Duration
 	maxPolls     int
@@ -36,12 +40,16 @@ type Orchestrator struct {
 	progress   map[string]*types.ScanProgress
 }
 
-// NewOrchestrator wires the store and zone dispatcher together. archiver may be
-// nil, in which case raw output is ingested but not archived.
-func NewOrchestrator(st *store.Store, dispatch *Dispatcher, archiver ObjectStore, log *slog.Logger) *Orchestrator {
+// NewOrchestrator wires the store, zone dispatcher, and node registry together.
+// registry may be nil (registry-based dispatch disabled — the zone dispatcher is
+// always used); nodeToken is the bearer token used to reach registered nodes.
+// archiver may be nil, in which case raw output is ingested but not archived.
+func NewOrchestrator(st *store.Store, dispatch *Dispatcher, registry *Registry, nodeToken string, archiver ObjectStore, log *slog.Logger) *Orchestrator {
 	return &Orchestrator{
 		store:        st,
 		dispatch:     dispatch,
+		registry:     registry,
+		nodeToken:    nodeToken,
 		archiver:     archiver,
 		log:          log,
 		pollInterval: 3 * time.Second,
@@ -71,6 +79,24 @@ func (o *Orchestrator) clearProgress(scanID string) {
 	o.progressMu.Lock()
 	delete(o.progress, scanID)
 	o.progressMu.Unlock()
+}
+
+// Registry exposes the node registry (nil when registry dispatch is disabled).
+func (o *Orchestrator) Registry() *Registry { return o.registry }
+
+// clientForScan selects the scanner client to run a scan. A healthy registered
+// node (round-robin) is preferred when the registry has one; otherwise the zone
+// Dispatcher (#15) resolves the node from the scan's targets. Registry selection
+// is zone-unaware for now — composing round-robin with zone filtering
+// (Registry.Pick(zone)) is the deferred reconciliation of #22 and #15. Returns
+// the client and a label (registered node name, or the resolved zone name).
+func (o *Orchestrator) clientForScan(targets []string) (*ScannerClient, string, error) {
+	if o.registry != nil {
+		if n, ok := o.registry.Pick(""); ok {
+			return NewScannerClient(n.Endpoint, o.nodeToken), n.Name, nil
+		}
+	}
+	return o.dispatch.ClientFor(targets)
 }
 
 // rawObjectKey is the bucket key under which a scan's verbatim out.jsonl lives.
@@ -144,16 +170,16 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 	// Live progress is only meaningful while the scan runs; drop it at the end.
 	defer o.clearProgress(scanID)
 
-	log := o.log.With("scan_id", scanID)
-
-	// Pick the scanner node whose zone reaches the scan's targets (#15).
-	client, zoneName, err := o.dispatch.ClientFor(spec.Targets)
+	// Select the node: a registered node (round-robin) if any, else the zone
+	// dispatcher resolves it from the targets (#15). A spanning-zone scan is
+	// rejected here before any node is contacted.
+	client, nodeName, err := o.clientForScan(spec.Targets)
 	if err != nil {
 		// No node was contacted yet, so no version is known to record.
 		o.failScan(ctx, scanID, "dispatch: "+err.Error(), "", "")
 		return
 	}
-	log = log.With("zone", zoneName)
+	log := o.log.With("scan_id", scanID, "node", nodeName)
 
 	nodeScanID, err := client.StartScan(ctx, spec)
 	if err != nil {
@@ -312,15 +338,23 @@ func (o *Orchestrator) archiveRaw(ctx context.Context, scanID string, raw *os.Fi
 // until its own timeout — never a correctness problem. Errors are logged, not
 // returned.
 //
-// With scan zones (#15) the node that ran a given scan isn't known from the
-// node scan id alone, so the cancel is broadcast to every zone's node: the node
-// actually running it aborts, the rest 404 harmlessly. In a single-zone
-// deployment this is exactly one node, as before.
+// The node that ran a given scan isn't known from the node scan id alone —
+// it could be any zone's node (#15) or any registered node (#22) — so the cancel
+// is broadcast to all of them: the node actually running it aborts, the rest 404
+// harmlessly. In a single-node deployment this is exactly one node, as before.
 func (o *Orchestrator) SignalNodeCancel(ctx context.Context, nodeScanID string) {
 	if nodeScanID == "" {
 		return // never dispatched (still queued) — nothing running on a node
 	}
-	for _, client := range o.dispatch.Clients() {
+	clients := o.dispatch.Clients()
+	if o.registry != nil {
+		for _, n := range o.registry.List() {
+			if n.Healthy {
+				clients = append(clients, NewScannerClient(n.Endpoint, o.nodeToken))
+			}
+		}
+	}
+	for _, client := range clients {
 		if err := client.Cancel(ctx, nodeScanID); err != nil {
 			o.log.Warn("signal node cancel", "node_scan_id", nodeScanID, "err", err)
 		}

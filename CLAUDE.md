@@ -115,7 +115,10 @@ Traffic is strictly **backend → scanner** (dispatch, poll, pull). The node nev
 
 1. **The scanner node must never gain database access.** It receives a spec, returns
    results. This is the core security boundary.
-2. **Results flow by polling, not callbacks** — keep the backend → node direction one-way.
+2. **Results flow by polling, not callbacks** — keep the *scan* data path backend → node
+   one-way. (The one exception is optional node **self-registration/heartbeat** (#22): a
+   node→backend *metadata* call carrying endpoint/zone/capabilities — never scan results, and
+   token-authenticated with `SCANNER_TOKEN`.)
 3. **Nuclei is invoked as a binary/subprocess**, so upgrades stay "bump the image."
 4. **Backend is the only system of record** — the node is stateless/in-memory per run.
 5. **Don't hand-roll solved problems — use prominent, well-maintained libraries.**

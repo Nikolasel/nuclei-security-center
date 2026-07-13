@@ -15,6 +15,10 @@ deployment.
 | `SCAN_ZONES` | backend | – (unset ⇒ single default zone) | JSON array of CIDR-mapped scanner nodes for segmented networks; see [Scan zones](#scan-zones) |
 | `SCANNER_TOKEN` | both | – (required, **min 32 chars**) | bearer token for backend → node calls; the node refuses to start below the floor. Mint from a CSPRNG, e.g. `openssl rand -base64 24` |
 | `SCANNER_ADDR` | scanner | `:8081` | listen address |
+| `NODE_TTL` | backend | `90s` | how long a registered node stays healthy after its last heartbeat (Go duration); see [Node registry](#node-registry) |
+| `BACKEND_URL` | scanner | – (unset ⇒ self-registration off) | backend base URL the node registers/heartbeats to; requires `NODE_ENDPOINT` |
+| `NODE_ENDPOINT` | scanner | – | how the backend reaches **this** node (e.g. `http://scanner-2:8081`); required to self-register |
+| `NODE_NAME` / `NODE_ZONE` / `NODE_TAGS` | scanner | – | node display name, its scan zone (#15), and CSV tags advertised on registration |
 | `NUCLEI_PATH` | scanner | `nuclei` | path to the nuclei binary |
 | `SCANNER_WORK_DIR` | scanner | – (unset ⇒ a private `0700` temp dir) | per-scan working dirs; leave unset for an auto-created process-exclusive dir, or point at a mounted private volume |
 | `OIDC_ISSUER` | backend | – (required unless `AUTH_DISABLED=true`) | OIDC issuer URL; setting it enables auth |
@@ -149,4 +153,26 @@ Set `SCAN_ZONES` to a JSON array of zones, each mapping CIDR ranges to the node 
   fine). Fail-fast, like a malformed CIDR or a duplicate zone name.
 
 Static zone configuration is the first step; scanner-node **self-registration** into a dynamic
-registry is tracked separately (#22).
+registry is [Node registry](#node-registry), below.
+
+## Node registry
+
+By default the backend reaches its scanner via the static `SCANNER_URL` (the default scan zone). A
+scanner node can instead **self-register** with the backend, so new nodes come online and start
+receiving scans with no backend config change.
+
+- **On the node:** set `BACKEND_URL` (the backend it registers to) and `NODE_ENDPOINT` (how the
+  backend reaches this node), plus optional `NODE_NAME` / `NODE_ZONE` / `NODE_TAGS`. The node then
+  POSTs its metadata to `POST /api/nodes/register` every 30s — a heartbeat — authenticated with the
+  shared `SCANNER_TOKEN`. This is the **only** call a node makes to the backend; scan traffic still
+  flows strictly backend→node, and the node holds no DB credentials.
+- **On the backend:** the registry is in-memory and self-healing — a node is healthy for `NODE_TTL`
+  after its last heartbeat, and dispatch prefers a healthy registered node (round-robin), falling
+  back to the [scan-zone dispatcher](#scan-zones) when none is registered. `GET /api/nodes` (viewer)
+  lists the registry for operators.
+
+Leaving `BACKEND_URL`/`NODE_ENDPOINT` unset keeps the single-node/static behavior. Registry
+selection is currently **zone-unaware** (plain round-robin over all healthy nodes); when no node is
+registered, dispatch falls back to the zone dispatcher, which does honor the target's zone. Making
+the registry itself zone-aware — narrowing round-robin to nodes advertising the target's `NODE_ZONE`
+— is the tracked reconciliation of the registry (#22) and scan zones (#15).

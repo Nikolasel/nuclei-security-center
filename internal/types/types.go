@@ -72,6 +72,19 @@ type StartScanResponse struct {
 	ScanID string `json:"scan_id"`
 }
 
+// NodeRegistration is a scanner node's self-registration/heartbeat payload,
+// posted node→backend (#22). It is metadata only — scan traffic stays strictly
+// one-way backend→node (polling), and the node holds no DB credentials.
+// Endpoint is how the backend reaches this node (e.g. http://scanner-2:8081).
+type NodeRegistration struct {
+	Name            string   `json:"name"`
+	Endpoint        string   `json:"endpoint"`
+	Zone            string   `json:"zone,omitempty"`
+	Tags            []string `json:"tags,omitempty"`
+	NucleiVersion   string   `json:"nuclei_version,omitempty"`
+	TemplatesCommit string   `json:"templates_commit,omitempty"`
+}
+
 // NucleiFinding is the stable subset of a Nuclei JSONL result line that we parse
 // for indexing. The full line is preserved verbatim as raw JSON alongside this,
 // so unparsed fields are never lost. We intentionally keep only rock-stable

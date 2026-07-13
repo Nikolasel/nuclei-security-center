@@ -85,6 +85,26 @@ func (c *ScannerClient) Status(ctx context.Context, nodeScanID string) (types.Sc
 	return st, nil
 }
 
+// Cancel asks the node to abort a running scan (it kills the nuclei process
+// group). A node that no longer knows the scan (404 — already finished or the
+// node restarted) is not an error: the backend has already recorded the terminal
+// state, so there's nothing left to stop.
+func (c *ScannerClient) Cancel(ctx context.Context, nodeScanID string) error {
+	req, err := c.newReq(ctx, http.MethodPost, "/v1/scans/"+nodeScanID+"/cancel", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("cancel: %s", statusErr(resp))
+	}
+	return nil
+}
+
 // resultsClientTimeout bounds the entire results fetch, including streaming the
 // body. It backstops the run context so a node that accepts the request but then
 // dribbles or stalls the stream can't hold the fetch open indefinitely.

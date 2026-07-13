@@ -179,11 +179,15 @@ func (s *Store) MarkRunning(ctx context.Context, scanID, nodeScanID string) erro
 	return err
 }
 
-// MarkFailed records a terminal failure with its reason.
+// MarkFailed records a terminal failure with its reason. It never overwrites a
+// scan already in a terminal state (notably cancelled): once an operator cancels
+// a scan, the background poll goroutine seeing the node abort must not flip it
+// back to failed.
 func (s *Store) MarkFailed(ctx context.Context, scanID, reason string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE scans SET state = $1, error = $2, finished_at = now() WHERE id = $3`,
-		types.ScanFailed, reason, scanID,
+		`UPDATE scans SET state = $1, error = $2, finished_at = now()
+		  WHERE id = $3 AND state NOT IN ($4, $5, $6)`,
+		types.ScanFailed, reason, scanID, types.ScanCancelled, types.ScanComplete, types.ScanFailed,
 	)
 	return err
 }
@@ -208,11 +212,14 @@ func (s *Store) FailOrphanedScans(ctx context.Context, reason string) (int64, er
 	return tag.RowsAffected(), nil
 }
 
-// MarkComplete records successful completion and the versions that ran.
+// MarkComplete records successful completion and the versions that ran. Like
+// MarkFailed it won't overwrite an already-cancelled scan, so a cancel that
+// races an ingest finishing stays cancelled.
 func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templatesCommit string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE scans SET state = $1, nuclei_version = $2, templates_commit = $3, finished_at = now() WHERE id = $4`,
-		types.ScanComplete, nucleiVersion, templatesCommit, scanID,
+		`UPDATE scans SET state = $1, nuclei_version = $2, templates_commit = $3, finished_at = now()
+		  WHERE id = $4 AND state <> $5`,
+		types.ScanComplete, nucleiVersion, templatesCommit, scanID, types.ScanCancelled,
 	)
 	return err
 }
@@ -240,10 +247,16 @@ func (s *Store) ScanRawKey(ctx context.Context, id string) (string, error) {
 }
 
 // ScanRow is a scan as returned to API callers. HasRaw reports whether the
-// verbatim Nuclei output was archived (and is thus downloadable).
+// verbatim Nuclei output was archived (and is thus downloadable). TargetID /
+// TargetName / TargetHostCount name the stored target the scan ran against (all
+// zero-valued for an ad-hoc spec scan, or once the target has been deleted —
+// scans.target_id is ON DELETE SET NULL so history survives).
 type ScanRow struct {
 	ID              string     `json:"id"`
 	State           string     `json:"state"`
+	TargetID        string     `json:"target_id,omitempty"`
+	TargetName      string     `json:"target_name,omitempty"`
+	TargetHostCount int        `json:"target_host_count,omitempty"`
 	NucleiVersion   string     `json:"nuclei_version,omitempty"`
 	TemplatesCommit string     `json:"templates_commit,omitempty"`
 	Error           string     `json:"error,omitempty"`
@@ -252,24 +265,44 @@ type ScanRow struct {
 	FinishedAt      *time.Time `json:"finished_at,omitempty"`
 }
 
+// scanSelect is the shared projection for ScanRow reads. The LEFT JOIN surfaces
+// the target's name + host count for the scans list/detail (issue #65) without a
+// second round-trip; array_length is NULL for an empty array, so coalesce to 0.
+const scanSelect = `
+	SELECT s.id, s.state, s.target_id, t.name, coalesce(array_length(t.hosts, 1), 0),
+	       s.nuclei_version, s.templates_commit, s.error, s.raw_object_key,
+	       s.created_at, s.finished_at
+	  FROM scans s
+	  LEFT JOIN targets t ON t.id = s.target_id`
+
+// scanClientCancellable reports the states a scan can still be cancelled from.
+const scanCancellableStates = `('queued', 'running')`
+
+func scanScan(row pgx.Row) (ScanRow, error) {
+	var r ScanRow
+	var targetID, targetName, nucleiVersion, templatesCommit, errStr, rawKey *string
+	if err := row.Scan(&r.ID, &r.State, &targetID, &targetName, &r.TargetHostCount,
+		&nucleiVersion, &templatesCommit, &errStr, &rawKey, &r.CreatedAt, &r.FinishedAt); err != nil {
+		return ScanRow{}, err
+	}
+	r.TargetID = deref(targetID)
+	r.TargetName = deref(targetName)
+	r.NucleiVersion = deref(nucleiVersion)
+	r.TemplatesCommit = deref(templatesCommit)
+	r.Error = deref(errStr)
+	r.HasRaw = rawKey != nil
+	return r, nil
+}
+
 // GetScan returns one scan by id.
 func (s *Store) GetScan(ctx context.Context, id string) (ScanRow, error) {
-	var r ScanRow
-	var nucleiVersion, templatesCommit, errStr, rawKey *string
-	err := s.pool.QueryRow(ctx,
-		`SELECT id, state, nuclei_version, templates_commit, error, raw_object_key, created_at, finished_at
-		 FROM scans WHERE id = $1`, id,
-	).Scan(&r.ID, &r.State, &nucleiVersion, &templatesCommit, &errStr, &rawKey, &r.CreatedAt, &r.FinishedAt)
+	r, err := scanScan(s.pool.QueryRow(ctx, scanSelect+` WHERE s.id = $1`, id))
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return ScanRow{}, ErrNotFound
 		}
 		return ScanRow{}, err
 	}
-	r.NucleiVersion = deref(nucleiVersion)
-	r.TemplatesCommit = deref(templatesCommit)
-	r.Error = deref(errStr)
-	r.HasRaw = rawKey != nil
 	return r, nil
 }
 
@@ -278,9 +311,7 @@ func (s *Store) ListScans(ctx context.Context, limit int) ([]ScanRow, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.pool.Query(ctx,
-		`SELECT id, state, nuclei_version, templates_commit, error, raw_object_key, created_at, finished_at
-		 FROM scans ORDER BY created_at DESC LIMIT $1`, limit)
+	rows, err := s.pool.Query(ctx, scanSelect+` ORDER BY s.created_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -288,19 +319,60 @@ func (s *Store) ListScans(ctx context.Context, limit int) ([]ScanRow, error) {
 
 	var out []ScanRow
 	for rows.Next() {
-		var r ScanRow
-		var nucleiVersion, templatesCommit, errStr, rawKey *string
-		if err := rows.Scan(&r.ID, &r.State, &nucleiVersion, &templatesCommit, &errStr,
-			&rawKey, &r.CreatedAt, &r.FinishedAt); err != nil {
+		r, err := scanScan(rows)
+		if err != nil {
 			return nil, err
 		}
-		r.NucleiVersion = deref(nucleiVersion)
-		r.TemplatesCommit = deref(templatesCommit)
-		r.Error = deref(errStr)
-		r.HasRaw = rawKey != nil
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// CancelScan marks a queued/running scan as cancelled and returns its node scan
+// id (for signalling the node to abort) plus whether the transition happened.
+// cancelled is false when the scan wasn't in a cancellable state — the caller
+// distinguishes "already terminal" (409) from "unknown" (404) via GetScan. The
+// WHERE clause makes this the single authority on the state transition, so a
+// racing poll can't un-cancel it.
+func (s *Store) CancelScan(ctx context.Context, id, reason string) (nodeScanID string, cancelled bool, err error) {
+	var node *string
+	err = s.pool.QueryRow(ctx,
+		`UPDATE scans SET state = $1, error = $2, finished_at = now()
+		  WHERE id = $3 AND state IN `+scanCancellableStates+`
+		 RETURNING node_scan_id`,
+		types.ScanCancelled, reason, id,
+	).Scan(&node)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return deref(node), true, nil
+}
+
+// DeleteScan removes a scan row (its findings occurrences cascade via the FK;
+// lifecycle references are set NULL). It refuses to delete a queued/running scan
+// — that must be cancelled first — returning ErrConflict so the in-flight
+// orchestrator goroutine never writes to a deleted row. It returns the scan's
+// archived raw-object key (if any) so the caller can best-effort purge storage.
+func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey string, err error) {
+	var key *string
+	var state string
+	err = s.pool.QueryRow(ctx, `SELECT state, raw_object_key FROM scans WHERE id = $1`, id).Scan(&state, &key)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", ErrNotFound
+		}
+		return "", err
+	}
+	if state == string(types.ScanQueued) || state == string(types.ScanRunning) {
+		return "", ErrConflict
+	}
+	if _, err := s.pool.Exec(ctx, `DELETE FROM scans WHERE id = $1`, id); err != nil {
+		return "", err
+	}
+	return deref(key), nil
 }
 
 // FindingRow is a single per-scan occurrence as returned to API callers (the

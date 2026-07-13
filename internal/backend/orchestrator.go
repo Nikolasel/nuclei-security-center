@@ -234,6 +234,20 @@ func (o *Orchestrator) archiveRaw(ctx context.Context, scanID string, raw *os.Fi
 	o.log.Info("archived raw output", "scan_id", scanID, "key", key, "bytes", size)
 }
 
+// SignalNodeCancel best-effort asks the scanner node to abort a running scan.
+// The backend has already recorded state=cancelled (store.CancelScan is the
+// authority), so a node that can't be reached only means the run keeps burning
+// until its own timeout — never a correctness problem. Errors are logged, not
+// returned.
+func (o *Orchestrator) SignalNodeCancel(ctx context.Context, nodeScanID string) {
+	if nodeScanID == "" {
+		return // never dispatched (still queued) — nothing running on a node
+	}
+	if err := o.client.Cancel(ctx, nodeScanID); err != nil {
+		o.log.Warn("signal node cancel", "node_scan_id", nodeScanID, "err", err)
+	}
+}
+
 func (o *Orchestrator) failScan(ctx context.Context, scanID, reason string) {
 	o.log.Error("scan failed", "scan_id", scanID, "reason", reason)
 	err := retryWrite(ctx, terminalWriteAttempts, terminalWriteDelay, func() error {

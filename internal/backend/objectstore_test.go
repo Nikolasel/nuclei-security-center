@@ -30,6 +30,13 @@ func (m *memStore) Put(_ context.Context, key string, r io.Reader, _ int64, _ st
 	return nil
 }
 
+func (m *memStore) Delete(_ context.Context, key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.objects, key)
+	return nil
+}
+
 func (m *memStore) Get(_ context.Context, key string) (io.ReadCloser, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

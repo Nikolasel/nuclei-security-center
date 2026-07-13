@@ -26,8 +26,24 @@ curl -sb jar.txt localhost:8080/api/scans/<scan_id>
 curl -sb jar.txt "localhost:8080/api/scans/<scan_id>/findings" | jq
 ```
 
+Each scan record carries the `target_id` / `target_name` / `target_host_count` it ran against
+(all absent for an ad-hoc `spec` scan, or once the target has been deleted — scan history
+survives), so a queued/running scan is identifiable before any findings appear.
+
 An empty body (or targets outside every approved target) is rejected `400` — there is no
 implicit default scan, so the scanner can't be fat-fingered at out-of-scope assets.
+
+**Stop / delete.** A queued or running scan can be stopped (operator); the backend marks it
+`cancelled` and best-effort signals the node to abort the run. A terminal scan can be deleted
+(admin) — its findings occurrences cascade away and the archived raw output is purged
+best-effort; a running scan must be cancelled first (`409`).
+
+```sh
+# stop a queued/running scan (operator). 409 if it's already terminal, 404 if unknown.
+curl -sb jar.txt -X POST localhost:8080/api/scans/<scan_id>/cancel   # => 204
+# delete a terminal scan record (admin). 409 if it's still queued/running.
+curl -sb jar.txt -X DELETE localhost:8080/api/scans/<scan_id>        # => 204
+```
 
 Override the stored target/templates with an ad-hoc spec (note the `spec` wrapper). Every host
 in `spec.targets` must still fall inside an approved target — here `scanme.sh` must already

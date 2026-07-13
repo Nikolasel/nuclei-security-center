@@ -9,10 +9,11 @@ import "github.com/google/uuid"
 type ScanState string
 
 const (
-	ScanQueued   ScanState = "queued"   // backend-only: created, not yet dispatched
-	ScanRunning  ScanState = "running"  // dispatched to a node and executing
-	ScanComplete ScanState = "complete" // finished, results ingested
-	ScanFailed   ScanState = "failed"   // dispatch/run/ingest error
+	ScanQueued    ScanState = "queued"    // backend-only: created, not yet dispatched
+	ScanRunning   ScanState = "running"   // dispatched to a node and executing
+	ScanComplete  ScanState = "complete"  // finished, results ingested
+	ScanFailed    ScanState = "failed"    // dispatch/run/ingest error
+	ScanCancelled ScanState = "cancelled" // operator stopped it before completion
 )
 
 // ScanSpec is the request body for POST /v1/scans on the scanner node. It is

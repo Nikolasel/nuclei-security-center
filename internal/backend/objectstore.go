@@ -27,6 +27,9 @@ type ObjectStore interface {
 	Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error
 	// Get opens key for reading. It returns ErrObjectNotFound if the key is absent.
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
+	// Delete removes key. Removing an absent key is not an error (idempotent), so
+	// a best-effort purge after deleting a scan stays simple.
+	Delete(ctx context.Context, key string) error
 }
 
 // ErrObjectNotFound is returned by Get when the key does not exist.
@@ -141,6 +144,13 @@ func (m *minioStore) Put(ctx context.Context, key string, r io.Reader, size int6
 	_, err := m.client.PutObject(ctx, m.bucket, key, r, size, minio.PutObjectOptions{ContentType: contentType})
 	if err != nil {
 		return fmt.Errorf("put %q: %w", key, err)
+	}
+	return nil
+}
+
+func (m *minioStore) Delete(ctx context.Context, key string) error {
+	if err := m.client.RemoveObject(ctx, m.bucket, key, minio.RemoveObjectOptions{}); err != nil {
+		return fmt.Errorf("delete %q: %w", key, err)
 	}
 	return nil
 }

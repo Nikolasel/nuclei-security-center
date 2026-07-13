@@ -68,7 +68,11 @@ function RunScanModal({ onClose }: { onClose: () => void }) {
 export function ScansPage() {
   const me = useMe();
   const canRun = hasRole(me.data ?? undefined, "operator");
+  const canCancel = canRun;
+  const canDelete = hasRole(me.data ?? undefined, "admin");
+  const showActions = canCancel || canDelete;
   const [runOpen, setRunOpen] = useState(false);
+  const qc = useQueryClient();
 
   const scans = useQuery({
     queryKey: ["scans"],
@@ -78,6 +82,11 @@ export function ScansPage() {
       return active ? 2000 : false;
     },
   });
+
+  const invalidate = () => void qc.invalidateQueries({ queryKey: ["scans"] });
+  const cancel = useMutation({ mutationFn: (id: string) => api.cancelScan(id), onSuccess: invalidate });
+  const del = useMutation({ mutationFn: (id: string) => api.deleteScan(id), onSuccess: invalidate });
+  const colCount = 6 + (showActions ? 1 : 0);
 
   return (
     <div className="space-y-4">
@@ -101,10 +110,12 @@ export function ScansPage() {
               <thead>
                 <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
                   <th className="px-3 py-2 font-medium">Scan</th>
+                  <th className="px-3 py-2 font-medium">Target</th>
                   <th className="px-3 py-2 font-medium">State</th>
                   <th className="px-3 py-2 font-medium">Started</th>
                   <th className="px-3 py-2 font-medium">Finished</th>
                   <th className="px-3 py-2 font-medium">Nuclei</th>
+                  {showActions && <th className="px-3 py-2" />}
                 </tr>
               </thead>
               <tbody>
@@ -119,6 +130,21 @@ export function ScansPage() {
                       </Link>
                     </td>
                     <td className="px-3 py-2">
+                      {s.target_name ? (
+                        <span>
+                          {s.target_name}
+                          {s.target_host_count ? (
+                            <span className="text-neutral-400">
+                              {" "}
+                              ({s.target_host_count} host{s.target_host_count === 1 ? "" : "s"})
+                            </span>
+                          ) : null}
+                        </span>
+                      ) : (
+                        <span className="text-neutral-400">ad-hoc</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
                       <StateBadge state={s.state} />
                     </td>
                     <td className="px-3 py-2 text-neutral-500">{new Date(s.created_at).toLocaleString()}</td>
@@ -126,11 +152,39 @@ export function ScansPage() {
                       {s.finished_at ? new Date(s.finished_at).toLocaleString() : "—"}
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-neutral-500">{s.nuclei_version || "—"}</td>
+                    {showActions && (
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        {canCancel && (s.state === "queued" || s.state === "running") && (
+                          <Button
+                            variant="ghost"
+                            disabled={cancel.isPending}
+                            onClick={() => {
+                              if (confirm(`Stop scan ${s.id.slice(0, 8)}?`)) cancel.mutate(s.id);
+                            }}
+                          >
+                            Stop
+                          </Button>
+                        )}
+                        {canDelete && s.state !== "queued" && s.state !== "running" && (
+                          <Button
+                            variant="ghost"
+                            className="text-red-600 dark:text-red-400"
+                            disabled={del.isPending}
+                            onClick={() => {
+                              if (confirm(`Delete scan ${s.id.slice(0, 8)}? This removes its findings occurrences and archived output.`))
+                                del.mutate(s.id);
+                            }}
+                          >
+                            Delete
+                          </Button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
                 {(scans.data ?? []).length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-3 py-8 text-center text-neutral-400">
+                    <td colSpan={colCount} className="px-3 py-8 text-center text-neutral-400">
                       No scans yet.
                     </td>
                   </tr>

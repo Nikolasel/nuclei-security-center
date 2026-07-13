@@ -80,11 +80,15 @@ export const ASSIGNABLE_ROLES = ["viewer", "operator", "admin"] as const;
  *  0 means no expiry. */
 export const DEFAULT_TOKEN_TTL_DAYS = 90;
 
-export type ScanState = "queued" | "running" | "complete" | "failed";
+export type ScanState = "queued" | "running" | "complete" | "failed" | "cancelled";
 
 export interface Scan {
   id: string;
   state: ScanState;
+  /** the stored target the scan ran against; absent for an ad-hoc spec scan. */
+  target_id?: string;
+  target_name?: string;
+  target_host_count?: number;
   nuclei_version?: string;
   templates_commit?: string;
   error?: string;
@@ -345,6 +349,8 @@ export const api = {
   getScan: (id: string) => request<Scan>("GET", `/api/scans/${id}`),
   createScan: (body: { target_id?: string; template_set_id?: string }) =>
     request<{ scan_id: string }>("POST", "/api/scans", body),
+  cancelScan: (id: string) => request<void>("POST", `/api/scans/${id}/cancel`),
+  deleteScan: (id: string) => request<void>("DELETE", `/api/scans/${id}`),
 
   listFindings: (q: FindingsQuery = {}) => {
     const p = new URLSearchParams();

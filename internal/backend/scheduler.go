@@ -129,18 +129,23 @@ func (s *Scheduler) dispatch(ctx context.Context, sc store.Schedule, now time.Ti
 		return
 	}
 
+	// A single-target schedule dispatches one scan; a target-group schedule fans
+	// out to one per member (#13). last_scan_id records the first dispatched scan.
 	scanID := ""
-	spec, link, err := s.srv.resolveConfigSpec(ctx, sc.TargetID, sc.TemplateSetID)
+	jobs, err := s.srv.scheduleScanJobs(ctx, sc)
 	if err != nil {
 		log.Error("resolve schedule config", "err", err)
 	} else {
-		link.Source = "schedule"
-		link.ScheduleID = sc.ID
-		scanID, err = s.srv.orch.Submit(ctx, spec, link)
-		if err != nil {
-			log.Error("dispatch scheduled scan", "err", err)
-		} else {
-			log.Info("scheduled scan dispatched", "scan_id", scanID, "next_run", next)
+		for _, j := range jobs {
+			id, serr := s.srv.orch.Submit(ctx, j.spec, j.link)
+			if serr != nil {
+				log.Error("dispatch scheduled scan", "err", serr)
+				continue
+			}
+			if scanID == "" {
+				scanID = id
+			}
+			log.Info("scheduled scan dispatched", "scan_id", id, "target_id", j.link.TargetID, "next_run", next)
 		}
 	}
 

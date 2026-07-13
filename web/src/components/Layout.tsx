@@ -9,6 +9,7 @@ const nav = [
   { to: "/scans", label: "Scans" },
   { to: "/schedules", label: "Schedules" },
   { to: "/targets", label: "Targets" },
+  { to: "/target-groups", label: "Target Groups" },
   { to: "/template-sets", label: "Template Sets" },
 ];
 

@@ -22,10 +22,13 @@ function fmt(iso?: string): string {
 function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: () => void }) {
   const qc = useQueryClient();
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
+  const targetGroups = useQuery({ queryKey: ["target-groups"], queryFn: () => api.listTargetGroups() });
   const templateSets = useQuery({ queryKey: ["template-sets"], queryFn: () => api.listTemplateSets() });
 
   const [name, setName] = useState(existing?.name ?? "");
+  const [scope, setScope] = useState<"target" | "group">(existing?.target_group_id ? "group" : "target");
   const [targetId, setTargetId] = useState(existing?.target_id ?? "");
+  const [groupId, setGroupId] = useState(existing?.target_group_id ?? "");
   const [templateSetId, setTemplateSetId] = useState(existing?.template_set_id ?? "");
   const [cron, setCron] = useState(existing?.cron ?? "0 3 * * *");
   const [enabled, setEnabled] = useState(existing?.enabled ?? true);
@@ -34,7 +37,8 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
     mutationFn: () => {
       const body: Partial<Schedule> = {
         name: name.trim(),
-        target_id: targetId,
+        target_id: scope === "target" ? targetId : undefined,
+        target_group_id: scope === "group" ? groupId : undefined,
         template_set_id: templateSetId || undefined,
         cron: cron.trim(),
         enabled,
@@ -47,7 +51,7 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
     },
   });
 
-  const canSave = name.trim() && targetId && cron.trim();
+  const canSave = name.trim() && (scope === "group" ? groupId : targetId) && cron.trim();
 
   return (
     <Modal open onOpenChange={(v) => !v && onClose()} title={existing ? "Edit schedule" : "New schedule"}>
@@ -55,16 +59,41 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
         <Field label="Name">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="nightly-prod" />
         </Field>
-        <Field label="Target">
-          <Select value={targetId} onChange={(e) => setTargetId(e.target.value)} className="w-full">
-            <option value="">Select a target…</option>
-            {(targets.data ?? []).map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </Select>
+        <Field label="Scope">
+          <div className="flex gap-4 text-sm">
+            <label className="flex items-center gap-1.5">
+              <input type="radio" checked={scope === "target"} onChange={() => setScope("target")} />
+              Single target
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input type="radio" checked={scope === "group"} onChange={() => setScope("group")} />
+              Target group
+            </label>
+          </div>
         </Field>
+        {scope === "target" ? (
+          <Field label="Target">
+            <Select value={targetId} onChange={(e) => setTargetId(e.target.value)} className="w-full">
+              <option value="">Select a target…</option>
+              {(targets.data ?? []).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        ) : (
+          <Field label="Target group (fans out to every member)">
+            <Select value={groupId} onChange={(e) => setGroupId(e.target.value)} className="w-full">
+              <option value="">Select a group…</option>
+              {(targetGroups.data ?? []).map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name} ({g.members.length} target{g.members.length === 1 ? "" : "s"})
+                </option>
+              ))}
+            </Select>
+          </Field>
+        )}
         <Field label="Template set (optional — all templates if unset)">
           <Select value={templateSetId} onChange={(e) => setTemplateSetId(e.target.value)} className="w-full">
             <option value="">All templates</option>
@@ -115,7 +144,18 @@ export function SchedulesPage() {
 
   const q = useQuery({ queryKey: ["schedules"], queryFn: () => api.listSchedules() });
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
-  const targetName = (id: string) => targets.data?.find((t) => t.id === id)?.name ?? id.slice(0, 8);
+  const targetGroups = useQuery({ queryKey: ["target-groups"], queryFn: () => api.listTargetGroups() });
+  // A schedule scopes to either a single target or a target group; render whichever it uses.
+  const scopeLabel = (s: Schedule) => {
+    if (s.target_group_id) {
+      const g = targetGroups.data?.find((g) => g.id === s.target_group_id);
+      return g ? `${g.name} (group)` : `${s.target_group_id.slice(0, 8)} (group)`;
+    }
+    if (s.target_id) {
+      return targets.data?.find((t) => t.id === s.target_id)?.name ?? s.target_id.slice(0, 8);
+    }
+    return "—";
+  };
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ["schedules"] });
   const del = useMutation({ mutationFn: (id: string) => api.deleteSchedule(id), onSuccess: invalidate });
@@ -123,7 +163,8 @@ export function SchedulesPage() {
     mutationFn: (s: Schedule) =>
       api.updateSchedule(s.id, {
         name: s.name,
-        target_id: s.target_id,
+        target_id: s.target_id || undefined,
+        target_group_id: s.target_group_id || undefined,
         template_set_id: s.template_set_id || undefined,
         cron: s.cron,
         enabled: !s.enabled,
@@ -169,7 +210,7 @@ export function SchedulesPage() {
                 {(q.data ?? []).map((s) => (
                   <tr key={s.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
                     <td className="px-3 py-2 font-medium">{s.name}</td>
-                    <td className="px-3 py-2 text-neutral-600 dark:text-neutral-400">{targetName(s.target_id)}</td>
+                    <td className="px-3 py-2 text-neutral-600 dark:text-neutral-400">{scopeLabel(s)}</td>
                     <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">{s.cron}</td>
                     <td className="px-3 py-2">
                       {s.enabled ? (

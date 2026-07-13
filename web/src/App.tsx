@@ -7,6 +7,7 @@ import { FindingsPage } from "./pages/FindingsPage";
 import { ScansPage } from "./pages/ScansPage";
 import { ScanDetailPage } from "./pages/ScanDetailPage";
 import { SchedulesPage } from "./pages/SchedulesPage";
+import { TargetGroupsPage } from "./pages/TargetGroupsPage";
 import { TargetsPage } from "./pages/TargetsPage";
 import { TemplateSetsPage } from "./pages/TemplateSetsPage";
 
@@ -53,6 +54,7 @@ export default function App() {
         <Route path="/scans/:id" element={<ScanDetailPage />} />
         <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/targets" element={<TargetsPage />} />
+        <Route path="/target-groups" element={<TargetGroupsPage />} />
         <Route path="/template-sets" element={<TemplateSetsPage />} />
         <Route path="*" element={<Navigate to="/findings" replace />} />
       </Routes>

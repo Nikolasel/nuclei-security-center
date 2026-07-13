@@ -16,9 +16,12 @@ import (
 // and NextRunAt computation live in the backend layer, so this struct just
 // stores the results. LastScanID/LastRunAt record the most recent dispatch.
 type Schedule struct {
-	ID            string     `json:"id"`
-	Name          string     `json:"name"`
-	TargetID      string     `json:"target_id"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Exactly one of TargetID / TargetGroupID is set: a schedule targets either a
+	// single target or a target group (which fans out to every member, #13).
+	TargetID      string     `json:"target_id,omitempty"`
+	TargetGroupID string     `json:"target_group_id,omitempty"`
 	TemplateSetID string     `json:"template_set_id,omitempty"`
 	Cron          string     `json:"cron"`
 	Enabled       bool       `json:"enabled"`
@@ -30,18 +33,20 @@ type Schedule struct {
 	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
-const scheduleCols = `id, name, target_id, template_set_id, cron, enabled,
+const scheduleCols = `id, name, target_id, target_group_id, template_set_id, cron, enabled,
 	next_run_at, last_run_at, last_scan_id, created_by, created_at, updated_at`
 
 // scanSchedule reads one schedule row (column order must match scheduleCols).
 func scanSchedule(row pgx.Row) (Schedule, error) {
 	var s Schedule
-	var templateSetID, lastScanID, createdBy *string
-	err := row.Scan(&s.ID, &s.Name, &s.TargetID, &templateSetID, &s.Cron, &s.Enabled,
+	var targetID, targetGroupID, templateSetID, lastScanID, createdBy *string
+	err := row.Scan(&s.ID, &s.Name, &targetID, &targetGroupID, &templateSetID, &s.Cron, &s.Enabled,
 		&s.NextRunAt, &s.LastRunAt, &lastScanID, &createdBy, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		return Schedule{}, err
 	}
+	s.TargetID = deref(targetID)
+	s.TargetGroupID = deref(targetGroupID)
 	s.TemplateSetID = deref(templateSetID)
 	s.LastScanID = deref(lastScanID)
 	s.CreatedBy = deref(createdBy)
@@ -53,11 +58,11 @@ func scanSchedule(row pgx.Row) (Schedule, error) {
 func (s *Store) CreateSchedule(ctx context.Context, in Schedule) (Schedule, error) {
 	in.ID = types.NewID()
 	row := s.pool.QueryRow(ctx,
-		`INSERT INTO schedules (id, name, target_id, template_set_id, cron, enabled, next_run_at, created_by)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`INSERT INTO schedules (id, name, target_id, target_group_id, template_set_id, cron, enabled, next_run_at, created_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING `+scheduleCols,
-		in.ID, in.Name, in.TargetID, nullStr(in.TemplateSetID), in.Cron, in.Enabled,
-		in.NextRunAt, nullStr(in.CreatedBy),
+		in.ID, in.Name, nullStr(in.TargetID), nullStr(in.TargetGroupID), nullStr(in.TemplateSetID),
+		in.Cron, in.Enabled, in.NextRunAt, nullStr(in.CreatedBy),
 	)
 	out, err := scanSchedule(row)
 	if err != nil {
@@ -108,11 +113,12 @@ func (s *Store) ListSchedules(ctx context.Context) ([]Schedule, error) {
 func (s *Store) UpdateSchedule(ctx context.Context, id string, in Schedule) (Schedule, error) {
 	row := s.pool.QueryRow(ctx,
 		`UPDATE schedules
-		 SET name = $2, target_id = $3, template_set_id = $4, cron = $5, enabled = $6,
-		     next_run_at = $7, updated_at = now()
+		 SET name = $2, target_id = $3, target_group_id = $4, template_set_id = $5, cron = $6,
+		     enabled = $7, next_run_at = $8, updated_at = now()
 		 WHERE id = $1
 		 RETURNING `+scheduleCols,
-		id, in.Name, in.TargetID, nullStr(in.TemplateSetID), in.Cron, in.Enabled, in.NextRunAt,
+		id, in.Name, nullStr(in.TargetID), nullStr(in.TargetGroupID), nullStr(in.TemplateSetID),
+		in.Cron, in.Enabled, in.NextRunAt,
 	)
 	out, err := scanSchedule(row)
 	if err != nil {

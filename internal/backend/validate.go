@@ -106,16 +106,18 @@ func validateTemplatePath(p string) error {
 
 // validateSchedule trims and checks a schedule in place. The cron expression is
 // validated against the same parser the ticker uses, so a schedule that saves is
-// one the ticker can run. Target/template-set existence is enforced by the store
-// (FK → ErrNotFound); here we only require a target_id to be present.
+// one the ticker can run. Target/group/template-set existence is enforced by the
+// store (FK → ErrNotFound); here we only require exactly one of target_id /
+// target_group_id (matching the DB CHECK) so a schedule names a single scan scope.
 func validateSchedule(s *store.Schedule) error {
 	s.Name = strings.TrimSpace(s.Name)
 	if s.Name == "" {
 		return errors.New("name is required")
 	}
 	s.TargetID = strings.TrimSpace(s.TargetID)
-	if s.TargetID == "" {
-		return errors.New("target_id is required")
+	s.TargetGroupID = strings.TrimSpace(s.TargetGroupID)
+	if (s.TargetID == "") == (s.TargetGroupID == "") {
+		return errors.New("exactly one of target_id or target_group_id is required")
 	}
 	s.TemplateSetID = strings.TrimSpace(s.TemplateSetID)
 	s.Cron = strings.TrimSpace(s.Cron)

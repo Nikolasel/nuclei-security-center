@@ -173,7 +173,9 @@ the other system's API) applied to a different consumer.
 
 ## Schedules
 
-A schedule runs a target (+ optional template set) on a **cron** cadence, unattended. A backend
+A schedule runs a target — or a [target group](#target-groups), fanning out to every member —
+(+ optional template set) on a **cron** cadence, unattended. A schedule names **exactly one** of
+`target_id` / `target_group_id`. A backend
 ticker wakes each minute and dispatches the schedules whose next fire time has arrived — through
 the same path as an ad-hoc scan, so scheduled scans are tracked in the finding lifecycle exactly
 like manual ones (a scheduled scan carries `source: "schedule"`). Postgres is the source of
@@ -196,7 +198,7 @@ curl -sb jar.txt localhost:8080/api/schedules | jq
 curl -sb jar.txt -X PUT localhost:8080/api/schedules/<id> -H 'content-type: application/json' \
   -d '{"name":"nightly-prod","target_id":"<target_id>","cron":"0 3 * * *","enabled":false}'
 # dispatch once now, off-schedule (leaves the cron cadence untouched)
-curl -sb jar.txt -X POST localhost:8080/api/schedules/<id>/run     # => {"scan_id":"..."}
+curl -sb jar.txt -X POST localhost:8080/api/schedules/<id>/run     # => {"scan_ids":[...]}
 curl -sb jar.txt -X DELETE localhost:8080/api/schedules/<id>       # remove
 ```
 
@@ -220,6 +222,27 @@ curl -sb jar.txt -X POST localhost:8080/api/scans -d '{"target_id":"<id>","templ
 Both resources support the full REST set: `GET|POST /api/targets`,
 `GET|PUT|DELETE /api/targets/{id}` (and likewise `/api/template-sets`). Deleting a target or
 template set nulls the link on past scans but never deletes scan history.
+
+### Target groups
+
+A **target group** is a named static set of existing targets, so a scan or schedule can run
+against several targets at once — it fans out to **one scan per member target**. A group is a
+convenience subset of the scope allowlist, **not** a new scope source: the guardrail is still the
+union of every target's hosts.
+
+```sh
+# create a group from existing target ids
+curl -sb jar.txt -X POST localhost:8080/api/target-groups \
+  -H 'content-type: application/json' -d '{"name":"prod-external","target_ids":["<id1>","<id2>"]}'
+# run a scan against the whole group (fan-out) — returns one scan id per member
+curl -sb jar.txt -X POST localhost:8080/api/scans \
+  -H 'content-type: application/json' -d '{"target_group_id":"<group_id>"}'   # => {"scan_ids":[...]}
+```
+
+Full REST set: `GET|POST /api/target-groups`, `GET|PUT|DELETE /api/target-groups/{id}` (reads
+viewer, create/update operator, delete admin). `target_group_id` on `POST /api/scans` is mutually
+exclusive with `target_id` / `spec`. A schedule likewise names **either** a `target_id` **or** a
+`target_group_id` (see [Schedules](#schedules)).
 
 ## Scope guardrail
 

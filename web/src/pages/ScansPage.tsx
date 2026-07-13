@@ -9,36 +9,70 @@ function RunScanModal({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
+  const targetGroups = useQuery({ queryKey: ["target-groups"], queryFn: () => api.listTargetGroups() });
   const templateSets = useQuery({ queryKey: ["template-sets"], queryFn: () => api.listTemplateSets() });
+  const [scope, setScope] = useState<"target" | "group">("target");
   const [targetId, setTargetId] = useState("");
+  const [groupId, setGroupId] = useState("");
   const [templateSetId, setTemplateSetId] = useState("");
 
   const run = useMutation({
     mutationFn: () =>
-      api.createScan({ target_id: targetId, template_set_id: templateSetId || undefined }),
+      api.createScan(
+        scope === "group"
+          ? { target_group_id: groupId, template_set_id: templateSetId || undefined }
+          : { target_id: targetId, template_set_id: templateSetId || undefined },
+      ),
     onSuccess: (res) => {
       void qc.invalidateQueries({ queryKey: ["scans"] });
       onClose();
-      navigate(`/scans/${res.scan_id}`);
+      // A single scan navigates to its detail; a group fan-out returns to the list.
+      if (res.scan_id) navigate(`/scans/${res.scan_id}`);
     },
   });
 
   const selectCls =
     "w-full rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-800";
+  const canRun = scope === "group" ? !!groupId : !!targetId;
 
   return (
     <Modal open onOpenChange={(v) => !v && onClose()} title="Run scan">
       <div className="space-y-4">
-        <Field label="Target (scope allowlist)">
-          <select value={targetId} onChange={(e) => setTargetId(e.target.value)} className={selectCls}>
-            <option value="">Select a target…</option>
-            {(targets.data ?? []).map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name} ({t.hosts.length} host{t.hosts.length === 1 ? "" : "s"})
-              </option>
-            ))}
-          </select>
+        <Field label="Scope">
+          <div className="flex gap-4 text-sm">
+            <label className="flex items-center gap-1.5">
+              <input type="radio" checked={scope === "target"} onChange={() => setScope("target")} />
+              Single target
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input type="radio" checked={scope === "group"} onChange={() => setScope("group")} />
+              Target group
+            </label>
+          </div>
         </Field>
+        {scope === "target" ? (
+          <Field label="Target (scope allowlist)">
+            <select value={targetId} onChange={(e) => setTargetId(e.target.value)} className={selectCls}>
+              <option value="">Select a target…</option>
+              {(targets.data ?? []).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.hosts.length} host{t.hosts.length === 1 ? "" : "s"})
+                </option>
+              ))}
+            </select>
+          </Field>
+        ) : (
+          <Field label="Target group (fans out to every member)">
+            <select value={groupId} onChange={(e) => setGroupId(e.target.value)} className={selectCls}>
+              <option value="">Select a group…</option>
+              {(targetGroups.data ?? []).map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name} ({g.members.length} target{g.members.length === 1 ? "" : "s"})
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         <Field label="Template set (optional)">
           <select
             value={templateSetId}
@@ -56,7 +90,7 @@ function RunScanModal({ onClose }: { onClose: () => void }) {
         {run.isError && <ErrorText error={run.error} />}
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!targetId || run.isPending} onClick={() => run.mutate()}>
+          <Button variant="primary" disabled={!canRun || run.isPending} onClick={() => run.mutate()}>
             {run.isPending ? "Starting…" : "Run scan"}
           </Button>
         </div>

@@ -31,13 +31,33 @@ export interface TemplateSet {
   updated_at: string;
 }
 
-// Schedule ties a target (+ optional template set) to a cron expression. The
-// backend ticker dispatches schedules whose next_run_at has arrived. next_run_at
-// is null when disabled; last_run_at/last_scan_id record the most recent run.
+// TargetGroupMember is a lightweight summary of a member target.
+export interface TargetGroupMember {
+  id: string;
+  name: string;
+  host_count: number;
+}
+
+// TargetGroup is a named static set of targets (#13); scans and schedules can
+// fan out across its members.
+export interface TargetGroup {
+  id: string;
+  name: string;
+  members: TargetGroupMember[];
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// Schedule ties a target OR a target group (+ optional template set) to a cron
+// expression. The backend ticker dispatches schedules whose next_run_at has
+// arrived. next_run_at is null when disabled; last_run_at/last_scan_id record the
+// most recent run. Exactly one of target_id / target_group_id is set.
 export interface Schedule {
   id: string;
   name: string;
-  target_id: string;
+  target_id?: string;
+  target_group_id?: string;
   template_set_id?: string;
   cron: string;
   enabled: boolean;
@@ -287,6 +307,13 @@ export const api = {
     request<Target>("PUT", `/api/targets/${id}`, t),
   deleteTarget: (id: string) => request<void>("DELETE", `/api/targets/${id}`),
 
+  listTargetGroups: () => request<TargetGroup[]>("GET", "/api/target-groups"),
+  createTargetGroup: (body: { name: string; target_ids: string[] }) =>
+    request<TargetGroup>("POST", "/api/target-groups", body),
+  updateTargetGroup: (id: string, body: { name: string; target_ids: string[] }) =>
+    request<TargetGroup>("PUT", `/api/target-groups/${id}`, body),
+  deleteTargetGroup: (id: string) => request<void>("DELETE", `/api/target-groups/${id}`),
+
   listTemplateSets: () => request<TemplateSet[]>("GET", "/api/template-sets"),
   createTemplateSet: (t: Partial<TemplateSet>) =>
     request<TemplateSet>("POST", "/api/template-sets", t),
@@ -300,12 +327,14 @@ export const api = {
     request<Schedule>("PUT", `/api/schedules/${id}`, s),
   deleteSchedule: (id: string) => request<void>("DELETE", `/api/schedules/${id}`),
   runSchedule: (id: string) =>
-    request<{ scan_id: string }>("POST", `/api/schedules/${id}/run`),
+    request<{ scan_ids: string[] }>("POST", `/api/schedules/${id}/run`),
 
   listScans: () => request<Scan[]>("GET", "/api/scans"),
   getScan: (id: string) => request<Scan>("GET", `/api/scans/${id}`),
-  createScan: (body: { target_id?: string; template_set_id?: string }) =>
-    request<{ scan_id: string }>("POST", "/api/scans", body),
+  // A single target/spec scan returns {scan_id}; a target-group scan fans out and
+  // returns {scan_ids}.
+  createScan: (body: { target_id?: string; target_group_id?: string; template_set_id?: string }) =>
+    request<{ scan_id?: string; scan_ids?: string[] }>("POST", "/api/scans", body),
 
   listFindings: (q: FindingsQuery = {}) => {
     const p = new URLSearchParams();

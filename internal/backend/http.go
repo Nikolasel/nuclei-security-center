@@ -80,6 +80,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/targets/{id}", s.mutation(eventConfigChanged, "target.update", "target", RoleOperator, s.handleUpdateTarget))
 	mux.HandleFunc("DELETE /api/targets/{id}", s.mutation(eventConfigChanged, "target.delete", "target", RoleAdmin, s.handleDeleteTarget))
 
+	// Target groups (config, #13) — a named static set of targets that scans and
+	// schedules can fan out across. Same RBAC as targets: reads viewer, CUD
+	// operator, delete admin.
+	mux.HandleFunc("GET /api/target-groups", s.requireRole(RoleViewer, s.handleListTargetGroups))
+	mux.HandleFunc("POST /api/target-groups", s.mutation(eventConfigChanged, "target_group.create", "target_group", RoleOperator, s.handleCreateTargetGroup))
+	mux.HandleFunc("GET /api/target-groups/{id}", s.requireRole(RoleViewer, s.handleGetTargetGroup))
+	mux.HandleFunc("PUT /api/target-groups/{id}", s.mutation(eventConfigChanged, "target_group.update", "target_group", RoleOperator, s.handleUpdateTargetGroup))
+	mux.HandleFunc("DELETE /api/target-groups/{id}", s.mutation(eventConfigChanged, "target_group.delete", "target_group", RoleAdmin, s.handleDeleteTargetGroup))
+
 	// Schedules (config) — cron-driven scans. Reads → viewer; create/edit/run →
 	// operator; delete → admin (matches targets/template-sets). Run is a dispatch.
 	mux.HandleFunc("GET /api/schedules", s.requireRole(RoleViewer, s.handleListSchedules))
@@ -116,11 +125,11 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, identityFrom(r.Context()))
 }
 
-// createScanRequest launches a scan one of three ways: from a stored target
-// (+ optional template set), from an ad-hoc raw spec, or — with an empty body —
-// the default smoke-test scan.
+// createScanRequest launches a scan from a stored target (+ optional template
+// set), a target group (fanning out to every member, #13), or an ad-hoc raw spec.
 type createScanRequest struct {
 	TargetID      string          `json:"target_id"`
+	TargetGroupID string          `json:"target_group_id"`
 	TemplateSetID string          `json:"template_set_id"`
 	Spec          *types.ScanSpec `json:"spec"`
 }
@@ -135,6 +144,30 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Target group: fan out to one scan per member target.
+	if req.TargetGroupID != "" {
+		if req.TargetID != "" || req.Spec != nil {
+			http.Error(w, "target_group_id is mutually exclusive with target_id and spec", http.StatusBadRequest)
+			return
+		}
+		jobs, err := s.buildGroupScans(r.Context(), req.TargetGroupID, req.TemplateSetID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		ids := make([]string, 0, len(jobs))
+		for _, j := range jobs {
+			id, err := s.orch.Submit(r.Context(), j.spec, j.link)
+			if err != nil {
+				s.serverError(w, "submit scan", err)
+				return
+			}
+			ids = append(ids, id)
+		}
+		writeJSON(w, http.StatusAccepted, map[string][]string{"scan_ids": ids})
+		return
+	}
+
 	spec, link, err := s.buildScanSpec(r.Context(), req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -147,6 +180,76 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"scan_id": scanID})
+}
+
+// scanJob is one resolved (spec, link) pair ready to dispatch.
+type scanJob struct {
+	spec types.ScanSpec
+	link store.ScanLink
+}
+
+// scheduleScanJobs resolves a schedule into the scan jobs to dispatch: one for a
+// single-target schedule, or one per member for a target-group schedule (#13).
+// Each job's link is stamped with schedule provenance. Used by both the ticker
+// and the off-cycle run endpoint so they dispatch identically.
+func (s *Server) scheduleScanJobs(ctx context.Context, sc store.Schedule) ([]scanJob, error) {
+	var jobs []scanJob
+	switch {
+	case sc.TargetGroupID != "":
+		gj, err := s.buildGroupScans(ctx, sc.TargetGroupID, sc.TemplateSetID)
+		if err != nil {
+			return nil, err
+		}
+		jobs = gj
+	default:
+		spec, link, err := s.resolveConfigSpec(ctx, sc.TargetID, sc.TemplateSetID)
+		if err != nil {
+			return nil, err
+		}
+		jobs = []scanJob{{spec: spec, link: link}}
+	}
+	for i := range jobs {
+		jobs[i].link.Source = "schedule"
+		jobs[i].link.ScheduleID = sc.ID
+	}
+	return jobs, nil
+}
+
+// buildGroupScans resolves a target group into one scan job per member. The
+// template set is fetched once and shared. Errors here are user-facing (400):
+// unknown group, empty membership, unknown template set. Members come straight
+// from stored targets, so they're in-scope by construction (a group is a subset
+// of the scope allowlist, not a new scope source).
+func (s *Server) buildGroupScans(ctx context.Context, groupID, templateSetID string) ([]scanJob, error) {
+	members, err := s.store.GroupMemberTargets(ctx, groupID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, fmt.Errorf("unknown target_group_id %q", groupID)
+		}
+		return nil, err
+	}
+	if len(members) == 0 {
+		return nil, errors.New("target group has no members")
+	}
+	var selector types.TemplateSelector
+	if templateSetID != "" {
+		ts, err := s.store.GetTemplateSet(ctx, templateSetID)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return nil, fmt.Errorf("unknown template_set_id %q", templateSetID)
+			}
+			return nil, err
+		}
+		selector = ts.Selector()
+	}
+	jobs := make([]scanJob, 0, len(members))
+	for _, t := range members {
+		jobs = append(jobs, scanJob{
+			spec: types.ScanSpec{Targets: t.Hosts, Templates: selector, Options: defaultOptions()},
+			link: store.ScanLink{TargetID: t.ID, TemplateSetID: templateSetID},
+		})
+	}
+	return jobs, nil
 }
 
 // buildScanSpec resolves a createScanRequest into a concrete spec + config link.

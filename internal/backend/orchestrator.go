@@ -21,11 +21,16 @@ type Orchestrator struct {
 	store    *store.Store
 	client   *ScannerClient
 	archiver ObjectStore // nil when object storage is not configured
+	indexer  Indexer     // nil when no derived search index is configured (#21)
 	log      *slog.Logger
 
 	pollInterval time.Duration
 	maxPolls     int
 }
+
+// SetIndexer wires a derived-search-index sync (#21). When set, a completed
+// scan re-projects its target's findings into the index (best-effort).
+func (o *Orchestrator) SetIndexer(idx Indexer) { o.indexer = idx }
 
 // NewOrchestrator wires the store and scanner client together. archiver may be
 // nil, in which case raw output is ingested but not archived.
@@ -143,6 +148,14 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 		log.Error("mark complete", "err", err)
 	}
 	log.Info("scan complete", "findings", status.FindingCount)
+
+	// Sync the derived search index for this target (#21). Best-effort: Postgres
+	// is the system of record, so an index blip must not fail the scan.
+	if o.indexer != nil {
+		if err := o.indexer.ReindexTarget(ctx, targetID); err != nil {
+			log.Warn("reindex target to search index", "err", err)
+		}
+	}
 }
 
 // pollToDone polls the node until the scan reaches a terminal state.

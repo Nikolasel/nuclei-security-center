@@ -91,6 +91,12 @@ All four formats carry the lifecycle finding `id` as a shared join key (CSV colu
 SARIF `properties.nsc_lifecycle_id`, raw `_nsc_lifecycle_id`) so raw joins back to the projected data.
 Workflow dispositions (investigating / in-progress) are intentionally deferred (tracked as a GitHub issue).
 
+The findings list read path sits behind a `FindingsSearcher` interface
+(`internal/backend/findings_search.go`): Postgres by default, or an optional **OpenSearch derived
+index** (`opensearch.go`/`findings_index.go`, enabled by `OPENSEARCH_URL`) — a rebuildable search
+projection synced per-target on scan completion, with Postgres always the system of record. It's a
+scale answer, off by default.
+
 The JSON API is served under **`/api/*`**; the React SPA (in `web/`) is built by Vite and
 **embedded into the backend binary** (`go:embed`), served at `/` same-origin so the BFF
 session cookie stays same-site. `/healthz` stays at the root for probes.

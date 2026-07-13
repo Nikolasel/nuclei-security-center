@@ -34,6 +34,10 @@ deployment.
 | `S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` | backend | – | S3 credentials |
 | `S3_REGION` | backend | `us-east-1` | S3 region |
 | `S3_USE_SSL` | backend | `false` | use TLS to the S3 endpoint |
+| `OPENSEARCH_URL` | backend | – (unset ⇒ Postgres search) | OpenSearch cluster URL; setting it enables the derived findings index. See [Derived findings index](#derived-findings-index-opensearch) |
+| `OPENSEARCH_INDEX` | backend | `nsc-findings` | index name for the findings projection |
+| `OPENSEARCH_USER` / `OPENSEARCH_PASSWORD` | backend | – | optional basic-auth credentials for the cluster |
+| `OPENSEARCH_REINDEX_ON_START` | backend | `false` | when `true`, backfill the whole index from Postgres at startup |
 
 ## Authentication (OIDC/BFF)
 
@@ -84,3 +88,25 @@ object store — S3, GCS (S3 API), or Azure Blob:
 | AWS | S3 | `s3.<region>.amazonaws.com` |
 | GCP | GCS (S3-compat) | `storage.googleapis.com` |
 | Azure | Blob | via an S3 gateway or an `ObjectStore` swap (`gocloud.dev/blob`) |
+
+## Derived findings index (OpenSearch)
+
+Findings live in Postgres (`JSONB` + `pg_trgm` FTS), which is the system of record and the default
+search backend. When findings **search latency or volume outgrows Postgres**, point
+`OPENSEARCH_URL` at an OpenSearch cluster to serve the lifecycle findings list (`GET /api/findings`)
+from a derived index instead. This is a **scale answer, not day-one** — leave it unset otherwise.
+
+- **Projection, not source of truth.** Postgres stays authoritative; OpenSearch is a rebuildable
+  projection. The findings read path sits behind an interface, so this drops in with no change to
+  the API surface or the SPA.
+- **Sync.** A completed scan re-projects its target's lifecycle findings into the index
+  (best-effort — an index blip never fails a scan). Because the detection/effective state is derived
+  relative to a target's latest scan, syncing per **target** (not per finding) keeps the projection
+  correct when a new scan flips several of that target's findings.
+- **Backfill / rebuild.** Set `OPENSEARCH_REINDEX_ON_START=true` to rebuild the whole index from
+  Postgres at boot (also the recovery path if the index is lost or drifts). The index mapping is
+  created automatically on first use.
+- **Auth.** `OPENSEARCH_USER` / `OPENSEARCH_PASSWORD` supply optional basic auth; the client speaks
+  the OpenSearch REST API over the standard library (no extra client dependency).
+
+Unset `OPENSEARCH_URL` ⇒ search reads straight from Postgres, exactly as before.

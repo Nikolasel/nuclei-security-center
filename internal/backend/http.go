@@ -21,19 +21,25 @@ import (
 // OIDC/BFF auth (§6); when auth is nil (OIDC unconfigured) the guards fall back
 // to a dev identity with all roles, so local smoke tests still work.
 type Server struct {
-	store   *store.Store
-	orch    *Orchestrator
-	auth    *Authenticator
-	archive ObjectStore // nil when object storage is not configured
-	spa     http.Handler
-	log     *slog.Logger
+	store    *store.Store
+	orch     *Orchestrator
+	auth     *Authenticator
+	archive  ObjectStore      // nil when object storage is not configured
+	searcher FindingsSearcher // reads the findings list (Postgres by default; #21)
+	spa      http.Handler
+	log      *slog.Logger
 }
 
 // NewServer builds the backend HTTP server. auth may be nil to disable auth; spa
 // is the handler for the embedded frontend (served for all non-/api routes).
+// The findings searcher defaults to Postgres; SetFindingsSearcher swaps in a
+// derived index (OpenSearch).
 func NewServer(st *store.Store, orch *Orchestrator, auth *Authenticator, archive ObjectStore, spa http.Handler, log *slog.Logger) *Server {
-	return &Server{store: st, orch: orch, auth: auth, archive: archive, spa: spa, log: log}
+	return &Server{store: st, orch: orch, auth: auth, archive: archive, searcher: pgSearcher{store: st}, spa: spa, log: log}
 }
+
+// SetFindingsSearcher swaps the findings list/search backend (e.g. OpenSearch).
+func (s *Server) SetFindingsSearcher(searcher FindingsSearcher) { s.searcher = searcher }
 
 // defaultOptions are the sane rate/concurrency/timeout defaults applied when a
 // caller doesn't specify their own.
@@ -346,7 +352,11 @@ func (s *Server) handleListFindings(w http.ResponseWriter, r *http.Request) {
 	filter := lifecycleFilterFromQuery(q)
 	filter.Limit = limit
 	filter.Offset = offset
-	rows, total, err := s.store.ListLifecycleFindings(r.Context(), filter)
+	searcher := s.searcher
+	if searcher == nil {
+		searcher = pgSearcher{store: s.store}
+	}
+	rows, total, err := searcher.ListLifecycle(r.Context(), filter)
 	if err != nil {
 		s.serverError(w, "list lifecycle findings", err)
 		return

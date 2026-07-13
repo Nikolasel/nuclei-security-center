@@ -76,6 +76,14 @@ func main() {
 
 	apiSrv := backend.NewServer(st, orch, auth, archive, web.Handler(), log)
 
+	// Optional OpenSearch derived findings index (#21). Postgres stays the system
+	// of record; when OPENSEARCH_URL is set, search reads from the projection and
+	// completed scans sync their target into it. Unset ⇒ search reads Postgres.
+	if err := configureSearchIndex(ctx, st, orch, apiSrv, log); err != nil {
+		log.Error("configure search index", "err", err)
+		os.Exit(1)
+	}
+
 	// The scheduler ticker dispatches cron schedules; the DB is its source of
 	// truth so it resumes cleanly across restarts.
 	backend.NewScheduler(st, apiSrv, log).Start(ctx)
@@ -191,6 +199,37 @@ func buildObjectStore(ctx context.Context, log *slog.Logger) (backend.ObjectStor
 	}
 	log.Info("object storage enabled", "endpoint", endpoint, "bucket", cfg.Bucket)
 	return store, nil
+}
+
+// configureSearchIndex wires the OpenSearch derived findings index when
+// OPENSEARCH_URL is set: it ensures the index exists, points the API's search at
+// it, and hooks scan completion to sync the target. OPENSEARCH_REINDEX_ON_START
+// triggers a full backfill from Postgres at boot. Unset ⇒ no-op (Postgres search).
+func configureSearchIndex(ctx context.Context, st *store.Store, orch *backend.Orchestrator, srv *backend.Server, log *slog.Logger) error {
+	url := os.Getenv("OPENSEARCH_URL")
+	if url == "" {
+		return nil
+	}
+	index := envOr("OPENSEARCH_INDEX", "nsc-findings")
+	client := backend.NewOpenSearchClient(url, index, os.Getenv("OPENSEARCH_USER"), os.Getenv("OPENSEARCH_PASSWORD"))
+	if err := client.EnsureIndex(ctx); err != nil {
+		return err
+	}
+	indexer := backend.NewOpenSearchIndexer(client, st, log)
+	srv.SetFindingsSearcher(client)
+	orch.SetIndexer(indexer)
+	log.Info("OpenSearch findings index enabled", "url", url, "index", index)
+
+	if os.Getenv("OPENSEARCH_REINDEX_ON_START") == "true" {
+		go func() {
+			if err := indexer.ReindexAll(context.Background()); err != nil {
+				log.Error("backfill search index", "err", err)
+			} else {
+				log.Info("search index backfill complete")
+			}
+		}()
+	}
+	return nil
 }
 
 // startSessionSweeper periodically deletes expired sessions and auth flows.

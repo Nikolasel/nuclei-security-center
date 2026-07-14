@@ -156,7 +156,7 @@ Go is installed via Homebrew; use `/opt/homebrew/bin/go` (may not be on PATH in 
 /opt/homebrew/bin/gofmt -l .          # list unformatted files (fix with gofmt -w)
 ```
 
-Run the full stack (requires Docker — see constraint below):
+Run the full stack (requires Docker — see the environment notes below):
 
 ```sh
 cp .env.example .env    # set SCANNER_TOKEN + OIDC_CLIENT_SECRET
@@ -168,11 +168,13 @@ Then log in at `http://localhost:8080`. The API is under `/api/*` behind the ses
 See `docs/API.md` for the endpoint walkthrough and `docs/CONFIGURATION.md` for auth-disabled
 dev mode used in headless `curl` testing.
 
-## Environment constraints
+## Environment notes
 
-- **Docker is NOT installed on this machine.** The full backend↔Postgres↔scanner loop
-  therefore can't be run locally — ask the user to `docker compose up --build` for
-  end-to-end checks. Do not claim the full loop was verified locally.
+- **Docker is installed** (Docker Desktop). The full backend↔Postgres↔scanner loop **can** be
+  run locally via `docker compose up --build` — prefer verifying a change end-to-end against
+  the real stack over reasoning about it. The daemon is not always running: if `docker info`
+  fails, `open -a Docker` and wait a few seconds for it to come up.
+- Only claim the loop was verified if it actually ran; state which parts were exercised.
 - **The scanner node CAN be smoke-tested standalone** (no DB needed): build `cmd/scanner`,
   run it with `SCANNER_TOKEN` set and `NUCLEI_PATH` pointing anywhere, and exercise the API
   (health → 200, missing token → 401, valid → 202, unknown id → 404). Installing `nuclei`

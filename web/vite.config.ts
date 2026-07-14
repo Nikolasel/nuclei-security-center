@@ -9,7 +9,12 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
     outDir: "dist",
-    emptyOutDir: true,
+    // false so a build never deletes the committed dist/.gitkeep (needed for
+    // //go:embed all:dist on a fresh clone before the SPA has ever been built).
+    // dist/ is otherwise git-ignored and rebuilt from scratch in CI/Docker, so the
+    // only cost is old hashed chunks lingering locally across builds — harmless,
+    // and `rm -rf web/dist` clears it if it ever matters.
+    emptyOutDir: false,
   },
   server: {
     port: 5173,

@@ -11,11 +11,14 @@
 # Go
 /vendor/
 
-# Frontend (web/). node_modules and build output are not committed; a placeholder
-# web/dist/index.html IS committed so `go build` can embed before a real build.
+# Frontend (web/). node_modules and build output are not committed. web/dist must
+# exist and be non-empty for `//go:embed all:dist` to compile before the SPA is
+# built, so an empty .gitkeep is committed to hold the directory. Deliberately NOT
+# index.html: that is the filename Vite emits, so tracking it would mean every
+# `npm run build` dirties the tree and could be committed over the placeholder.
 /web/node_modules/
 /web/dist/*
-!/web/dist/index.html
+!/web/dist/.gitkeep
 
 # OS
 .DS_Store

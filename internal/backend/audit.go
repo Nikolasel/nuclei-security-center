@@ -3,6 +3,7 @@ package backend
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
@@ -22,10 +23,11 @@ import (
 // which is for forensics). A denied attempt is always access_denied regardless
 // of what it tried to do; a successful mutation gets its semantic category.
 const (
-	eventAccessDenied   = "access_denied"   // authz rejected the call (403)
-	eventConfigChanged  = "config_changed"  // targets / template sets / schedules CUD
-	eventScanDispatched = "scan_dispatched" // ad-hoc scan submit or schedule run
-	eventFindingTriaged = "finding_triaged" // disposition / severity recast
+	eventAccessDenied          = "access_denied"           // authz rejected the call (403)
+	eventConfigChanged         = "config_changed"          // targets / template sets / schedules CUD
+	eventScanDispatched        = "scan_dispatched"         // ad-hoc scan submit or schedule run
+	eventFindingTriaged        = "finding_triaged"         // disposition / severity recast
+	eventServiceAccountChanged = "service_account_changed" // service-account token create/rotate/revoke
 )
 
 // statusRecorder wraps a ResponseWriter to remember the status code the handler
@@ -90,6 +92,7 @@ func (s *Server) recordAudit(r *http.Request, id store.Identity, eventID, action
 		slog.String("event_id", eventID),
 		slog.String("action", action),
 		slog.String("actor_subject", firstNonEmpty(id.Subject, "unknown")),
+		slog.String("actor_type", actorType(id)),
 		slog.String("method", r.Method),
 		slog.String("path", r.URL.Path),
 		slog.Int("status", status),
@@ -106,4 +109,14 @@ func (s *Server) recordAudit(r *http.Request, id store.Identity, eventID, action
 	}
 
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "audit "+action, attrs...)
+}
+
+// actorType classifies the caller for audit detections: a service-account token
+// (headless automation) vs. an interactive user. Service-account subjects carry
+// the "svc:" prefix minted in store.AuthenticateServiceAccount.
+func actorType(id store.Identity) string {
+	if strings.HasPrefix(id.Subject, "svc:") {
+		return "service_account"
+	}
+	return "user"
 }

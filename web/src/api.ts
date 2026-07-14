@@ -1,6 +1,7 @@
-// Typed client for the backend JSON API (served same-origin under /api). Auth is
-// the BFF session cookie, so every request is credentialed and no tokens are
-// handled here.
+// Typed client for the backend JSON API (served same-origin under /api). The SPA
+// always authenticates with the BFF session cookie — it never presents a token.
+// (Service-account tokens are minted here as an admin action and shown to the
+// operator once; they are payload to display, never a credential this app uses.)
 
 export interface Identity {
   subject: string;
@@ -48,6 +49,36 @@ export interface Schedule {
   created_at: string;
   updated_at: string;
 }
+
+// ServiceAccount is an NSC-local identity for headless automation (#70), scoped
+// to one role and authenticated with a bearer token. Only the token's hash is
+// stored server-side, so `token_prefix` (the cleartext leading characters) is all
+// the UI can show of an existing token — enough to match a row to the string an
+// operator saved. expires_at is absent when the token never expires.
+export interface ServiceAccount {
+  id: string;
+  name: string;
+  role: string;
+  token_prefix: string;
+  created_by?: string;
+  created_at: string;
+  expires_at?: string;
+  last_used_at?: string;
+}
+
+/** ServiceAccountWithToken is the create/rotate response. `token` is the only
+ *  time the plaintext token exists outside the caller's hands — the server keeps
+ *  just its hash, so it can never be retrieved again and the UI must surface it
+ *  immediately. */
+export interface ServiceAccountWithToken extends ServiceAccount {
+  token: string;
+}
+
+export const ASSIGNABLE_ROLES = ["viewer", "operator", "admin"] as const;
+
+/** Default token lifetime in days, mirroring the backend's defaultTokenTTLDays.
+ *  0 means no expiry. */
+export const DEFAULT_TOKEN_TTL_DAYS = 90;
 
 export type ScanState = "queued" | "running" | "complete" | "failed";
 
@@ -301,6 +332,14 @@ export const api = {
   deleteSchedule: (id: string) => request<void>("DELETE", `/api/schedules/${id}`),
   runSchedule: (id: string) =>
     request<{ scan_id: string }>("POST", `/api/schedules/${id}/run`),
+
+  // Service accounts (admin only). create/rotate return the plaintext token once.
+  listServiceAccounts: () => request<ServiceAccount[]>("GET", "/api/service-accounts"),
+  createServiceAccount: (body: { name: string; role: string; ttl_days?: number }) =>
+    request<ServiceAccountWithToken>("POST", "/api/service-accounts", body),
+  rotateServiceAccount: (id: string, body: { ttl_days?: number } = {}) =>
+    request<ServiceAccountWithToken>("POST", `/api/service-accounts/${id}/rotate`, body),
+  deleteServiceAccount: (id: string) => request<void>("DELETE", `/api/service-accounts/${id}`),
 
   listScans: () => request<Scan[]>("GET", "/api/scans"),
   getScan: (id: string) => request<Scan>("GET", `/api/scans/${id}`),

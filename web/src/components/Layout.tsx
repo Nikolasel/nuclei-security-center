@@ -2,14 +2,18 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import type { Identity } from "../api";
+import { hasRole } from "../auth";
 import { cn } from "./ui";
 
+// role, when set, hides the link from users who don't hold it. Purely cosmetic —
+// the backend enforces authorization on every route regardless.
 const nav = [
   { to: "/findings", label: "Findings" },
   { to: "/scans", label: "Scans" },
   { to: "/schedules", label: "Schedules" },
   { to: "/targets", label: "Targets" },
   { to: "/template-sets", label: "Template Sets" },
+  { to: "/service-accounts", label: "Service Accounts", role: "admin" },
 ];
 
 async function logout() {
@@ -25,22 +29,24 @@ export function Layout({ identity, children }: { identity: Identity; children: R
         <div className="mx-auto flex max-w-6xl items-center gap-6 px-4">
           <span className="py-3 font-semibold">Nuclei Security Center</span>
           <nav className="flex items-center gap-1">
-            {nav.map((n) => (
-              <NavLink
-                key={n.to}
-                to={n.to}
-                className={({ isActive }) =>
-                  cn(
-                    "rounded-md px-3 py-1.5 text-sm font-medium",
-                    isActive
-                      ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
-                      : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800",
-                  )
-                }
-              >
-                {n.label}
-              </NavLink>
-            ))}
+            {nav
+              .filter((n) => !n.role || hasRole(identity, n.role))
+              .map((n) => (
+                <NavLink
+                  key={n.to}
+                  to={n.to}
+                  className={({ isActive }) =>
+                    cn(
+                      "rounded-md px-3 py-1.5 text-sm font-medium",
+                      isActive
+                        ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+                        : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800",
+                    )
+                  }
+                >
+                  {n.label}
+                </NavLink>
+              ))}
           </nav>
           <div className="ml-auto">
             <DropdownMenu.Root>

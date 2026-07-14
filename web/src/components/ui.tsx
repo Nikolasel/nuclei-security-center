@@ -174,17 +174,27 @@ export function Modal({
   onOpenChange,
   title,
   children,
+  dismissible = true,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   title: string;
   children: ReactNode;
+  /** When false, clicking the overlay or pressing Esc won't close the dialog, so
+   *  it can only be dismissed through its own controls. For content that is
+   *  destroyed by closing and cannot be recovered — a secret shown exactly once. */
+  dismissible?: boolean;
 }) {
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 bg-black/40" />
-        <Dialog.Content className="fixed left-1/2 top-1/2 w-[min(92vw,32rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-neutral-200 bg-white p-5 shadow-xl focus:outline-none dark:border-neutral-800 dark:bg-neutral-900">
+        <Dialog.Content
+          onPointerDownOutside={dismissible ? undefined : (e) => e.preventDefault()}
+          onEscapeKeyDown={dismissible ? undefined : (e) => e.preventDefault()}
+          onInteractOutside={dismissible ? undefined : (e) => e.preventDefault()}
+          className="fixed left-1/2 top-1/2 w-[min(92vw,32rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-neutral-200 bg-white p-5 shadow-xl focus:outline-none dark:border-neutral-800 dark:bg-neutral-900"
+        >
           <Dialog.Title className="mb-3 text-base font-semibold">{title}</Dialog.Title>
           {children}
         </Dialog.Content>

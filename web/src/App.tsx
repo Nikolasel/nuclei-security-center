@@ -7,6 +7,7 @@ import { FindingsPage } from "./pages/FindingsPage";
 import { ScansPage } from "./pages/ScansPage";
 import { ScanDetailPage } from "./pages/ScanDetailPage";
 import { SchedulesPage } from "./pages/SchedulesPage";
+import { ServiceAccountsPage } from "./pages/ServiceAccountsPage";
 import { TargetsPage } from "./pages/TargetsPage";
 import { TemplateSetsPage } from "./pages/TemplateSetsPage";
 
@@ -54,6 +55,7 @@ export default function App() {
         <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/targets" element={<TargetsPage />} />
         <Route path="/template-sets" element={<TemplateSetsPage />} />
+        <Route path="/service-accounts" element={<ServiceAccountsPage />} />
         <Route path="*" element={<Navigate to="/findings" replace />} />
       </Routes>
     </Layout>

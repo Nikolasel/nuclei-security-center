@@ -248,6 +248,10 @@ session cookie) and authenticates with a bearer token. Managing them is **admin-
 is shown **once**, at creation and on rotation — only its SHA-256 hash is stored, so a lost token
 is rotated, never recovered.
 
+Admins manage these from the **Service Accounts** page in the UI (the nav entry appears for admins
+only), which is the normal way to mint, rotate, and revoke a token — the endpoints below are the
+same surface for scripting it.
+
 ```sh
 # Create (admin). ttl_days is optional: omitted => 90 days; 0 => no expiry.
 curl -sb jar.txt -X POST localhost:8080/api/service-accounts \

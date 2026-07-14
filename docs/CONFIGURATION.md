@@ -10,6 +10,7 @@ deployment.
 |---|---|---|---|
 | `BACKEND_ADDR` | backend | `:8080` | listen address |
 | `DATABASE_URL` | backend | – (required) | Postgres DSN |
+| `DATABASE_PASSWORD_FILE` | backend | – (unset ⇒ use the DSN's password) | path to a file holding **only** the DB password; re-read on every new connection so a rotated credential is picked up without restarting. See [Rotating database credentials](#rotating-database-credentials) |
 | `SCANNER_URL` | backend | `http://localhost:8081` | scanner node base URL |
 | `SCANNER_TOKEN` | both | – (required, **min 32 chars**) | bearer token for backend → node calls; the node refuses to start below the floor. Mint from a CSPRNG, e.g. `openssl rand -base64 24` |
 | `SCANNER_ADDR` | scanner | `:8081` | listen address |
@@ -84,3 +85,26 @@ object store — S3, GCS (S3 API), or Azure Blob:
 | AWS | S3 | `s3.<region>.amazonaws.com` |
 | GCP | GCS (S3-compat) | `storage.googleapis.com` |
 | Azure | Blob | via an S3 gateway or an `ObjectStore` swap (`gocloud.dev/blob`) |
+
+## Rotating database credentials
+
+The backend reads `DATABASE_URL` once at startup. Managed databases that **auto-rotate** the
+password (AWS RDS-managed master password — rotated every 7 days by default; Cloud SQL + Secret
+Manager; Azure Key Vault; Vault dynamic secrets) break a long-running process once the password
+changes: existing pooled connections survive, but every new connection fails to authenticate
+until the process restarts with a fresh DSN.
+
+To tolerate this, keep the password **out of `DATABASE_URL`** and point `DATABASE_PASSWORD_FILE`
+at a file that holds only the password:
+
+- `DATABASE_URL` supplies host / user / database (no password, or a placeholder).
+- `DATABASE_PASSWORD_FILE` is re-read **on every new connection** (via the pool's `BeforeConnect`
+  hook), so a rotated password is applied to fresh connections without a restart.
+
+This is deployment-agnostic: it works with anything that can render the current secret to a file
+and keep it fresh — a Secrets Manager/Key Vault agent sidecar, a Vault agent template, a
+Kubernetes projected secret, or the CSI Secrets Store driver. The app stays cloud-portable; the
+secret-store specifics live at the deployment edge. A single trailing newline is trimmed; interior
+and leading whitespace is preserved.
+
+If `DATABASE_PASSWORD_FILE` is unset, the password in `DATABASE_URL` is used as before.

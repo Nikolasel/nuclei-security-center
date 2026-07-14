@@ -143,9 +143,13 @@ docker-compose.yml postgres + minio + keycloak + scanner + backend
 docs/ARCHITECTURE.md   design decisions (source of truth); API.md, CONFIGURATION.md, DEVELOPMENT.md are the practical guides
 ```
 
-The frontend build output `web/dist` is git-ignored except a committed placeholder
-`index.html` (so `go build` can embed before a real build); the Docker image builds the
-real SPA. Frontend dev: `cd web && npm install && npm run dev` (proxies `/api` to :8080).
+The frontend build output `web/dist` is git-ignored except a committed empty `.gitkeep`,
+which keeps the directory non-empty so `//go:embed all:dist` compiles and `go build` works
+on a fresh clone; the Docker image builds the real SPA. Nothing Vite emits is tracked, so
+`npm run build` never dirties the tree — if `git status` ever shows a file under `web/dist`,
+that's a bug, not something to commit. Without a build, `/` serves a "frontend not built"
+notice (`notBuiltHTML` in `web/embed.go`) instead of failing. Frontend dev:
+`cd web && npm install && npm run dev` (proxies `/api` to :8080).
 
 ## Commands
 

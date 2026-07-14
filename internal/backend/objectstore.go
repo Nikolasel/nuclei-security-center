@@ -65,7 +65,7 @@ func NewObjectStore(ctx context.Context, cfg ObjectStoreConfig) (ObjectStore, er
 	}
 
 	client, err := minio.New(cfg.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
+		Creds:  resolveCredentials(cfg),
 		Secure: cfg.UseSSL,
 		Region: region,
 	})
@@ -77,6 +77,29 @@ func NewObjectStore(ctx context.Context, cfg ObjectStoreConfig) (ObjectStore, er
 		return nil, err
 	}
 	return &minioStore{client: client, bucket: cfg.Bucket}, nil
+}
+
+// resolveCredentials chooses how to authenticate to the object store.
+//
+// When an explicit access key is configured, static V4 credentials are used —
+// the local-dev path (MinIO) and any store that only takes keys (GCS, etc.).
+// When the access key is empty, we fall back to the SDK's ambient credential
+// chain: environment variables, the shared AWS credentials file, and the
+// EC2/ECS/EKS instance-metadata IAM role. That lets a backend running on
+// compute with an attached IAM role archive raw output without minting a
+// long-lived IAM user + static keys just for this bucket. Per invariant #5 this
+// is entirely a library capability (minio-go's credential providers) — no
+// hand-rolled credential logic.
+func resolveCredentials(cfg ObjectStoreConfig) *credentials.Credentials {
+	if cfg.AccessKey != "" {
+		return credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, "")
+	}
+	return credentials.NewChainCredentials([]credentials.Provider{
+		&credentials.EnvAWS{},
+		&credentials.EnvMinio{},
+		&credentials.FileAWSCredentials{},
+		&credentials.IAM{}, // EC2/ECS/EKS instance metadata; empty endpoint auto-detects
+	})
 }
 
 // ensureBucket creates the bucket if absent, retrying so a MinIO/S3 endpoint

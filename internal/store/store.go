@@ -357,9 +357,16 @@ func (s *Store) CancelScan(ctx context.Context, id, reason string) (nodeScanID s
 // orchestrator goroutine never writes to a deleted row. It returns the scan's
 // archived raw-object key (if any) so the caller can best-effort purge storage.
 func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey string, err error) {
-	var key *string
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+
+	var key, targetID *string
 	var state string
-	err = s.pool.QueryRow(ctx, `SELECT state, raw_object_key FROM scans WHERE id = $1`, id).Scan(&state, &key)
+	err = tx.QueryRow(ctx, `SELECT state, raw_object_key, target_id FROM scans WHERE id = $1`, id).
+		Scan(&state, &key, &targetID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return "", ErrNotFound
@@ -369,7 +376,21 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey string, err e
 	if state == string(types.ScanQueued) || state == string(types.ScanRunning) {
 		return "", ErrConflict
 	}
-	if _, err := s.pool.Exec(ctx, `DELETE FROM scans WHERE id = $1`, id); err != nil {
+	if _, err := tx.Exec(ctx, `DELETE FROM scans WHERE id = $1`, id); err != nil {
+		return "", err
+	}
+	// The delete just cascaded this scan's findings occurrences and (via
+	// ON DELETE SET NULL) nulled any first_seen_scan/last_seen_scan/
+	// latest_occurrence_id pointer to it. Left alone, a finding whose
+	// times_mitigated / first_seen_scan survive from history that no longer
+	// exists would show a detection state (e.g. "resurfaced") the remaining
+	// scans can't actually justify. Recompute those fields for the target from
+	// only the scans that still exist, so every finding's story stays
+	// explainable from what's currently visible.
+	if err := repairLifecycleForTarget(ctx, tx, targetID); err != nil {
+		return "", fmt.Errorf("repair lifecycle: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return "", err
 	}
 	return deref(key), nil

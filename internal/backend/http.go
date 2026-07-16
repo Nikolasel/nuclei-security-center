@@ -293,7 +293,8 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 // cancellable state gets 409; an unknown scan gets 404.
 func (s *Server) handleCancelScan(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	reason := "cancelled by " + firstNonEmpty(identityFrom(r.Context()).Subject, "operator")
+	actor := identityFrom(r.Context())
+	reason := "cancelled by " + firstNonEmpty(actor.Name, actor.Email, actor.Subject, "operator")
 	nodeScanID, cancelled, err := s.store.CancelScan(r.Context(), id, reason)
 	if err != nil {
 		s.serverError(w, "cancel scan", err)

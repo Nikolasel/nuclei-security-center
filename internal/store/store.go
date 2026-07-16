@@ -202,6 +202,27 @@ func (s *Store) MarkFailed(ctx context.Context, scanID, reason, nucleiVersion, t
 	return err
 }
 
+// SetScanVersions backfills nuclei_version/templates_commit only, leaving
+// state/error/finished_at untouched — safe to call after a scan has already
+// been cancelled. A user-initiated cancel (store.CancelScan) sets the terminal
+// state immediately, before the background poll goroutine ever sees the node's
+// final status; MarkFailed/MarkComplete then refuse to overwrite an
+// already-cancelled row (see their own comments), which means the version info
+// they'd otherwise carry is silently dropped. The node reports its version
+// before the scan even starts, so it's known regardless of how the scan
+// ended — this lets the orchestrator record it unconditionally once polling
+// concludes. coalesce keeps it from ever overwriting a value another call
+// already recorded.
+func (s *Store) SetScanVersions(ctx context.Context, scanID, nucleiVersion, templatesCommit string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE scans SET nuclei_version = coalesce(nuclei_version, $2),
+		        templates_commit = coalesce(templates_commit, $3)
+		  WHERE id = $1`,
+		scanID, nullStr(nucleiVersion), nullStr(templatesCommit),
+	)
+	return err
+}
+
 // FailOrphanedScans marks every scan left in queued/running state as failed.
 // The orchestrator drives a scan from a single in-process goroutine (see
 // internal/backend/orchestrator.go) with no persisted resume state, so any

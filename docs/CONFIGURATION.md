@@ -144,6 +144,9 @@ Set `SCAN_ZONES` to a JSON array of zones, each mapping CIDR ranges to the node 
   single-node behavior).
 - Zone selection is by the scan's targets: all IP/CIDR targets must fall in the **same** zone; a
   scan whose targets span two zones is rejected (split it, one zone at a time).
+- Zone CIDRs must be **non-overlapping across zones** — the backend refuses to start if two zones
+  share or nest a CIDR, since a target could then match either (overlaps *within* a single zone are
+  fine). Fail-fast, like a malformed CIDR or a duplicate zone name.
 
 Static zone configuration is the first step; scanner-node **self-registration** into a dynamic
 registry is tracked separately (#22).

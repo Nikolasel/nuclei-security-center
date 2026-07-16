@@ -85,7 +85,33 @@ func BuildDispatcher(zonesJSON, defaultURL, defaultToken string) (*Dispatcher, e
 		}
 		zones = append(zones, zone{name: name, nets: nets, client: NewScannerClient(c.URL, c.Token)})
 	}
+	// Reject CIDRs that overlap across zones. Routing picks the first matching
+	// zone in config order (zoneFor), so an overlap would silently resolve by
+	// array order and could even make a multi-target scan span zones purely by
+	// ordering — ambiguous config, so fail fast like a bad CIDR or dup name.
+	// Overlaps within a single zone are fine (same node, no ambiguity).
+	if err := checkZoneOverlap(zones); err != nil {
+		return nil, err
+	}
 	return NewDispatcher(zones, def), nil
+}
+
+// checkZoneOverlap returns an error if any CIDR in one zone overlaps a CIDR in
+// another. Aligned CIDR blocks are either disjoint or nested, so a containment
+// test in either direction detects any overlap.
+func checkZoneOverlap(zones []zone) error {
+	for i := range zones {
+		for j := i + 1; j < len(zones); j++ {
+			for _, a := range zones[i].nets {
+				for _, b := range zones[j].nets {
+					if a.Contains(b.IP) || b.Contains(a.IP) {
+						return fmt.Errorf("SCAN_ZONES: zones %q (%s) and %q (%s) have overlapping CIDRs; a target could match either", zones[i].name, a, zones[j].name, b)
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // ClientFor selects the scanner client for a scan's targets. Every target that

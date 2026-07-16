@@ -24,11 +24,25 @@ func TestBuildDispatcherInvalid(t *testing.T) {
 		`[{"name":"a","cidrs":["10.0.0.0/8"]}]`,                                     // no url/token
 		`[{"name":"a","cidrs":["nope"],"url":"u","token":"t"}]`,                     // bad cidr
 		`[{"name":"a","url":"u","token":"t"},{"name":"a","url":"u2","token":"t2"}]`, // dup name
+		// overlapping CIDRs across zones (identical block)
+		`[{"name":"a","cidrs":["10.0.0.0/8"],"url":"u","token":"t"},{"name":"b","cidrs":["10.0.0.0/8"],"url":"u2","token":"t2"}]`,
+		// overlapping CIDRs across zones (one nested in the other)
+		`[{"name":"a","cidrs":["10.0.0.0/8"],"url":"u","token":"t"},{"name":"b","cidrs":["10.1.2.0/24"],"url":"u2","token":"t2"}]`,
 	}
 	for _, c := range cases {
 		if _, err := BuildDispatcher(c, "http://d", "t"); err == nil {
 			t.Errorf("BuildDispatcher(%q) = nil error, want error", c)
 		}
+	}
+}
+
+func TestBuildDispatcherWithinZoneOverlapAllowed(t *testing.T) {
+	// Overlapping CIDRs inside a single zone are harmless (same node, no
+	// ambiguity) — only cross-zone overlaps are rejected.
+	if _, err := BuildDispatcher(
+		`[{"name":"a","cidrs":["10.0.0.0/8","10.1.2.0/24"],"url":"u","token":"t"}]`,
+		"http://d", "t"); err != nil {
+		t.Errorf("within-zone overlap should be allowed: %v", err)
 	}
 }
 

@@ -38,6 +38,11 @@ survives), so a queued/running scan is identifiable before any findings appear.
 entry rather than counting it as one array element — a target scoped to `10.0.0.0/24` reports
 256, not 1.
 
+A scan that **fails after finding something** — most commonly a `timeout_sec` kill on a large
+multi-host scan — still ingests whatever Nuclei had already written to its JSONL output before
+being killed, rather than discarding it. The scan record stays `failed` (it's honest that the run
+didn't finish), but findings from hosts that completed before the timeout aren't lost.
+
 An empty body (or targets outside every approved target) is rejected `400` — there is no
 implicit default scan, so the scanner can't be fat-fingered at out-of-scope assets.
 

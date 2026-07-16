@@ -133,6 +133,14 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 		// The node reports its nuclei version before running the scan (see
 		// Runner.run), so it's already known even though the run itself failed
 		// (e.g. a timeout kill) -- worth keeping rather than discarding.
+		// Nuclei also writes its JSONL output incrementally, so a killed run
+		// still has whatever it found flushed to disk on the node -- ingest it
+		// best-effort before recording the failure, so a large multi-host scan
+		// that overruns its timeout doesn't lose every finding from the hosts
+		// that did finish in time.
+		if err := o.ingest(ctx, scanID, targetID, nodeScanID); err != nil {
+			log.Warn("partial ingest after scan failure", "err", err)
+		}
 		o.failScan(ctx, scanID, "node reported failure: "+status.Error, status.NucleiVersion, status.TemplatesCommit)
 		return
 	}

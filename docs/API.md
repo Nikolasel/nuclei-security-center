@@ -38,6 +38,15 @@ survives), so a queued/running scan is identifiable before any findings appear.
 entry rather than counting it as one array element — a target scoped to `10.0.0.0/24` reports
 256, not 1.
 
+While a scan is **running**, `GET /api/scans` and `GET /api/scans/{id}` include a live
+`progress` object — `{percent, requests, total, hosts, rps, matched}` — parsed from Nuclei's
+periodic `-stats-json` output on the scanner node (#66). It's ephemeral: the backend caches the
+latest snapshot in memory only while the scan runs (nothing is persisted), so it disappears once
+the scan reaches a terminal state. The SPA renders it as a progress bar. It may be absent briefly
+at the very start, before the node reports its first stats. It's an aggregate across every host
+in the scan, not a per-host breakdown — Nuclei's own stats-json has no concept of "current host"
+since it works multiple hosts concurrently rather than one at a time.
+
 A scan that **fails after finding something** — most commonly a `timeout_sec` kill on a large
 multi-host scan — still ingests whatever Nuclei had already written to its JSONL output before
 being killed, rather than discarding it. The scan record stays `failed` (it's honest that the run

@@ -5,6 +5,7 @@ package scanner
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -146,10 +147,18 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string) {
 		return nil
 	}
 
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
+	// Route Nuclei's stderr/stdout through statsWriter: -stats-json lines update
+	// live progress, everything else is captured for failure reporting. Both
+	// streams share one writer (mutex-serialized) so stats land wherever Nuclei
+	// emits them across versions.
+	var stderr bytes.Buffer
+	sw := &statsWriter{setProgress: j.setProgress, errOut: &stderr}
+	cmd.Stderr = sw
+	cmd.Stdout = sw
 
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+	sw.flush()
+	if err != nil {
 		// Nuclei exits 0 even when it finds nothing; a non-zero exit is a real
 		// failure (bad flags, killed, etc.).
 		msg := strings.TrimSpace(lastLines(stderr.String(), 5))
@@ -172,6 +181,11 @@ func buildArgs(targetsFile, out string, spec types.ScanSpec) []string {
 		"-output", out,
 		"-silent", // suppress banner/progress noise on stdout
 		"-disable-update-check",
+		// Emit periodic JSON progress stats (parsed for the live progress bar,
+		// #66). Findings still go to -output; stats go to stderr/stdout where
+		// statsWriter separates them from error output.
+		"-stats-json",
+		"-stats-interval", "3",
 	}
 	for _, s := range spec.Templates.Severities {
 		args = append(args, "-severity", s)
@@ -225,6 +239,15 @@ func (j *job) setVersion(v string) {
 func (j *job) setCancel(c context.CancelFunc) {
 	j.mu.Lock()
 	j.cancel = c
+	j.mu.Unlock()
+}
+
+// setProgress records the latest live progress snapshot (from -stats-json). A
+// copy is stored so the status snapshot returned to callers is independent.
+func (j *job) setProgress(p types.ScanProgress) {
+	j.mu.Lock()
+	prog := p
+	j.status.Progress = &prog
 	j.mu.Unlock()
 }
 

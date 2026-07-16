@@ -95,6 +95,28 @@ export function StateBadge({ state }: { state: string }) {
   );
 }
 
+/** ProgressBar renders a 0–100% determinate bar. `label` is shown to the right. */
+export function ProgressBar({ percent, label }: { percent: number; label?: string }) {
+  const pct = Math.max(0, Math.min(100, percent));
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
+        <div
+          className="h-full rounded-full bg-indigo-500 transition-[width] duration-500"
+          style={{ width: `${pct}%` }}
+          role="progressbar"
+          aria-valuenow={Math.round(pct)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        />
+      </div>
+      <span className="w-24 shrink-0 text-right text-xs tabular-nums text-neutral-500">
+        {label ?? `${pct.toFixed(0)}%`}
+      </span>
+    </div>
+  );
+}
+
 // Effective-state palette (Tenable-style lifecycle). Cumulative states (still
 // detected) are warm/attention-grabbing; mitigated states are green (good);
 // analyst overlays are muted.

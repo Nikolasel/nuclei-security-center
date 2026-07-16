@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api, scanRawUrl } from "../api";
 import { hasRole, useMe } from "../auth";
 import { ScanFindingsView } from "../components/ScanFindingsView";
-import { Button, Card, ErrorText, Spinner, StateBadge } from "../components/ui";
+import { Button, Card, ErrorText, ProgressBar, Spinner, StateBadge } from "../components/ui";
 
 export function ScanDetailPage() {
   const { id = "" } = useParams();
@@ -122,6 +122,20 @@ export function ScanDetailPage() {
                 <dd className="font-mono text-xs">{scan.data.templates_commit || "—"}</dd>
               </div>
             </dl>
+            {scan.data.state === "running" && scan.data.progress && (
+              <div className="mt-4">
+                <ProgressBar percent={scan.data.progress.percent} />
+                <p className="mt-1 text-xs text-neutral-500">
+                  {scan.data.progress.requests?.toLocaleString() ?? 0} /{" "}
+                  {scan.data.progress.total?.toLocaleString() ?? 0} requests
+                  {scan.data.progress.hosts ? ` · ${scan.data.progress.hosts} hosts` : ""}
+                  {scan.data.progress.rps ? ` · ${scan.data.progress.rps} rps` : ""}
+                </p>
+              </div>
+            )}
+            {scan.data.state === "running" && !scan.data.progress && (
+              <p className="mt-4 text-xs text-neutral-400">Waiting for progress from the scanner…</p>
+            )}
             {scan.data.error && (
               <p className="mt-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
                 {scan.data.error}

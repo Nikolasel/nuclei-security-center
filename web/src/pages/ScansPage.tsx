@@ -3,7 +3,12 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { hasRole, useMe } from "../auth";
-import { Button, Card, ErrorText, Field, Modal, Spinner, StateBadge } from "../components/ui";
+import { Button, Card, ErrorText, Field, Input, Modal, Spinner, StateBadge } from "../components/ui";
+
+// Mirrors the backend's defaultOptions() (internal/backend/http.go) — shown as
+// the field's placeholder/starting value, not hardcoded into the request, so
+// omitting it still gets the backend's own default.
+const DEFAULT_TIMEOUT_SEC = 600;
 
 function RunScanModal({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
@@ -12,10 +17,19 @@ function RunScanModal({ onClose }: { onClose: () => void }) {
   const templateSets = useQuery({ queryKey: ["template-sets"], queryFn: () => api.listTemplateSets() });
   const [targetId, setTargetId] = useState("");
   const [templateSetId, setTemplateSetId] = useState("");
+  const [timeoutSec, setTimeoutSec] = useState(String(DEFAULT_TIMEOUT_SEC));
+
+  const selectedTarget = (targets.data ?? []).find((t) => t.id === targetId);
+  const timeoutNum = Number(timeoutSec);
+  const timeoutInvalid = timeoutSec.trim() === "" || !Number.isInteger(timeoutNum) || timeoutNum <= 0;
 
   const run = useMutation({
     mutationFn: () =>
-      api.createScan({ target_id: targetId, template_set_id: templateSetId || undefined }),
+      api.createScan({
+        target_id: targetId,
+        template_set_id: templateSetId || undefined,
+        timeout_sec: timeoutNum !== DEFAULT_TIMEOUT_SEC ? timeoutNum : undefined,
+      }),
     onSuccess: (res) => {
       void qc.invalidateQueries({ queryKey: ["scans"] });
       onClose();
@@ -34,7 +48,7 @@ function RunScanModal({ onClose }: { onClose: () => void }) {
             <option value="">Select a target…</option>
             {(targets.data ?? []).map((t) => (
               <option key={t.id} value={t.id}>
-                {t.name} ({t.hosts.length} host{t.hosts.length === 1 ? "" : "s"})
+                {t.name} ({t.host_count} host{t.host_count === 1 ? "" : "s"})
               </option>
             ))}
           </select>
@@ -53,10 +67,29 @@ function RunScanModal({ onClose }: { onClose: () => void }) {
             ))}
           </select>
         </Field>
+        <Field label="Timeout (seconds)">
+          <Input
+            type="number"
+            min={1}
+            value={timeoutSec}
+            onChange={(e) => setTimeoutSec(e.target.value)}
+            placeholder={String(DEFAULT_TIMEOUT_SEC)}
+          />
+        </Field>
+        {selectedTarget && selectedTarget.host_count > 50 && (
+          <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
+            {selectedTarget.host_count} hosts in scope — the default {DEFAULT_TIMEOUT_SEC / 60} min may not be
+            enough; consider raising the timeout.
+          </p>
+        )}
         {run.isError && <ErrorText error={run.error} />}
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!targetId || run.isPending} onClick={() => run.mutate()}>
+          <Button
+            variant="primary"
+            disabled={!targetId || timeoutInvalid || run.isPending}
+            onClick={() => run.mutate()}
+          >
             {run.isPending ? "Starting…" : "Run scan"}
           </Button>
         </div>

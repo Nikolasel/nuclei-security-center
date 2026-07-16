@@ -129,11 +129,15 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 
 // createScanRequest launches a scan one of three ways: from a stored target
 // (+ optional template set), from an ad-hoc raw spec, or — with an empty body —
-// the default smoke-test scan.
+// the default smoke-test scan. TimeoutSec overrides defaultOptions' fixed
+// 600s for the stored-target path (the ad-hoc spec path already carries its
+// own Options.TimeoutSec) — a target scoped to a large CIDR range needs more
+// than 10 minutes, and there was previously no way to ask for it.
 type createScanRequest struct {
 	TargetID      string          `json:"target_id"`
 	TemplateSetID string          `json:"template_set_id"`
 	Spec          *types.ScanSpec `json:"spec"`
+	TimeoutSec    *int            `json:"timeout_sec,omitempty"`
 }
 
 func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +172,17 @@ func (s *Server) buildScanSpec(ctx context.Context, req createScanRequest) (type
 
 	switch {
 	case req.TargetID != "":
-		return s.resolveConfigSpec(ctx, req.TargetID, req.TemplateSetID)
+		spec, link, err := s.resolveConfigSpec(ctx, req.TargetID, req.TemplateSetID)
+		if err != nil {
+			return spec, link, err
+		}
+		if req.TimeoutSec != nil {
+			if *req.TimeoutSec <= 0 {
+				return types.ScanSpec{}, store.ScanLink{}, errors.New("timeout_sec must be positive")
+			}
+			spec.Options.TimeoutSec = *req.TimeoutSec
+		}
+		return spec, link, nil
 
 	case req.Spec != nil:
 		spec := *req.Spec

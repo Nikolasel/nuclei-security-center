@@ -20,6 +20,10 @@ a target first (see [Config](#config-targets--template-sets)), then:
 # start a scan from a stored target
 curl -sb jar.txt -X POST localhost:8080/api/scans \
   -H 'content-type: application/json' -d '{"target_id":"<id>"}'   # => {"scan_id":"..."}
+# same, with a longer timeout — the default is 600s, which a target scoped to
+# many hosts (see host_count below) can easily exceed
+curl -sb jar.txt -X POST localhost:8080/api/scans \
+  -H 'content-type: application/json' -d '{"target_id":"<id>","timeout_sec":3600}'
 # check scan state (queued → running → complete)
 curl -sb jar.txt localhost:8080/api/scans/<scan_id>
 # occurrences observed by one scan (paginated envelope: {items,total,limit,offset})
@@ -29,6 +33,10 @@ curl -sb jar.txt "localhost:8080/api/scans/<scan_id>/findings" | jq
 Each scan record carries the `target_id` / `target_name` / `target_host_count` it ran against
 (all absent for an ad-hoc `spec` scan, or once the target has been deleted — scan history
 survives), so a queued/running scan is identifiable before any findings appear.
+`target_host_count` (and a target's own `host_count` from
+[Config](#config-targets--template-sets)) is the real address-range size, expanding any CIDR
+entry rather than counting it as one array element — a target scoped to `10.0.0.0/24` reports
+256, not 1.
 
 An empty body (or targets outside every approved target) is rejected `400` — there is no
 implicit default scan, so the scanner can't be fat-fingered at out-of-scope assets.
@@ -233,6 +241,10 @@ curl -sb jar.txt -X POST localhost:8080/api/template-sets -d '{"name":"info","se
 # launch a scan from stored config
 curl -sb jar.txt -X POST localhost:8080/api/scans -d '{"target_id":"<id>","template_set_id":"<id>"}'
 ```
+
+A target's response carries a derived `host_count`: each hostname/IP/URL entry counts as one,
+but a CIDR entry expands to its full address-range size (`"hosts":["10.0.0.0/24"]` reports
+`"host_count":256`), so the scope really covered is visible before running a scan against it.
 
 Both resources support the full REST set: `GET|POST /api/targets`,
 `GET|PUT|DELETE /api/targets/{id}` (and likewise `/api/template-sets`). Deleting a target or

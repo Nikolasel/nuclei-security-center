@@ -250,13 +250,15 @@ func (s *Store) ScanRawKey(ctx context.Context, id string) (string, error) {
 // verbatim Nuclei output was archived (and is thus downloadable). TargetID /
 // TargetName / TargetHostCount name the stored target the scan ran against (all
 // zero-valued for an ad-hoc spec scan, or once the target has been deleted —
-// scans.target_id is ON DELETE SET NULL so history survives).
+// scans.target_id is ON DELETE SET NULL so history survives). TargetHostCount
+// is the real address-range size (types.HostCount), not len(target.Hosts) — a
+// CIDR entry counts as its full range, not as one array element.
 type ScanRow struct {
 	ID              string     `json:"id"`
 	State           string     `json:"state"`
 	TargetID        string     `json:"target_id,omitempty"`
 	TargetName      string     `json:"target_name,omitempty"`
-	TargetHostCount int        `json:"target_host_count,omitempty"`
+	TargetHostCount int64      `json:"target_host_count,omitempty"`
 	NucleiVersion   string     `json:"nuclei_version,omitempty"`
 	TemplatesCommit string     `json:"templates_commit,omitempty"`
 	Error           string     `json:"error,omitempty"`
@@ -266,10 +268,12 @@ type ScanRow struct {
 }
 
 // scanSelect is the shared projection for ScanRow reads. The LEFT JOIN surfaces
-// the target's name + host count for the scans list/detail (issue #65) without a
-// second round-trip; array_length is NULL for an empty array, so coalesce to 0.
+// the target's name + hosts for the scans list/detail (issue #65) without a
+// second round-trip; t.hosts is NULL for an ad-hoc scan (no target), and
+// scanScan expands it into a real host count rather than counting array
+// elements.
 const scanSelect = `
-	SELECT s.id, s.state, s.target_id, t.name, coalesce(array_length(t.hosts, 1), 0),
+	SELECT s.id, s.state, s.target_id, t.name, t.hosts,
 	       s.nuclei_version, s.templates_commit, s.error, s.raw_object_key,
 	       s.created_at, s.finished_at
 	  FROM scans s
@@ -281,12 +285,14 @@ const scanCancellableStates = `('queued', 'running')`
 func scanScan(row pgx.Row) (ScanRow, error) {
 	var r ScanRow
 	var targetID, targetName, nucleiVersion, templatesCommit, errStr, rawKey *string
-	if err := row.Scan(&r.ID, &r.State, &targetID, &targetName, &r.TargetHostCount,
+	var hosts []string
+	if err := row.Scan(&r.ID, &r.State, &targetID, &targetName, &hosts,
 		&nucleiVersion, &templatesCommit, &errStr, &rawKey, &r.CreatedAt, &r.FinishedAt); err != nil {
 		return ScanRow{}, err
 	}
 	r.TargetID = deref(targetID)
 	r.TargetName = deref(targetName)
+	r.TargetHostCount = types.HostCount(hosts)
 	r.NucleiVersion = deref(nucleiVersion)
 	r.TemplatesCommit = deref(templatesCommit)
 	r.Error = deref(errStr)

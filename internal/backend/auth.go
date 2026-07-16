@@ -196,19 +196,28 @@ func (a *Authenticator) handleLogout(w http.ResponseWriter, r *http.Request) {
 }
 
 // identityFromRequest resolves the session cookie to a live identity.
-func (a *Authenticator) identityFromRequest(r *http.Request) (store.Identity, bool) {
+//
+// The second return value is the session-lookup error if the underlying store
+// call failed for a reason other than the session not existing (#82): during
+// a Postgres outage, connection rotation, or other infrastructure fault, a
+// caller must not be told their session is invalid (a 401) — they should see
+// a retryable server error (a 503) so the SPA doesn't bounce them through a
+// pointless re-login that fails at the same lookup. A missing/empty cookie or
+// ErrNotFound still returns (zero, nil) so the middleware emits a 401.
+func (a *Authenticator) identityFromRequest(r *http.Request) (store.Identity, error) {
 	c, err := r.Cookie(a.cfg.CookieName)
 	if err != nil || c.Value == "" {
-		return store.Identity{}, false
+		return store.Identity{}, nil
 	}
 	sess, err := a.store.GetSession(r.Context(), c.Value)
 	if err != nil {
 		if !errors.Is(err, store.ErrNotFound) {
 			a.log.Error("get session", "err", err)
+			return store.Identity{}, err
 		}
-		return store.Identity{}, false
+		return store.Identity{}, nil
 	}
-	return sess.Identity, true
+	return sess.Identity, nil
 }
 
 // mapRoles turns the configured groups/roles claim into local roles.

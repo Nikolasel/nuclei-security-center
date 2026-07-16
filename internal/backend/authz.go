@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
@@ -53,11 +54,16 @@ func identityFrom(ctx context.Context) store.Identity {
 var devIdentity = store.Identity{Subject: "dev", Roles: []string{RoleAdmin, RoleOperator, RoleViewer}}
 
 // requireAuth resolves the caller to an identity and injects it into the request
-// context, or 401s. With auth disabled it injects devIdentity. With auth enabled
-// a caller authenticates either with a service-account bearer token (headless
-// automation, #70) or the OIDC/BFF session cookie (interactive users) — the
-// bearer token is tried first when present, and a bad token is rejected rather
-// than silently falling through to the cookie.
+// context, or returns 401. With auth disabled it injects devIdentity. With auth
+// enabled a caller authenticates either with a service-account bearer token
+// (headless automation, #70) or the OIDC/BFF session cookie (interactive
+// users) — the bearer token is tried first when present, and a bad token is
+// rejected rather than silently falling through to the cookie.
+//
+// An infrastructure failure on the underlying store call (Postgres down,
+// credential rotation, network partition) is not a 401 — it's a 503. The
+// status reflects the real fault so the SPA doesn't bounce the user through
+// login on every request (#82).
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.auth == nil {
@@ -67,19 +73,46 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		if tok, ok := bearerToken(r); ok {
 			id, err := s.resolveServiceToken(r.Context(), tok)
 			if err != nil {
+				if isAuthBackendFault(err) {
+					s.serviceUnavailable(w, "authenticate service token", err)
+					return
+				}
 				http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 				return
 			}
 			next(w, r.WithContext(withIdentity(r.Context(), id)))
 			return
 		}
-		id, ok := s.auth.identityFromRequest(r)
-		if !ok {
+		id, err := s.auth.identityFromRequest(r)
+		if err != nil {
+			s.serviceUnavailable(w, "get session", err)
+			return
+		}
+		if id.Subject == "" {
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
 		}
 		next(w, r.WithContext(withIdentity(r.Context(), id)))
 	}
+}
+
+// isAuthBackendFault reports whether err is an infrastructure failure on a
+// session/lookup call rather than a credential failure. A credential failure
+// (malformed token, unknown/revoked/expired session) is 401; a backend fault
+// is 503.
+func isAuthBackendFault(err error) bool {
+	return err != nil && !errors.Is(err, store.ErrNotFound)
+}
+
+// serviceUnavailable logs the underlying fault and writes a generic 503 with a
+// short Retry-After so the SPA and load balancers can back off and retry
+// rather than treat the failure as "session expired" (#82).
+func (s *Server) serviceUnavailable(w http.ResponseWriter, op string, err error) {
+	if s.log != nil {
+		s.log.Error(op, "err", err)
+	}
+	w.Header().Set("Retry-After", "5")
+	http.Error(w, "service temporarily unavailable", http.StatusServiceUnavailable)
 }
 
 // requireRole wraps a handler so only callers holding at least `role` reach it.

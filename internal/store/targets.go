@@ -13,11 +13,14 @@ import (
 )
 
 // Target is a named set of hosts a scan may run against. Its Hosts list is the
-// scope allowlist (§6 of the architecture doc).
+// scope allowlist (§6 of the architecture doc). HostCount is derived, not
+// stored — a CIDR entry in Hosts counts as its full address-range size (e.g.
+// "10.0.0.0/24" is 256), not as a single array element.
 type Target struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Hosts     []string  `json:"hosts"`
+	HostCount int64     `json:"host_count"`
 	Tags      []string  `json:"tags"`
 	CreatedBy string    `json:"created_by,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
@@ -40,6 +43,7 @@ func (s *Store) CreateTarget(ctx context.Context, in Target) (Target, error) {
 		}
 		return Target{}, fmt.Errorf("insert target: %w", err)
 	}
+	in.HostCount = types.HostCount(in.Hosts)
 	return in, nil
 }
 
@@ -58,6 +62,7 @@ func (s *Store) GetTarget(ctx context.Context, id string) (Target, error) {
 		return Target{}, err
 	}
 	t.CreatedBy = deref(createdBy)
+	t.HostCount = types.HostCount(t.Hosts)
 	return t, nil
 }
 
@@ -79,6 +84,7 @@ func (s *Store) ListTargets(ctx context.Context) ([]Target, error) {
 			return nil, err
 		}
 		t.CreatedBy = deref(createdBy)
+		t.HostCount = types.HostCount(t.Hosts)
 		out = append(out, t)
 	}
 	return out, rows.Err()
@@ -125,6 +131,7 @@ func (s *Store) UpdateTarget(ctx context.Context, id string, in Target) (Target,
 		return Target{}, fmt.Errorf("update target: %w", err)
 	}
 	in.CreatedBy = deref(createdBy)
+	in.HostCount = types.HostCount(in.Hosts)
 	return in, nil
 }
 

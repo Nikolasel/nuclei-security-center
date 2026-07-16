@@ -3,7 +3,12 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { hasRole, useMe } from "../auth";
-import { Button, Card, ErrorText, Field, Modal, Spinner, StateBadge } from "../components/ui";
+import { Button, Card, ErrorText, Field, Input, Modal, Spinner, StateBadge } from "../components/ui";
+
+// Mirrors the backend's defaultOptions() (internal/backend/http.go) — shown as
+// the field's placeholder/starting value, not hardcoded into the request, so
+// omitting it still gets the backend's own default.
+const DEFAULT_TIMEOUT_SEC = 600;
 
 function RunScanModal({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
@@ -12,10 +17,19 @@ function RunScanModal({ onClose }: { onClose: () => void }) {
   const templateSets = useQuery({ queryKey: ["template-sets"], queryFn: () => api.listTemplateSets() });
   const [targetId, setTargetId] = useState("");
   const [templateSetId, setTemplateSetId] = useState("");
+  const [timeoutSec, setTimeoutSec] = useState(String(DEFAULT_TIMEOUT_SEC));
+
+  const selectedTarget = (targets.data ?? []).find((t) => t.id === targetId);
+  const timeoutNum = Number(timeoutSec);
+  const timeoutInvalid = timeoutSec.trim() === "" || !Number.isInteger(timeoutNum) || timeoutNum <= 0;
 
   const run = useMutation({
     mutationFn: () =>
-      api.createScan({ target_id: targetId, template_set_id: templateSetId || undefined }),
+      api.createScan({
+        target_id: targetId,
+        template_set_id: templateSetId || undefined,
+        timeout_sec: timeoutNum !== DEFAULT_TIMEOUT_SEC ? timeoutNum : undefined,
+      }),
     onSuccess: (res) => {
       void qc.invalidateQueries({ queryKey: ["scans"] });
       onClose();
@@ -34,7 +48,7 @@ function RunScanModal({ onClose }: { onClose: () => void }) {
             <option value="">Select a target…</option>
             {(targets.data ?? []).map((t) => (
               <option key={t.id} value={t.id}>
-                {t.name} ({t.hosts.length} host{t.hosts.length === 1 ? "" : "s"})
+                {t.name} ({t.host_count} host{t.host_count === 1 ? "" : "s"})
               </option>
             ))}
           </select>
@@ -53,10 +67,29 @@ function RunScanModal({ onClose }: { onClose: () => void }) {
             ))}
           </select>
         </Field>
+        <Field label="Timeout (seconds)">
+          <Input
+            type="number"
+            min={1}
+            value={timeoutSec}
+            onChange={(e) => setTimeoutSec(e.target.value)}
+            placeholder={String(DEFAULT_TIMEOUT_SEC)}
+          />
+        </Field>
+        {selectedTarget && selectedTarget.host_count > 50 && (
+          <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
+            {selectedTarget.host_count} hosts in scope — the default {DEFAULT_TIMEOUT_SEC / 60} min may not be
+            enough; consider raising the timeout.
+          </p>
+        )}
         {run.isError && <ErrorText error={run.error} />}
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!targetId || run.isPending} onClick={() => run.mutate()}>
+          <Button
+            variant="primary"
+            disabled={!targetId || timeoutInvalid || run.isPending}
+            onClick={() => run.mutate()}
+          >
             {run.isPending ? "Starting…" : "Run scan"}
           </Button>
         </div>
@@ -68,7 +101,11 @@ function RunScanModal({ onClose }: { onClose: () => void }) {
 export function ScansPage() {
   const me = useMe();
   const canRun = hasRole(me.data ?? undefined, "operator");
+  const canCancel = canRun;
+  const canDelete = hasRole(me.data ?? undefined, "admin");
+  const showActions = canCancel || canDelete;
   const [runOpen, setRunOpen] = useState(false);
+  const qc = useQueryClient();
 
   const scans = useQuery({
     queryKey: ["scans"],
@@ -78,6 +115,11 @@ export function ScansPage() {
       return active ? 2000 : false;
     },
   });
+
+  const invalidate = () => void qc.invalidateQueries({ queryKey: ["scans"] });
+  const cancel = useMutation({ mutationFn: (id: string) => api.cancelScan(id), onSuccess: invalidate });
+  const del = useMutation({ mutationFn: (id: string) => api.deleteScan(id), onSuccess: invalidate });
+  const colCount = 6 + (showActions ? 1 : 0);
 
   return (
     <div className="space-y-4">
@@ -101,10 +143,12 @@ export function ScansPage() {
               <thead>
                 <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
                   <th className="px-3 py-2 font-medium">Scan</th>
+                  <th className="px-3 py-2 font-medium">Target</th>
                   <th className="px-3 py-2 font-medium">State</th>
                   <th className="px-3 py-2 font-medium">Started</th>
                   <th className="px-3 py-2 font-medium">Finished</th>
                   <th className="px-3 py-2 font-medium">Nuclei</th>
+                  {showActions && <th className="px-3 py-2" />}
                 </tr>
               </thead>
               <tbody>
@@ -119,6 +163,21 @@ export function ScansPage() {
                       </Link>
                     </td>
                     <td className="px-3 py-2">
+                      {s.target_name ? (
+                        <span>
+                          {s.target_name}
+                          {s.target_host_count ? (
+                            <span className="text-neutral-400">
+                              {" "}
+                              ({s.target_host_count} host{s.target_host_count === 1 ? "" : "s"})
+                            </span>
+                          ) : null}
+                        </span>
+                      ) : (
+                        <span className="text-neutral-400">ad-hoc</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
                       <StateBadge state={s.state} />
                     </td>
                     <td className="px-3 py-2 text-neutral-500">{new Date(s.created_at).toLocaleString()}</td>
@@ -126,11 +185,39 @@ export function ScansPage() {
                       {s.finished_at ? new Date(s.finished_at).toLocaleString() : "—"}
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-neutral-500">{s.nuclei_version || "—"}</td>
+                    {showActions && (
+                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                        {canCancel && (s.state === "queued" || s.state === "running") && (
+                          <Button
+                            variant="ghost"
+                            disabled={cancel.isPending}
+                            onClick={() => {
+                              if (confirm(`Stop scan ${s.id.slice(0, 8)}?`)) cancel.mutate(s.id);
+                            }}
+                          >
+                            Stop
+                          </Button>
+                        )}
+                        {canDelete && s.state !== "queued" && s.state !== "running" && (
+                          <Button
+                            variant="ghost"
+                            className="text-red-600 dark:text-red-400"
+                            disabled={del.isPending}
+                            onClick={() => {
+                              if (confirm(`Delete scan ${s.id.slice(0, 8)}? This removes its findings occurrences and archived output.`))
+                                del.mutate(s.id);
+                            }}
+                          >
+                            Delete
+                          </Button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
                 {(scans.data ?? []).length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-3 py-8 text-center text-neutral-400">
+                    <td colSpan={colCount} className="px-3 py-8 text-center text-neutral-400">
                       No scans yet.
                     </td>
                   </tr>

@@ -10,10 +10,14 @@ export interface Identity {
   roles: string[];
 }
 
+// host_count is the real address-range size of `hosts` (a CIDR entry counts as
+// its full range, e.g. "10.0.0.0/24" is 256) — not hosts.length, which only
+// counts array entries and undercounts any target scoped to a CIDR.
 export interface Target {
   id: string;
   name: string;
   hosts: string[];
+  host_count: number;
   tags: string[];
   created_by?: string;
   created_at: string;
@@ -42,6 +46,7 @@ export interface Schedule {
   template_set_id?: string;
   cron: string;
   enabled: boolean;
+  timeout_sec?: number;
   next_run_at?: string;
   last_run_at?: string;
   last_scan_id?: string;
@@ -80,11 +85,15 @@ export const ASSIGNABLE_ROLES = ["viewer", "operator", "admin"] as const;
  *  0 means no expiry. */
 export const DEFAULT_TOKEN_TTL_DAYS = 90;
 
-export type ScanState = "queued" | "running" | "complete" | "failed";
+export type ScanState = "queued" | "running" | "complete" | "failed" | "cancelled";
 
 export interface Scan {
   id: string;
   state: ScanState;
+  /** the stored target the scan ran against; absent for an ad-hoc spec scan. */
+  target_id?: string;
+  target_name?: string;
+  target_host_count?: number;
   nuclei_version?: string;
   templates_commit?: string;
   error?: string;
@@ -343,8 +352,10 @@ export const api = {
 
   listScans: () => request<Scan[]>("GET", "/api/scans"),
   getScan: (id: string) => request<Scan>("GET", `/api/scans/${id}`),
-  createScan: (body: { target_id?: string; template_set_id?: string }) =>
+  createScan: (body: { target_id?: string; template_set_id?: string; timeout_sec?: number }) =>
     request<{ scan_id: string }>("POST", "/api/scans", body),
+  cancelScan: (id: string) => request<void>("POST", `/api/scans/${id}/cancel`),
+  deleteScan: (id: string) => request<void>("DELETE", `/api/scans/${id}`),
 
   listFindings: (q: FindingsQuery = {}) => {
     const p = new URLSearchParams();

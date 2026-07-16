@@ -29,6 +29,12 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
   const [templateSetId, setTemplateSetId] = useState(existing?.template_set_id ?? "");
   const [cron, setCron] = useState(existing?.cron ?? "0 3 * * *");
   const [enabled, setEnabled] = useState(existing?.enabled ?? true);
+  const [timeoutSec, setTimeoutSec] = useState(existing?.timeout_sec ? String(existing.timeout_sec) : "");
+
+  const selectedTarget = (targets.data ?? []).find((t) => t.id === targetId);
+  const timeoutNum = Number(timeoutSec);
+  // Empty means "use the backend default" — only a non-empty value is validated.
+  const timeoutInvalid = timeoutSec.trim() !== "" && (!Number.isInteger(timeoutNum) || timeoutNum <= 0);
 
   const save = useMutation({
     mutationFn: () => {
@@ -38,6 +44,7 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
         template_set_id: templateSetId || undefined,
         cron: cron.trim(),
         enabled,
+        timeout_sec: timeoutSec.trim() === "" ? undefined : timeoutNum,
       };
       return existing ? api.updateSchedule(existing.id, body) : api.createSchedule(body);
     },
@@ -47,7 +54,7 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
     },
   });
 
-  const canSave = name.trim() && targetId && cron.trim();
+  const canSave = name.trim() && targetId && cron.trim() && !timeoutInvalid;
 
   return (
     <Modal open onOpenChange={(v) => !v && onClose()} title={existing ? "Edit schedule" : "New schedule"}>
@@ -90,6 +97,21 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
             </button>
           ))}
         </div>
+        <Field label="Timeout (seconds, optional — default 600)">
+          <Input
+            type="number"
+            min={1}
+            value={timeoutSec}
+            onChange={(e) => setTimeoutSec(e.target.value)}
+            placeholder="600"
+          />
+        </Field>
+        {selectedTarget && selectedTarget.host_count > 50 && (
+          <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
+            {selectedTarget.host_count} hosts in scope — the default 10 min may not be enough; consider setting a
+            longer timeout.
+          </p>
+        )}
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
           Enabled (the ticker dispatches this schedule)
@@ -127,6 +149,7 @@ export function SchedulesPage() {
         template_set_id: s.template_set_id || undefined,
         cron: s.cron,
         enabled: !s.enabled,
+        timeout_sec: s.timeout_sec,
       }),
     onSuccess: invalidate,
   });

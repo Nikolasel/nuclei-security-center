@@ -101,6 +101,9 @@ func (s *Server) handleRunSchedule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if sc.TimeoutSec != nil {
+		spec.Options.TimeoutSec = *sc.TimeoutSec
+	}
 	link.Source = "schedule"
 	link.ScheduleID = sc.ID
 	scanID, err := s.orch.Submit(r.Context(), spec, link)

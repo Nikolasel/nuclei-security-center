@@ -20,14 +20,38 @@ a target first (see [Config](#config-targets--template-sets)), then:
 # start a scan from a stored target
 curl -sb jar.txt -X POST localhost:8080/api/scans \
   -H 'content-type: application/json' -d '{"target_id":"<id>"}'   # => {"scan_id":"..."}
+# same, with a longer timeout — the default is 600s, which a target scoped to
+# many hosts (see host_count below) can easily exceed
+curl -sb jar.txt -X POST localhost:8080/api/scans \
+  -H 'content-type: application/json' -d '{"target_id":"<id>","timeout_sec":3600}'
 # check scan state (queued → running → complete)
 curl -sb jar.txt localhost:8080/api/scans/<scan_id>
 # occurrences observed by one scan (paginated envelope: {items,total,limit,offset})
 curl -sb jar.txt "localhost:8080/api/scans/<scan_id>/findings" | jq
 ```
 
+Each scan record carries the `target_id` / `target_name` / `target_host_count` it ran against
+(all absent for an ad-hoc `spec` scan, or once the target has been deleted — scan history
+survives), so a queued/running scan is identifiable before any findings appear.
+`target_host_count` (and a target's own `host_count` from
+[Config](#config-targets--template-sets)) is the real address-range size, expanding any CIDR
+entry rather than counting it as one array element — a target scoped to `10.0.0.0/24` reports
+256, not 1.
+
 An empty body (or targets outside every approved target) is rejected `400` — there is no
 implicit default scan, so the scanner can't be fat-fingered at out-of-scope assets.
+
+**Stop / delete.** A queued or running scan can be stopped (operator); the backend marks it
+`cancelled` and best-effort signals the node to abort the run. A terminal scan can be deleted
+(admin) — its findings occurrences cascade away and the archived raw output is purged
+best-effort; a running scan must be cancelled first (`409`).
+
+```sh
+# stop a queued/running scan (operator). 409 if it's already terminal, 404 if unknown.
+curl -sb jar.txt -X POST localhost:8080/api/scans/<scan_id>/cancel   # => 204
+# delete a terminal scan record (admin). 409 if it's still queued/running.
+curl -sb jar.txt -X DELETE localhost:8080/api/scans/<scan_id>        # => 204
+```
 
 Override the stored target/templates with an ad-hoc spec (note the `spec` wrapper). Every host
 in `spec.targets` must still fall inside an approved target — here `scanme.sh` must already
@@ -183,13 +207,16 @@ backend was down fires once on the next tick, then reschedules forward.
 
 ```sh
 # create a schedule: nightly scan of a target at 03:00 (5-field cron; also
-# accepts @hourly/@daily/… and "@every 30m")
+# accepts @hourly/@daily/… and "@every 30m"). timeout_sec is optional — omit it
+# to use the same 600s default an ad-hoc scan gets; a target scoped to many
+# hosts (see host_count under Config) likely needs more.
 curl -sb jar.txt -X POST localhost:8080/api/schedules -H 'content-type: application/json' -d '{
   "name": "nightly-prod",
   "target_id": "<target_id>",
   "template_set_id": "<template_set_id>",
   "cron": "0 3 * * *",
-  "enabled": true
+  "enabled": true,
+  "timeout_sec": 3600
 }'
 # list schedules (each shows next_run_at / last_run_at / last_scan_id)
 curl -sb jar.txt localhost:8080/api/schedules | jq
@@ -217,6 +244,10 @@ curl -sb jar.txt -X POST localhost:8080/api/template-sets -d '{"name":"info","se
 # launch a scan from stored config
 curl -sb jar.txt -X POST localhost:8080/api/scans -d '{"target_id":"<id>","template_set_id":"<id>"}'
 ```
+
+A target's response carries a derived `host_count`: each hostname/IP/URL entry counts as one,
+but a CIDR entry expands to its full address-range size (`"hosts":["10.0.0.0/24"]` reports
+`"host_count":256`), so the scope really covered is visible before running a scan against it.
 
 Both resources support the full REST set: `GET|POST /api/targets`,
 `GET|PUT|DELETE /api/targets/{id}` (and likewise `/api/template-sets`). Deleting a target or

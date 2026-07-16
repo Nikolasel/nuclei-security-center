@@ -1,11 +1,15 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { api, scanRawUrl } from "../api";
+import { hasRole, useMe } from "../auth";
 import { ScanFindingsView } from "../components/ScanFindingsView";
-import { Card, ErrorText, Spinner, StateBadge } from "../components/ui";
+import { Button, Card, ErrorText, Spinner, StateBadge } from "../components/ui";
 
 export function ScanDetailPage() {
   const { id = "" } = useParams();
+  const me = useMe();
+  const canCancel = hasRole(me.data ?? undefined, "operator");
+  const qc = useQueryClient();
 
   const scan = useQuery({
     queryKey: ["scan", id],
@@ -16,7 +20,19 @@ export function ScanDetailPage() {
     },
   });
 
-  const done = scan.data?.state === "complete" || scan.data?.state === "failed";
+  const cancel = useMutation({
+    mutationFn: () => api.cancelScan(id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["scan", id] });
+      void qc.invalidateQueries({ queryKey: ["scans"] });
+    },
+  });
+
+  const state = scan.data?.state;
+  const active = state === "queued" || state === "running";
+  // Terminal states: findings (if any were ingested) are shown; a cancelled scan
+  // typically has none since ingest only runs on successful completion.
+  const done = state === "complete" || state === "failed" || state === "cancelled";
 
   return (
     <div className="space-y-5">
@@ -27,16 +43,31 @@ export function ScanDetailPage() {
         <h1 className="mt-1 flex items-center gap-3 text-xl font-semibold">
           <span className="font-mono text-base">{id.slice(0, 8)}</span>
           {scan.data && <StateBadge state={scan.data.state} />}
-          {scan.data?.has_raw && (
-            <a
-              href={scanRawUrl(id)}
-              className="ml-auto text-sm font-normal text-indigo-600 hover:underline dark:text-indigo-400"
-            >
-              Download raw output (JSONL)
-            </a>
-          )}
+          <span className="ml-auto flex items-center gap-3">
+            {canCancel && active && (
+              <Button
+                variant="ghost"
+                disabled={cancel.isPending}
+                onClick={() => {
+                  if (confirm(`Stop scan ${id.slice(0, 8)}?`)) cancel.mutate();
+                }}
+              >
+                Stop scan
+              </Button>
+            )}
+            {scan.data?.has_raw && (
+              <a
+                href={scanRawUrl(id)}
+                className="text-sm font-normal text-indigo-600 hover:underline dark:text-indigo-400"
+              >
+                Download raw output (JSONL)
+              </a>
+            )}
+          </span>
         </h1>
       </div>
+
+      {cancel.isError && <ErrorText error={cancel.error} />}
 
       {scan.isLoading ? (
         <Spinner />
@@ -46,6 +77,34 @@ export function ScanDetailPage() {
         scan.data && (
           <Card className="p-4">
             <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
+              <div>
+                <dt className="text-xs text-neutral-500">Target</dt>
+                <dd>
+                  {scan.data.target_name ? (
+                    <>
+                      {scan.data.target_id ? (
+                        <Link
+                          to="/targets"
+                          className="text-indigo-600 hover:underline dark:text-indigo-400"
+                        >
+                          {scan.data.target_name}
+                        </Link>
+                      ) : (
+                        scan.data.target_name
+                      )}
+                      {scan.data.target_host_count ? (
+                        <span className="text-neutral-400">
+                          {" "}
+                          ({scan.data.target_host_count} host
+                          {scan.data.target_host_count === 1 ? "" : "s"})
+                        </span>
+                      ) : null}
+                    </>
+                  ) : (
+                    <span className="text-neutral-400">ad-hoc</span>
+                  )}
+                </dd>
+              </div>
               <div>
                 <dt className="text-xs text-neutral-500">Created</dt>
                 <dd>{new Date(scan.data.created_at).toLocaleString()}</dd>

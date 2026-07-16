@@ -62,6 +62,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/scans", s.requireRole(RoleViewer, s.handleListScans))
 	mux.HandleFunc("POST /api/scans", s.mutation(eventScanDispatched, "scan.create", "scan", RoleOperator, s.handleCreateScan))
 	mux.HandleFunc("GET /api/scans/{id}", s.requireRole(RoleViewer, s.handleGetScan))
+	mux.HandleFunc("POST /api/scans/{id}/cancel", s.mutation(eventScanDispatched, "scan.cancel", "scan", RoleOperator, s.handleCancelScan))
+	mux.HandleFunc("DELETE /api/scans/{id}", s.mutation(eventScanDispatched, "scan.delete", "scan", RoleAdmin, s.handleDeleteScan))
 	mux.HandleFunc("GET /api/scans/{id}/findings", s.requireRole(RoleViewer, s.handleListScanFindings))
 	mux.HandleFunc("GET /api/scans/{id}/raw", s.requireRole(RoleViewer, s.handleGetScanRaw))
 
@@ -127,11 +129,15 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 
 // createScanRequest launches a scan one of three ways: from a stored target
 // (+ optional template set), from an ad-hoc raw spec, or — with an empty body —
-// the default smoke-test scan.
+// the default smoke-test scan. TimeoutSec overrides defaultOptions' fixed
+// 600s for the stored-target path (the ad-hoc spec path already carries its
+// own Options.TimeoutSec) — a target scoped to a large CIDR range needs more
+// than 10 minutes, and there was previously no way to ask for it.
 type createScanRequest struct {
 	TargetID      string          `json:"target_id"`
 	TemplateSetID string          `json:"template_set_id"`
 	Spec          *types.ScanSpec `json:"spec"`
+	TimeoutSec    *int            `json:"timeout_sec,omitempty"`
 }
 
 func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
@@ -166,7 +172,17 @@ func (s *Server) buildScanSpec(ctx context.Context, req createScanRequest) (type
 
 	switch {
 	case req.TargetID != "":
-		return s.resolveConfigSpec(ctx, req.TargetID, req.TemplateSetID)
+		spec, link, err := s.resolveConfigSpec(ctx, req.TargetID, req.TemplateSetID)
+		if err != nil {
+			return spec, link, err
+		}
+		if req.TimeoutSec != nil {
+			if *req.TimeoutSec <= 0 {
+				return types.ScanSpec{}, store.ScanLink{}, errors.New("timeout_sec must be positive")
+			}
+			spec.Options.TimeoutSec = *req.TimeoutSec
+		}
+		return spec, link, nil
 
 	case req.Spec != nil:
 		spec := *req.Spec
@@ -269,6 +285,64 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, row)
+}
+
+// handleCancelScan stops a queued/running scan (operator). It flips the scan to
+// cancelled (the DB update is the authority on the transition), then best-effort
+// signals the node to abort the in-progress run. A scan that isn't in a
+// cancellable state gets 409; an unknown scan gets 404.
+func (s *Server) handleCancelScan(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	reason := "cancelled by " + firstNonEmpty(identityFrom(r.Context()).Subject, "operator")
+	nodeScanID, cancelled, err := s.store.CancelScan(r.Context(), id, reason)
+	if err != nil {
+		s.serverError(w, "cancel scan", err)
+		return
+	}
+	if !cancelled {
+		// Not cancellable: distinguish gone (404) from already-terminal (409).
+		if _, gerr := s.store.GetScan(r.Context(), id); errors.Is(gerr, store.ErrNotFound) {
+			http.Error(w, "scan not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "scan is not in a cancellable state", http.StatusConflict)
+		return
+	}
+	// Detached from the request so a client disconnect can't leave the node
+	// running; the DB already reflects cancelled either way.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		s.orch.SignalNodeCancel(ctx, nodeScanID)
+	}()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleDeleteScan removes a scan record (admin). Its findings occurrences
+// cascade; lifecycle references are set NULL by the schema. A queued/running
+// scan can't be deleted (409) — cancel it first. The archived raw object is
+// purged best-effort (storage cleanup must never fail the delete, since Postgres
+// is already the system of record and the row is gone).
+func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	rawKey, err := s.store.DeleteScan(r.Context(), id)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrNotFound):
+			http.Error(w, "scan not found", http.StatusNotFound)
+		case errors.Is(err, store.ErrConflict):
+			http.Error(w, "cancel the scan before deleting it", http.StatusConflict)
+		default:
+			s.serverError(w, "delete scan", err)
+		}
+		return
+	}
+	if s.archive != nil && rawKey != "" {
+		if err := s.archive.Delete(r.Context(), rawKey); err != nil {
+			s.log.Warn("purge archived raw output", "scan_id", id, "key", rawKey, "err", err)
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleGetScanRaw streams a scan's archived verbatim Nuclei output (out.jsonl)

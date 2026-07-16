@@ -15,6 +15,8 @@ import (
 // backend ticker dispatches schedules whose NextRunAt has arrived; cron parsing
 // and NextRunAt computation live in the backend layer, so this struct just
 // stores the results. LastScanID/LastRunAt record the most recent dispatch.
+// TimeoutSec overrides defaultOptions' fixed scan timeout for this schedule's
+// dispatches; nil means "use the default".
 type Schedule struct {
 	ID            string     `json:"id"`
 	Name          string     `json:"name"`
@@ -22,6 +24,7 @@ type Schedule struct {
 	TemplateSetID string     `json:"template_set_id,omitempty"`
 	Cron          string     `json:"cron"`
 	Enabled       bool       `json:"enabled"`
+	TimeoutSec    *int       `json:"timeout_sec,omitempty"`
 	NextRunAt     *time.Time `json:"next_run_at,omitempty"`
 	LastRunAt     *time.Time `json:"last_run_at,omitempty"`
 	LastScanID    string     `json:"last_scan_id,omitempty"`
@@ -30,14 +33,14 @@ type Schedule struct {
 	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
-const scheduleCols = `id, name, target_id, template_set_id, cron, enabled,
+const scheduleCols = `id, name, target_id, template_set_id, cron, enabled, timeout_sec,
 	next_run_at, last_run_at, last_scan_id, created_by, created_at, updated_at`
 
 // scanSchedule reads one schedule row (column order must match scheduleCols).
 func scanSchedule(row pgx.Row) (Schedule, error) {
 	var s Schedule
 	var templateSetID, lastScanID, createdBy *string
-	err := row.Scan(&s.ID, &s.Name, &s.TargetID, &templateSetID, &s.Cron, &s.Enabled,
+	err := row.Scan(&s.ID, &s.Name, &s.TargetID, &templateSetID, &s.Cron, &s.Enabled, &s.TimeoutSec,
 		&s.NextRunAt, &s.LastRunAt, &lastScanID, &createdBy, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		return Schedule{}, err
@@ -53,11 +56,11 @@ func scanSchedule(row pgx.Row) (Schedule, error) {
 func (s *Store) CreateSchedule(ctx context.Context, in Schedule) (Schedule, error) {
 	in.ID = types.NewID()
 	row := s.pool.QueryRow(ctx,
-		`INSERT INTO schedules (id, name, target_id, template_set_id, cron, enabled, next_run_at, created_by)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`INSERT INTO schedules (id, name, target_id, template_set_id, cron, enabled, timeout_sec, next_run_at, created_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING `+scheduleCols,
 		in.ID, in.Name, in.TargetID, nullStr(in.TemplateSetID), in.Cron, in.Enabled,
-		in.NextRunAt, nullStr(in.CreatedBy),
+		in.TimeoutSec, in.NextRunAt, nullStr(in.CreatedBy),
 	)
 	out, err := scanSchedule(row)
 	if err != nil {
@@ -109,10 +112,10 @@ func (s *Store) UpdateSchedule(ctx context.Context, id string, in Schedule) (Sch
 	row := s.pool.QueryRow(ctx,
 		`UPDATE schedules
 		 SET name = $2, target_id = $3, template_set_id = $4, cron = $5, enabled = $6,
-		     next_run_at = $7, updated_at = now()
+		     timeout_sec = $7, next_run_at = $8, updated_at = now()
 		 WHERE id = $1
 		 RETURNING `+scheduleCols,
-		id, in.Name, in.TargetID, nullStr(in.TemplateSetID), in.Cron, in.Enabled, in.NextRunAt,
+		id, in.Name, in.TargetID, nullStr(in.TemplateSetID), in.Cron, in.Enabled, in.TimeoutSec, in.NextRunAt,
 	)
 	out, err := scanSchedule(row)
 	if err != nil {

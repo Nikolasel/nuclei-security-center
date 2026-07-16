@@ -134,6 +134,9 @@ func (s *Scheduler) dispatch(ctx context.Context, sc store.Schedule, now time.Ti
 	if err != nil {
 		log.Error("resolve schedule config", "err", err)
 	} else {
+		if sc.TimeoutSec != nil {
+			spec.Options.TimeoutSec = *sc.TimeoutSec
+		}
 		link.Source = "schedule"
 		link.ScheduleID = sc.ID
 		scanID, err = s.srv.orch.Submit(ctx, spec, link)

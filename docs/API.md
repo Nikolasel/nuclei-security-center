@@ -207,13 +207,16 @@ backend was down fires once on the next tick, then reschedules forward.
 
 ```sh
 # create a schedule: nightly scan of a target at 03:00 (5-field cron; also
-# accepts @hourly/@daily/… and "@every 30m")
+# accepts @hourly/@daily/… and "@every 30m"). timeout_sec is optional — omit it
+# to use the same 600s default an ad-hoc scan gets; a target scoped to many
+# hosts (see host_count under Config) likely needs more.
 curl -sb jar.txt -X POST localhost:8080/api/schedules -H 'content-type: application/json' -d '{
   "name": "nightly-prod",
   "target_id": "<target_id>",
   "template_set_id": "<template_set_id>",
   "cron": "0 3 * * *",
-  "enabled": true
+  "enabled": true,
+  "timeout_sec": 3600
 }'
 # list schedules (each shows next_run_at / last_run_at / last_scan_id)
 curl -sb jar.txt localhost:8080/api/schedules | jq

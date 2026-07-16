@@ -125,6 +125,9 @@ func validateSchedule(s *store.Schedule) error {
 	if _, err := parseCron(s.Cron); err != nil {
 		return fmt.Errorf("invalid cron %q: %w", s.Cron, err)
 	}
+	if s.TimeoutSec != nil && *s.TimeoutSec <= 0 {
+		return errors.New("timeout_sec must be positive")
+	}
 	return nil
 }
 

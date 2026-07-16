@@ -46,6 +46,7 @@ export interface Schedule {
   template_set_id?: string;
   cron: string;
   enabled: boolean;
+  timeout_sec?: number;
   next_run_at?: string;
   last_run_at?: string;
   last_scan_id?: string;

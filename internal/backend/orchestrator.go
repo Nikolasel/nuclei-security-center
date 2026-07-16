@@ -129,6 +129,17 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 		o.failScan(ctx, scanID, err.Error(), "", "")
 		return
 	}
+	// The node reports its version before the scan even starts, so it's known
+	// regardless of how the run ended. Record it unconditionally here, not just
+	// in the failed/complete branches below: if an operator cancelled the scan,
+	// store.CancelScan already flipped state to cancelled, and MarkFailed/
+	// MarkComplete both refuse to touch an already-terminal row -- without this,
+	// a cancelled scan silently never gets its nuclei_version recorded.
+	if status.NucleiVersion != "" {
+		if err := o.store.SetScanVersions(ctx, scanID, status.NucleiVersion, status.TemplatesCommit); err != nil {
+			log.Warn("record scan versions", "err", err)
+		}
+	}
 	if status.State == types.ScanFailed {
 		// The node reports its nuclei version before running the scan (see
 		// Runner.run), so it's already known even though the run itself failed

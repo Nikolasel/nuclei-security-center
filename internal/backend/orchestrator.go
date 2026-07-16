@@ -113,7 +113,8 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 
 	nodeScanID, err := o.client.StartScan(ctx, spec)
 	if err != nil {
-		o.failScan(ctx, scanID, "dispatch: "+err.Error())
+		// No status response yet at this point -- nothing to record.
+		o.failScan(ctx, scanID, "dispatch: "+err.Error(), "", "")
 		return
 	}
 	if err := o.store.MarkRunning(ctx, scanID, nodeScanID); err != nil {
@@ -123,16 +124,21 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 
 	status, err := o.pollToDone(ctx, nodeScanID)
 	if err != nil {
-		o.failScan(ctx, scanID, err.Error())
+		// pollToDone returns a zero-value status on error, so there's genuinely
+		// nothing to record here either.
+		o.failScan(ctx, scanID, err.Error(), "", "")
 		return
 	}
 	if status.State == types.ScanFailed {
-		o.failScan(ctx, scanID, "node reported failure: "+status.Error)
+		// The node reports its nuclei version before running the scan (see
+		// Runner.run), so it's already known even though the run itself failed
+		// (e.g. a timeout kill) -- worth keeping rather than discarding.
+		o.failScan(ctx, scanID, "node reported failure: "+status.Error, status.NucleiVersion, status.TemplatesCommit)
 		return
 	}
 
 	if err := o.ingest(ctx, scanID, targetID, nodeScanID); err != nil {
-		o.failScan(ctx, scanID, "ingest: "+err.Error())
+		o.failScan(ctx, scanID, "ingest: "+err.Error(), status.NucleiVersion, status.TemplatesCommit)
 		return
 	}
 
@@ -248,10 +254,10 @@ func (o *Orchestrator) SignalNodeCancel(ctx context.Context, nodeScanID string) 
 	}
 }
 
-func (o *Orchestrator) failScan(ctx context.Context, scanID, reason string) {
+func (o *Orchestrator) failScan(ctx context.Context, scanID, reason, nucleiVersion, templatesCommit string) {
 	o.log.Error("scan failed", "scan_id", scanID, "reason", reason)
 	err := retryWrite(ctx, terminalWriteAttempts, terminalWriteDelay, func() error {
-		return o.store.MarkFailed(ctx, scanID, reason)
+		return o.store.MarkFailed(ctx, scanID, reason, nucleiVersion, templatesCommit)
 	})
 	if err != nil {
 		o.log.Error("mark failed", "scan_id", scanID, "err", err)

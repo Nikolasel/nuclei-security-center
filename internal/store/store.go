@@ -183,11 +183,21 @@ func (s *Store) MarkRunning(ctx context.Context, scanID, nodeScanID string) erro
 // scan already in a terminal state (notably cancelled): once an operator cancels
 // a scan, the background poll goroutine seeing the node abort must not flip it
 // back to failed.
-func (s *Store) MarkFailed(ctx context.Context, scanID, reason string) error {
+//
+// nucleiVersion/templatesCommit are recorded too when the caller has them —
+// the node reports its version before the scan even starts (Runner.run captures
+// it ahead of launching nuclei), so a scan that fails partway through (a
+// timeout kill, in particular) still has this available; it was previously
+// discarded because only MarkComplete's call site threaded it through. Either
+// may be "" when truly unavailable (e.g. dispatch failed before the node ever
+// responded), in which case the column is left NULL, not an empty string.
+func (s *Store) MarkFailed(ctx context.Context, scanID, reason, nucleiVersion, templatesCommit string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE scans SET state = $1, error = $2, finished_at = now()
-		  WHERE id = $3 AND state NOT IN ($4, $5, $6)`,
-		types.ScanFailed, reason, scanID, types.ScanCancelled, types.ScanComplete, types.ScanFailed,
+		`UPDATE scans SET state = $1, error = $2, finished_at = now(),
+		        nuclei_version = coalesce($4, nuclei_version), templates_commit = coalesce($5, templates_commit)
+		  WHERE id = $3 AND state NOT IN ($6, $7, $8)`,
+		types.ScanFailed, reason, scanID, nullStr(nucleiVersion), nullStr(templatesCommit),
+		types.ScanCancelled, types.ScanComplete, types.ScanFailed,
 	)
 	return err
 }

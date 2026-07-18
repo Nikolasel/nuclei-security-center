@@ -12,3 +12,15 @@ var ErrConflict = errors.New("conflict")
 // ErrInvalidRef is returned when a write references a row that doesn't exist
 // (a foreign-key violation — e.g. a schedule pointing at a missing target).
 var ErrInvalidRef = errors.New("invalid reference")
+
+// ErrNodeOverlap is returned when a scanner node's CIDRs overlap another node's
+// (#22). Node ranges must be disjoint so a target maps to exactly one node.
+var ErrNodeOverlap = errors.New("scanner node CIDRs overlap another node")
+
+// ErrLastCatchAll is returned when deleting a scanner node would leave no
+// catch-all (no-CIDR) node, so hostname/unmatched targets would be undispatchable.
+var ErrLastCatchAll = errors.New("cannot delete the last catch-all scanner node")
+
+// ErrNoNodeForTarget is returned by dispatch selection when no scanner node
+// serves a target's IP and there is no catch-all node to fall back to.
+var ErrNoNodeForTarget = errors.New("no scanner node serves the target")

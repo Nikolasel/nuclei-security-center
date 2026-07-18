@@ -62,14 +62,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Zone-aware dispatch (#15): SCANNER_URL/SCANNER_TOKEN are the default zone;
-	// optional SCAN_ZONES (JSON) adds CIDR-mapped nodes for segmented networks.
-	dispatch, err := backend.BuildDispatcher(os.Getenv("SCAN_ZONES"), scannerURL, scannerToken)
-	if err != nil {
-		log.Error("configure scan zones", "err", err)
+	// Scanner node registry (#22): the DB is the system of record. Config
+	// (SCANNER_URL as the default catch-all node + optional SCAN_ZONES) only seeds
+	// the table on first boot; thereafter the admin manages nodes via the API/UI.
+	if err := backend.SeedScannerNodes(ctx, st, scannerURL, scannerToken, os.Getenv("SCAN_ZONES"), log); err != nil {
+		log.Error("seed scanner nodes", "err", err)
 		os.Exit(1)
 	}
-	orch := backend.NewOrchestrator(st, dispatch, archive, log)
+	orch := backend.NewOrchestrator(st, archive, log)
 
 	auth, err := buildAuthenticator(ctx, st, log)
 	if err != nil {

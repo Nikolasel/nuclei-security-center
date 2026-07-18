@@ -94,7 +94,9 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &in) {
 		return
 	}
-	if err := validateNode(&in, true); err != nil {
+	// Token optional on update: a blank one keeps the stored value (it's
+	// write-only, so the admin can't re-supply it when editing other fields).
+	if err := validateNode(&in, false); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

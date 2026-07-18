@@ -90,7 +90,10 @@ func (s *Store) CreateScannerNode(ctx context.Context, in ScannerNode) (ScannerN
 }
 
 // UpdateScannerNode updates a node's mutable fields, rejecting a name collision
-// (ErrConflict) or a CIDR overlap with a *different* node (ErrNodeOverlap).
+// (ErrConflict) or a CIDR overlap with a *different* node (ErrNodeOverlap). A
+// blank Token keeps the stored one — the token is write-only at the API (never
+// returned), so an admin editing other fields can't re-supply it and shouldn't
+// have to.
 func (s *Store) UpdateScannerNode(ctx context.Context, id string, in ScannerNode) (ScannerNode, error) {
 	in.CIDRs = orEmpty(in.CIDRs)
 	in.Tags = orEmpty(in.Tags)
@@ -105,7 +108,7 @@ func (s *Store) UpdateScannerNode(ctx context.Context, id string, in ScannerNode
 		return ScannerNode{}, err
 	}
 	n, err := scanNode(tx.QueryRow(ctx,
-		`UPDATE scanner_nodes SET name = $2, endpoint = $3, token = $4, cidrs = $5, tags = $6, updated_at = now()
+		`UPDATE scanner_nodes SET name = $2, endpoint = $3, token = COALESCE(NULLIF($4, ''), token), cidrs = $5, tags = $6, updated_at = now()
 		 WHERE id = $1
 		 RETURNING id, name, endpoint, token, cidrs, tags, created_by, created_at, updated_at`,
 		id, in.Name, in.Endpoint, in.Token, in.CIDRs, in.Tags))

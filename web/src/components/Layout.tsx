@@ -13,6 +13,7 @@ const nav = [
   { to: "/schedules", label: "Schedules" },
   { to: "/targets", label: "Targets" },
   { to: "/template-sets", label: "Template Sets" },
+  { to: "/nodes", label: "Scanner Nodes" },
   { to: "/service-accounts", label: "Service Accounts", role: "admin" },
 ];
 

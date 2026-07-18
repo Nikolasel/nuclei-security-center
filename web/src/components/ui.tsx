@@ -145,11 +145,18 @@ export function FindingStateBadge({ state }: { state: EffectiveState | string })
 }
 
 /** Pill is a small outlined marker for secondary facets. */
-export function Pill({ children, tone = "neutral" }: { children: ReactNode; tone?: "neutral" | "warn" }) {
-  const styles =
-    tone === "warn"
-      ? "border-rose-300 text-rose-700 dark:border-rose-800 dark:text-rose-300"
-      : "border-neutral-300 text-neutral-600 dark:border-neutral-700 dark:text-neutral-400";
+export function Pill({
+  children,
+  tone = "neutral",
+}: {
+  children: ReactNode;
+  tone?: "neutral" | "warn" | "good";
+}) {
+  const styles = {
+    warn: "border-rose-300 text-rose-700 dark:border-rose-800 dark:text-rose-300",
+    good: "border-emerald-300 text-emerald-700 dark:border-emerald-800 dark:text-emerald-300",
+    neutral: "border-neutral-300 text-neutral-600 dark:border-neutral-700 dark:text-neutral-400",
+  }[tone];
   return (
     <span className={cn("inline-block rounded-full border px-2 py-0.5 text-xs font-medium", styles)}>
       {children}

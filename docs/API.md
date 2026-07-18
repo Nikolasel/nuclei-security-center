@@ -289,9 +289,12 @@ curl -sb jar.txt -X POST localhost:8080/api/nodes \
   so hostname targets always have somewhere to dispatch.
 - Endpoints: `GET|POST /api/nodes`, `GET|PUT|DELETE /api/nodes/{id}`.
 - **Health (#98):** the backend polls each node's `GET /v1/capabilities` (`nuclei_version`) every
-  `NODE_HEALTH_INTERVAL` to derive liveness; `healthy` is `null` until the first poll. A scan whose
-  matching node is known-unhealthy fails fast with a clear error. Config (`SCANNER_URL`/`SCAN_ZONES`)
-  seeds this registry on first boot only — see [CONFIGURATION.md](CONFIGURATION.md#scanner-node-registry).
+  `NODE_HEALTH_INTERVAL` to derive liveness; `healthy` is `null` until the first poll. When a node
+  is unhealthy, `health_error` carries the last poll failure (e.g. `capabilities: 401 Unauthorized`
+  for a wrong token vs. a connection error for an unreachable node), so the cause is visible without
+  reading server logs. A scan whose matching node is known-unhealthy fails fast with a clear error.
+  Config (`SCANNER_URL`/`SCAN_ZONES`) seeds this registry on first boot only —
+  see [CONFIGURATION.md](CONFIGURATION.md#scanner-node-registry).
 
 ## Scope guardrail
 

@@ -10,10 +10,22 @@ function fmtTime(s?: string) {
 }
 
 /** HealthBadge renders a node's liveness (#98): green when healthy, red when a
- *  poll has failed past the TTL, neutral "unknown" until the first poll lands. */
-function HealthBadge({ healthy }: { healthy?: boolean | null }) {
+ *  poll has failed past the TTL, neutral "unknown" until the first poll lands.
+ *  When unhealthy, the poll failure (e.g. "401 Unauthorized" for a wrong token)
+ *  is shown as subtext so an operator can tell *why* without reading server logs. */
+function HealthBadge({ healthy, error }: { healthy?: boolean | null; error?: string }) {
   if (healthy == null) return <Pill tone="neutral">unknown</Pill>;
-  return healthy ? <Pill tone="good">healthy</Pill> : <Pill tone="warn">unhealthy</Pill>;
+  if (healthy) return <Pill tone="good">healthy</Pill>;
+  return (
+    <div className="space-y-1">
+      <Pill tone="warn">unhealthy</Pill>
+      {error && (
+        <div className="max-w-xs text-xs text-rose-600 dark:text-rose-400" title={error}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function NodeModal({ existing, onClose }: { existing?: ScannerNode; onClose: () => void }) {
@@ -155,7 +167,7 @@ export function NodesPage() {
                   <tr key={n.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
                     <td className="px-3 py-2 font-medium">{n.name}</td>
                     <td className="px-3 py-2">
-                      <HealthBadge healthy={n.healthy} />
+                      <HealthBadge healthy={n.healthy} error={n.health_error} />
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">
                       {n.endpoint}

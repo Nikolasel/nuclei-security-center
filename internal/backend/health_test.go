@@ -58,13 +58,17 @@ func TestHealthMonitorNeverSucceeded(t *testing.T) {
 	clock := now
 	m := newTestMonitor(30*time.Second, &clock)
 
-	// A node polled but never reachable: record exists (known) with zero LastSeen.
-	m.health["down"] = nodeHealth{}
+	// A node polled but never reachable: record exists (known) with zero LastSeen
+	// and the failure message retained for the UI.
+	m.health["down"] = nodeHealth{LastErr: "capabilities: 401 Unauthorized"}
 	h, known := m.Get("down")
 	if !known {
 		t.Fatal("a polled-but-failed node is known")
 	}
 	if h.Healthy {
 		t.Error("a node that never responded is unhealthy")
+	}
+	if h.LastError != "capabilities: 401 Unauthorized" {
+		t.Errorf("LastError = %q, want the poll failure message", h.LastError)
 	}
 }

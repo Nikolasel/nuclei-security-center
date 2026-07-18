@@ -38,6 +38,9 @@ export interface ScannerNode {
   healthy?: boolean | null;
   last_seen?: string;
   nuclei_version?: string;
+  /** the last poll failure's message; present only while unhealthy (e.g. a 401
+   *  from a wrong token, or a connection error from an unreachable node). */
+  health_error?: string;
   created_by?: string;
   created_at: string;
   updated_at: string;

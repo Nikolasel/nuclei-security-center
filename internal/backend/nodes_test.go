@@ -1,6 +1,10 @@
 package backend
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Nikolasel/nuclei-security-center/internal/store"
+)
 
 func TestParseNodeConfigDefaultOnly(t *testing.T) {
 	nodes, err := parseNodeConfig("http://scanner:8081", "tok", "")
@@ -53,6 +57,44 @@ func TestParseNodeConfigWithinNodeOverlapAllowed(t *testing.T) {
 		`[{"name":"a","cidrs":["10.0.0.0/8","10.1.2.0/24"],"url":"u","token":"t"}]`); err != nil {
 		t.Errorf("within-node overlap should be allowed: %v", err)
 	}
+}
+
+func TestValidateNodeTLS(t *testing.T) {
+	cert, key := selfSignedPEM(t)
+	ca, _ := selfSignedPEM(t)
+
+	t.Run("none is fine", func(t *testing.T) {
+		if err := validateNodeTLS(&store.ScannerNode{}, true); err != nil {
+			t.Fatalf("no TLS material should validate: %v", err)
+		}
+	})
+	t.Run("valid pair + CA", func(t *testing.T) {
+		in := &store.ScannerNode{TLSServerCA: ca, TLSClientCert: cert, TLSClientKey: key}
+		if err := validateNodeTLS(in, true); err != nil {
+			t.Fatalf("valid material should validate: %v", err)
+		}
+	})
+	t.Run("create rejects half a keypair", func(t *testing.T) {
+		if err := validateNodeTLS(&store.ScannerNode{TLSClientCert: cert}, true); err == nil {
+			t.Fatal("cert without key on create should be rejected")
+		}
+	})
+	t.Run("update allows cert-only (key kept)", func(t *testing.T) {
+		if err := validateNodeTLS(&store.ScannerNode{TLSClientCert: cert}, false); err != nil {
+			t.Fatalf("cert-only on update should be allowed: %v", err)
+		}
+	})
+	t.Run("bad server CA rejected", func(t *testing.T) {
+		if err := validateNodeTLS(&store.ScannerNode{TLSServerCA: "nope"}, true); err == nil {
+			t.Fatal("garbage CA should be rejected")
+		}
+	})
+	t.Run("mismatched pair rejected", func(t *testing.T) {
+		_, otherKey := selfSignedPEM(t)
+		if err := validateNodeTLS(&store.ScannerNode{TLSClientCert: cert, TLSClientKey: otherKey}, true); err == nil {
+			t.Fatal("cert/key from different keypairs should be rejected")
+		}
+	})
 }
 
 func TestSameStringSet(t *testing.T) {

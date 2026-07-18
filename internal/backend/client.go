@@ -3,6 +3,7 @@ package backend
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,19 +15,35 @@ import (
 )
 
 // ScannerClient talks to one scanner node's /v1 API using a bearer service token.
+// When tlsCfg is set (per-node mTLS, #26) it is applied to every request the
+// client makes — including the long-lived results fetch — so a node in an
+// untrusted segment is reached over a mutually-authenticated connection.
 type ScannerClient struct {
 	baseURL string
 	token   string
+	tlsCfg  *tls.Config
 	http    *http.Client
 }
 
 // NewScannerClient builds a client for the node at baseURL (e.g. http://scanner:8081).
 func NewScannerClient(baseURL, token string) *ScannerClient {
-	return &ScannerClient{
+	c := &ScannerClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		token:   token,
-		http:    &http.Client{Timeout: 30 * time.Second},
 	}
+	c.http = c.newHTTPClient(30 * time.Second)
+	return c
+}
+
+// newHTTPClient builds an *http.Client with the given timeout, wiring in the
+// client's TLS config (if any) so mTLS applies uniformly to short calls and the
+// streaming results fetch alike.
+func (c *ScannerClient) newHTTPClient(timeout time.Duration) *http.Client {
+	hc := &http.Client{Timeout: timeout}
+	if c.tlsCfg != nil {
+		hc.Transport = &http.Transport{TLSClientConfig: c.tlsCfg.Clone()}
+	}
+	return hc
 }
 
 func (c *ScannerClient) newReq(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
@@ -141,7 +158,7 @@ func (c *ScannerClient) Results(ctx context.Context, nodeScanID string) (io.Read
 	if err != nil {
 		return nil, err
 	}
-	resp, err := (&http.Client{Timeout: resultsClientTimeout}).Do(req)
+	resp, err := c.newHTTPClient(resultsClientTimeout).Do(req)
 	if err != nil {
 		return nil, err
 	}

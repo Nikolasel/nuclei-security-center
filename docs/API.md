@@ -287,6 +287,12 @@ curl -sb jar.txt -X POST localhost:8080/api/nodes \
 - CIDRs must **not overlap** another node (`400`), so a target's IP maps to exactly one node. A scan
   whose targets span two nodes is rejected. Deleting the **last** catch-all node is refused (`409`),
   so hostname targets always have somewhere to dispatch.
+- **Per-node mTLS (#26):** optional `tls_server_ca`, `tls_client_cert`, `tls_client_key` upgrade the
+  backend→node transport to mutual TLS for a node in an untrusted segment (point its `endpoint` at
+  `https://…`). The CA + client cert are public and returned on `GET`; `tls_client_key` is a
+  **write-only secret** like `token` (never returned; blank on update keeps the stored key). On
+  create the client cert + key must be supplied together; bad PEM / a mismatched pair is a `400`.
+  See [CONFIGURATION.md](CONFIGURATION.md#service-auth-tls--mtls).
 - Endpoints: `GET|POST /api/nodes`, `GET|PUT|DELETE /api/nodes/{id}`.
 - **Health (#98):** the backend polls each node's `GET /v1/capabilities` (`nuclei_version`) every
   `NODE_HEALTH_INTERVAL` to derive liveness; `healthy` is `null` until the first poll. When a node

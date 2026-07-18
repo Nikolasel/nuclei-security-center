@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"crypto/tls"
 	"net"
 	"net/http"
 	"strings"
@@ -34,9 +35,11 @@ type nodeView struct {
 }
 
 // nodeView builds the API view of a node, merging in its health record. The
-// token is always blanked (write-only).
+// bearer token and the mTLS client key are always blanked (write-only secrets);
+// the server CA and client cert are public and returned as-is.
 func (s *Server) nodeView(n store.ScannerNode) nodeView {
 	n.Token = ""
+	n.TLSClientKey = ""
 	v := nodeView{ScannerNode: n}
 	if h := s.orch.Health(); h != nil {
 		if rec, known := h.Get(n.ID); known {
@@ -144,6 +147,36 @@ func validateNode(in *store.ScannerNode, requireToken bool) error {
 			return errBadRequest("invalid CIDR " + c)
 		}
 		in.CIDRs[i] = c
+	}
+	return validateNodeTLS(in, requireToken)
+}
+
+// validateNodeTLS checks a node's optional mTLS material so bad PEM is a clean
+// 400 rather than a dispatch/health-poll failure later. The server CA (if given)
+// must parse; the client cert + key must form a valid pair when both are present.
+// On create (isCreate), a client cert and key must be supplied together — you
+// can't have half a keypair. On update the key may be blank (keep the stored
+// one), so a cert-only payload is allowed there and paired against the stored key
+// at use time.
+func validateNodeTLS(in *store.ScannerNode, isCreate bool) error {
+	in.TLSServerCA = strings.TrimSpace(in.TLSServerCA)
+	in.TLSClientCert = strings.TrimSpace(in.TLSClientCert)
+	in.TLSClientKey = strings.TrimSpace(in.TLSClientKey)
+
+	if in.TLSServerCA != "" {
+		if _, err := certPoolFromPEM(in.TLSServerCA); err != nil {
+			return errBadRequest("invalid server CA PEM")
+		}
+	}
+	if isCreate {
+		if (in.TLSClientCert == "") != (in.TLSClientKey == "") {
+			return errBadRequest("client cert and key must be provided together")
+		}
+	}
+	if in.TLSClientCert != "" && in.TLSClientKey != "" {
+		if _, err := tls.X509KeyPair([]byte(in.TLSClientCert), []byte(in.TLSClientKey)); err != nil {
+			return errBadRequest("client cert and key are not a valid pair")
+		}
 	}
 	return nil
 }

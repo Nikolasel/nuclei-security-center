@@ -72,7 +72,11 @@ func (o *Orchestrator) clientForScan(ctx context.Context, targets []string) (*Sc
 			return nil, "", fmt.Errorf("matching scanner node %q is unhealthy (last seen %s)", node.Name, lastSeenText(h.LastSeen))
 		}
 	}
-	return NewScannerClient(node.Endpoint, node.Token), node.Name, nil
+	client, err := clientForNode(node)
+	if err != nil {
+		return nil, "", err
+	}
+	return client, node.Name, nil
 }
 
 // lastSeenText renders a node's last-successful-poll time for an error message,
@@ -358,7 +362,11 @@ func (o *Orchestrator) SignalNodeCancel(ctx context.Context, nodeScanID string) 
 		return
 	}
 	for _, n := range nodes {
-		client := NewScannerClient(n.Endpoint, n.Token)
+		client, err := clientForNode(n)
+		if err != nil {
+			o.log.Warn("signal node cancel: build client", "node", n.Name, "err", err)
+			continue
+		}
 		if err := client.Cancel(ctx, nodeScanID); err != nil {
 			o.log.Warn("signal node cancel", "node", n.Name, "node_scan_id", nodeScanID, "err", err)
 		}

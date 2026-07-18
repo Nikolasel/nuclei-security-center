@@ -41,15 +41,32 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Optional TLS / mTLS (#26). Unset ⇒ plain HTTP (unchanged). When a server
+	// cert is configured the node serves HTTPS; when a client CA is also set it
+	// requires + verifies a client cert (mTLS) — the bearer token still applies.
+	tlsCfg, err := scanner.ServerTLSFromEnv()
+	if err != nil {
+		log.Error("configure scanner TLS", "err", err)
+		os.Exit(1)
+	}
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           scanner.NewServer(runner, token, log).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		TLSConfig:         tlsCfg,
 	}
 
 	go func() {
-		log.Info("scanner node listening", "addr", addr, "nuclei", nucleiPath)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Info("scanner node listening", "addr", addr, "nuclei", nucleiPath,
+			"tls", tlsCfg != nil, "mtls", scanner.RequiresClientCert(tlsCfg))
+		var err error
+		if tlsCfg != nil {
+			// Certs live in TLSConfig, so the file args are empty.
+			err = srv.ListenAndServeTLS("", "")
+		} else {
+			err = srv.ListenAndServe()
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("server error", "err", err)
 			os.Exit(1)
 		}

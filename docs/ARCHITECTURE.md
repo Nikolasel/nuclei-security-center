@@ -183,7 +183,13 @@ schedules, or the database — only how to run one scan and hand back results.
 | `GET /v1/capabilities` | `{ nuclei_version, templates_commit }` — polled by the backend for node liveness (#98) |
 | `GET /healthz` | Liveness / readiness |
 
-- **Auth:** `Authorization: Bearer <service-token>`, TLS required. Upgrade path: mTLS.
+- **Auth:** `Authorization: Bearer <service-token>`, TLS required. **mTLS upgrade (#26):** for a
+  node in an untrusted segment, the node serves HTTPS and requires a verified client cert
+  (`SCANNER_TLS_CERT`/`SCANNER_TLS_KEY`/`SCANNER_CLIENT_CA` on the scanner process), and the backend
+  presents a client cert / pins the node's server CA — configured **per node in the registry**
+  (`tls_server_ca`/`tls_client_cert`/`tls_client_key`), not global env, so segments can differ. The
+  bearer token still applies on top (additive). In a K8s service mesh the sidecar can terminate mTLS
+  instead, leaving these unset.
 - **Node registry:** scanner nodes live in a DB-backed registry (`scanner_nodes`) managed by
   the admin via `/api/nodes` (or a service-account script); `SCANNER_URL`/`SCAN_ZONES` only
   **seed** it on first boot. Each node serves a set of CIDRs (a node with none is a catch-all);
@@ -263,9 +269,10 @@ Also settled:
   `GET /v1/scans/{id}/results` on completion). Pull-only keeps the network flow strictly
   backend → node — no inbound path to a segmented node — and makes in-flight scans fully
   recoverable from Postgres after a restart. No callbacks.
-- **Node auth:** **per-node bearer token over TLS** for the MVP; adopt **mTLS
-  transparently via a K8s service mesh** when a node lands in an untrusted segment. No PKI
-  in the app.
+- **Node auth:** **per-node bearer token over TLS**, with optional **per-node mTLS** (#26) for a
+  node in an untrusted segment — the app presents/pins certs it stores in the registry, or a K8s
+  service mesh terminates mTLS transparently (leave the fields unset). No PKI in the app: issuance
+  and rotation stay a deployment concern.
 
 Nothing open.
 
@@ -276,7 +283,7 @@ Nothing open.
 The alpha delivers the full scan → lifecycle → triage → export loop with the security
 guardrails above, plus CI and container-image releases (see
 [Development](DEVELOPMENT.md#continuous-integration--releases)). Larger follow-on work —
-cloud IaC deploy, mTLS between backend and nodes, a scanner-node registry, an OpenSearch
-derived index, scoped disposition rules, and the regulatory tail (SSO federation, SIEM
-shipping, CMK/KMS, change-approval) — is tracked as **GitHub issues**, each additive to this
-design rather than a rewrite. None of it changes the invariants in §6.
+cloud IaC deploy, an OpenSearch derived index, scoped disposition rules, and the regulatory
+tail (SSO federation, SIEM shipping, CMK/KMS, change-approval) — is tracked as **GitHub
+issues**, each additive to this design rather than a rewrite. None of it changes the
+invariants in §6.

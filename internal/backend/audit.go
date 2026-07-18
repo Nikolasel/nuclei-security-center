@@ -15,8 +15,9 @@ import (
 // (CloudWatch / Azure Log Analytics / GCP Cloud Logging / Loki), not in the app
 // database: the aggregator already solves retention, indexing, tamper-evidence,
 // and querying, and keeping the trail off the app DB means a DB compromise can't
-// rewrite it. This matches §6's "SIEM shipping of the audit log" and the app's
-// existing slog-JSON-to-stdout convention. Filter on `event="audit"` to isolate.
+// rewrite it. The app's job ends at structured slog-JSON-to-stdout; whatever
+// ships it onward (a sidecar forwarder, a SIEM connector, etc.) is a
+// deployment concern, not an in-app feature. Filter on `event="audit"` to isolate.
 
 // Audit event_id vocabulary — a small, stable, low-cardinality set that SIEM
 // detections and dashboards key off (vs. the finer-grained `action` attribute,

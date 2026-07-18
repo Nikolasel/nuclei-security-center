@@ -22,7 +22,8 @@ import (
 // catch-all node.
 type Orchestrator struct {
 	store    *store.Store
-	archiver ObjectStore // nil when object storage is not configured
+	archiver ObjectStore    // nil when object storage is not configured
+	health   *HealthMonitor // nil disables health-aware dispatch
 	log      *slog.Logger
 
 	pollInterval time.Duration
@@ -36,13 +37,15 @@ type Orchestrator struct {
 	progress   map[string]*types.ScanProgress
 }
 
-// NewOrchestrator wires the store together with the archiver. Scanner nodes are
-// resolved per scan from the store's registry. archiver may be nil, in which case
-// raw output is ingested but not archived.
-func NewOrchestrator(st *store.Store, archiver ObjectStore, log *slog.Logger) *Orchestrator {
+// NewOrchestrator wires the store together with the archiver and health monitor.
+// Scanner nodes are resolved per scan from the store's registry. archiver may be
+// nil (raw output is ingested but not archived); health may be nil (dispatch is
+// not health-aware).
+func NewOrchestrator(st *store.Store, archiver ObjectStore, health *HealthMonitor, log *slog.Logger) *Orchestrator {
 	return &Orchestrator{
 		store:        st,
 		archiver:     archiver,
+		health:       health,
 		log:          log,
 		pollInterval: 3 * time.Second,
 		maxPolls:     600, // ~30 min ceiling at 3s
@@ -50,15 +53,35 @@ func NewOrchestrator(st *store.Store, archiver ObjectStore, log *slog.Logger) *O
 	}
 }
 
+// Health exposes the node health monitor (nil when health polling is disabled).
+func (o *Orchestrator) Health() *HealthMonitor { return o.health }
+
 // clientForScan resolves the scanner node for a scan's targets from the registry
 // and returns a client for it plus the node's name (for logging). A spanning-node
 // or no-node error propagates so run() can fail the scan before contacting anyone.
+// If the resolved node is *known* unhealthy (polled and failed within the TTL),
+// the scan fails fast with a clear error rather than dispatching into a black
+// hole; a not-yet-polled node dispatches optimistically.
 func (o *Orchestrator) clientForScan(ctx context.Context, targets []string) (*ScannerClient, string, error) {
 	node, err := o.store.SelectScannerNode(ctx, targets)
 	if err != nil {
 		return nil, "", err
 	}
+	if o.health != nil {
+		if h, known := o.health.Get(node.ID); known && !h.Healthy {
+			return nil, "", fmt.Errorf("matching scanner node %q is unhealthy (last seen %s)", node.Name, lastSeenText(h.LastSeen))
+		}
+	}
 	return NewScannerClient(node.Endpoint, node.Token), node.Name, nil
+}
+
+// lastSeenText renders a node's last-successful-poll time for an error message,
+// distinguishing "never" from a timestamp.
+func lastSeenText(t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 // Progress returns the latest cached live progress for a running scan, or nil

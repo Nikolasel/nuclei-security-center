@@ -219,6 +219,13 @@ func (r *Runner) syncTemplates() {
 
 var versionRe = regexp.MustCompile(`v?\d+\.\d+\.\d+`)
 
+// Capabilities reports the node's runtime facts for the backend's health poll
+// (#98). TemplatesCommit is not tracked standalone yet (the community set is
+// synced per scan), so it's left empty here — nuclei_version is the live signal.
+func (r *Runner) Capabilities() types.Capabilities {
+	return types.Capabilities{NucleiVersion: r.nucleiVersion()}
+}
+
 // nucleiVersion returns the engine version string, or "" if it can't be read.
 func (r *Runner) nucleiVersion() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

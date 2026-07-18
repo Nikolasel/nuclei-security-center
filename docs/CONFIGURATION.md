@@ -14,6 +14,7 @@ deployment.
 | `SCANNER_URL` | backend | `http://localhost:8081` | seeds the **default** catch-all scanner node on first boot; see [Scanner node registry](#scanner-node-registry) |
 | `SCAN_ZONES` | backend | – (unset ⇒ only the default node) | JSON array of CIDR-mapped scanner nodes; **seeds** the registry on first boot only (the DB is the system of record thereafter) |
 | `SCANNER_TOKEN` | both | – (required, **min 32 chars**) | bearer token for backend → node calls; the node refuses to start below the floor. Mint from a CSPRNG, e.g. `openssl rand -base64 24` |
+| `NODE_HEALTH_INTERVAL` | backend | `30s` | how often the backend polls each node's `/v1/capabilities` for liveness (Go duration); a node stays healthy for 3× this after its last successful poll. See [Scanner node registry](#scanner-node-registry) |
 | `SCANNER_ADDR` | scanner | `:8081` | listen address |
 | `NUCLEI_PATH` | scanner | `nuclei` | path to the nuclei binary |
 | `SCANNER_WORK_DIR` | scanner | – (unset ⇒ a private `0700` temp dir) | per-scan working dirs; leave unset for an auto-created process-exclusive dir, or point at a mounted private volume |
@@ -156,5 +157,12 @@ networks:
   rejected (split it). Overlaps *within the config file itself* still fail fast at startup.
 - Deleting the **last** catch-all node is refused, so hostname targets always have somewhere to go.
 
-Node **health** (backend-side capability polling) and a **nodes admin UI** are tracked separately
-(#98, #99).
+**Health (#98):** the backend polls each node's `GET /v1/capabilities` every `NODE_HEALTH_INTERVAL`
+(strictly backend→node) to derive liveness. `GET /api/nodes` reports per node `healthy`
+(`null` = not yet polled), `last_seen`, and `nuclei_version`. A node stays healthy for 3× the
+interval after its last successful poll, then flips. Dispatch **fails a scan fast** with a clear
+error when its matching node is known-unhealthy, rather than dispatching into a black hole; a
+not-yet-polled node dispatches optimistically. Liveness is in-memory only (recomputed from the last
+poll — never persisted, invariant #4).
+
+A **nodes admin UI** is tracked separately (#99).

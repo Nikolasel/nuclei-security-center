@@ -85,6 +85,29 @@ func (c *ScannerClient) Status(ctx context.Context, nodeScanID string) (types.Sc
 	return st, nil
 }
 
+// Capabilities fetches the node's runtime facts (nuclei version, template
+// commit). The backend polls this to derive node liveness (#98) — a failed call
+// (unreachable node, non-200) marks the node unhealthy.
+func (c *ScannerClient) Capabilities(ctx context.Context) (types.Capabilities, error) {
+	req, err := c.newReq(ctx, http.MethodGet, "/v1/capabilities", nil)
+	if err != nil {
+		return types.Capabilities{}, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return types.Capabilities{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return types.Capabilities{}, fmt.Errorf("capabilities: %s", statusErr(resp))
+	}
+	var caps types.Capabilities
+	if err := json.NewDecoder(resp.Body).Decode(&caps); err != nil {
+		return types.Capabilities{}, err
+	}
+	return caps, nil
+}
+
 // Cancel asks the node to abort a running scan (it kills the nuclei process
 // group). A node that no longer knows the scan (404 — already finished or the
 // node restarted) is not an error: the backend has already recorded the terminal

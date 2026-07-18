@@ -121,7 +121,7 @@ Decision for findings:
 | Option | Verdict |
 |---|---|
 | **Postgres `JSONB` (GIN + `pg_trgm`)** | **Chosen for MVP.** Stores variable-shape finding docs, queries + FTS into them, one store, transactions, fully portable. |
-| Postgres + **OpenSearch as a *derived* index** | The scale answer — add **later** if findings search/volume demands. Postgres stays source of truth; OpenSearch is a search projection synced at ingest. |
+| Postgres + **OpenSearch as a *derived* index** | The scale answer if findings search/volume ever outgrows Postgres. Postgres stays source of truth; OpenSearch would be a search projection synced at ingest. Not on the roadmap — the tool is scoped to a small internal team and is not expected to reach the volume where this pays off (#21). |
 | OpenSearch as the **only** store | Rejected — it's a search index, not a system of record (no ACID, near-real-time, reindexing pain). Bad fit for the queue/audit. |
 | MongoDB as the **only** store | Rejected — trades the relational core's natural fit + SQL ergonomics for document flexibility `JSONB` already provides. Net-neutral. |
 
@@ -247,10 +247,6 @@ trade; the native-services path only wins if you're committed to one cloud forev
 - **Authz on every mutating endpoint** — the three roles are enforced server-side.
 - Patch your own deps: a vuln scanner running on stale libraries is a bad look.
 
-*(If this ever moves into a regulated/ISMS scope, the additive work is SSO federation,
-SIEM shipping of the audit log, CMK/KMS, and going through change-approval — bolt-ons to
-this design, not a rewrite. That's the Sonnet estimate's real subject.)*
-
 ---
 
 ## 7. Decisions
@@ -282,8 +278,9 @@ Nothing open.
 
 The alpha delivers the full scan → lifecycle → triage → export loop with the security
 guardrails above, plus CI and container-image releases (see
-[Development](DEVELOPMENT.md#continuous-integration--releases)). Larger follow-on work —
-cloud IaC deploy, an OpenSearch derived index, scoped disposition rules, and the regulatory
-tail (SSO federation, SIEM shipping, CMK/KMS, change-approval) — is tracked as **GitHub
-issues**, each additive to this design rather than a rewrite. None of it changes the
-invariants in §6.
+[Development](DEVELOPMENT.md#continuous-integration--releases)). Earlier we tracked larger
+follow-on work as GitHub issues — cloud IaC deploy (#25), an OpenSearch derived index
+(#21), scoped disposition rules (#23), and the regulatory tail of SSO federation, SIEM
+shipping, CMK/KMS, and change-approval (#24) — and have since closed them: the team has
+chosen not to take that work on, so it is not on the roadmap. Open follow-on work lives
+in the issue tracker.

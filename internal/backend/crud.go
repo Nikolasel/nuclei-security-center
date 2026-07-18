@@ -163,6 +163,10 @@ func (s *Server) writeStoreErr(w http.ResponseWriter, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 	case errors.Is(err, store.ErrConflict):
 		http.Error(w, "a resource with that name already exists", http.StatusConflict)
+	case errors.Is(err, store.ErrNodeOverlap):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, store.ErrLastCatchAll):
+		http.Error(w, err.Error(), http.StatusConflict)
 	default:
 		s.serverError(w, "store error", err)
 	}

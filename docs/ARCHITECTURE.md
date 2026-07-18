@@ -184,8 +184,12 @@ schedules, or the database — only how to run one scan and hand back results.
 | `GET /healthz` | Liveness / readiness |
 
 - **Auth:** `Authorization: Bearer <service-token>`, TLS required. Upgrade path: mTLS.
-- **Node registry:** static list of node endpoints + zone in backend config for the MVP;
-  self-registration is a later option. Backend load-balances within a zone.
+- **Node registry:** scanner nodes live in a DB-backed registry (`scanner_nodes`) managed by
+  the admin via `/api/nodes` (or a service-account script); `SCANNER_URL`/`SCAN_ZONES` only
+  **seed** it on first boot. Each node serves a set of CIDRs (a node with none is a catch-all);
+  CIDRs are non-overlapping, so a target's IP maps to exactly one node — no load-balancing.
+  **Not** self-registration: nodes never call the backend (see the invariant below). Node
+  health via backend-side capability polling is a follow-up (#98).
 - **Node initiates nothing toward the backend** — all traffic is backend → node
   (dispatch, poll, pull results). The node's only outbound paths are scan targets and the
   template repo, which keeps a segmented node easy to firewall.

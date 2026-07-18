@@ -11,8 +11,8 @@ deployment.
 | `BACKEND_ADDR` | backend | `:8080` | listen address |
 | `DATABASE_URL` | backend | – (required) | Postgres DSN |
 | `DATABASE_PASSWORD_FILE` | backend | – (unset ⇒ use the DSN's password) | path to a file holding **only** the DB password; re-read on every new connection so a rotated credential is picked up without restarting. See [Rotating database credentials](#rotating-database-credentials) |
-| `SCANNER_URL` | backend | `http://localhost:8081` | scanner node base URL (the **default** scan zone) |
-| `SCAN_ZONES` | backend | – (unset ⇒ single default zone) | JSON array of CIDR-mapped scanner nodes for segmented networks; see [Scan zones](#scan-zones) |
+| `SCANNER_URL` | backend | `http://localhost:8081` | seeds the **default** catch-all scanner node on first boot; see [Scanner node registry](#scanner-node-registry) |
+| `SCAN_ZONES` | backend | – (unset ⇒ only the default node) | JSON array of CIDR-mapped scanner nodes; **seeds** the registry on first boot only (the DB is the system of record thereafter) |
 | `SCANNER_TOKEN` | both | – (required, **min 32 chars**) | bearer token for backend → node calls; the node refuses to start below the floor. Mint from a CSPRNG, e.g. `openssl rand -base64 24` |
 | `SCANNER_ADDR` | scanner | `:8081` | listen address |
 | `NUCLEI_PATH` | scanner | `nuclei` | path to the nuclei binary |
@@ -121,13 +121,20 @@ and leading whitespace is preserved.
 
 If `DATABASE_PASSWORD_FILE` is unset, the password in `DATABASE_URL` is used as before.
 
-## Scan zones
+## Scanner node registry
 
-By default the backend dispatches every scan to the single node at `SCANNER_URL`. In a segmented
-network, a node often has line-of-sight to only part of the address space, so you want a scan
-routed to a node that can actually reach the target (the Tenable "scan zone" model).
+Scanner nodes live in a **DB-backed registry** (the `scanner_nodes` table) that the admin
+manages via `GET/POST/PUT/DELETE /api/nodes` (reads: viewer; writes: admin) or a
+service-account script. The DB is the system of record — nodes never call the backend, so the
+one-way boundary (traffic strictly backend→node, node holds no DB credentials) is intact.
 
-Set `SCAN_ZONES` to a JSON array of zones, each mapping CIDR ranges to the node that serves them:
+A node is `{ name, endpoint, token, cidrs[], tags[] }`. It runs scans whose target IPs fall in
+its `cidrs`; a node with **no** CIDRs is a **catch-all** for hostname targets (matching is
+DNS-free, like the scope guardrail) and IPs matching no other node.
+
+**Config seeds the registry on first boot only.** `SCANNER_URL`/`SCANNER_TOKEN` seed a catch-all
+node named `default`; optional `SCAN_ZONES` (a JSON array) seeds CIDR-mapped nodes for segmented
+networks:
 
 ```json
 [
@@ -136,17 +143,18 @@ Set `SCAN_ZONES` to a JSON array of zones, each mapping CIDR ranges to the node 
 ]
 ```
 
-- Each zone carries its **own** node URL + bearer token — the scanner boundary is unchanged
-  (traffic stays one-way backend→node; the node holds no DB credentials).
-- `SCANNER_URL` / `SCANNER_TOKEN` remain the **default** zone: a target that falls in no zone
-  CIDR — including a hostname target, since zone matching is DNS-free like the scope guardrail —
-  is dispatched there. With `SCAN_ZONES` unset, every scan uses the default zone (unchanged
-  single-node behavior).
-- Zone selection is by the scan's targets: all IP/CIDR targets must fall in the **same** zone; a
-  scan whose targets span two zones is rejected (split it, one zone at a time).
-- Zone CIDRs must be **non-overlapping across zones** — the backend refuses to start if two zones
-  share or nest a CIDR, since a target could then match either (overlaps *within* a single zone are
-  fine). Fail-fast, like a malformed CIDR or a duplicate zone name.
+- **Seed-only:** at startup a config entry is inserted **only if its name is not already in the
+  DB**. An admin's edit to a node always survives restart; editing the config file afterward only
+  ever *adds* new, non-overlapping nodes — it never updates or deletes (a divergent config entry
+  logs a drift warning, DB wins). The file is for standing up a working environment without
+  scripting, not an ongoing control surface.
+- **Dispatch** routes a scan to the node whose CIDRs contain the target's IP. Node CIDRs are
+  **non-overlapping** (enforced on every API write with a 400, and on a config seed by
+  skip-with-warning; overlaps *within one node's* CIDR list are fine), so at most one node matches
+  — no round-robin. Targets that match no node use a catch-all.
+- All IP targets of a scan must resolve to the **same** node; a scan spanning two nodes is
+  rejected (split it). Overlaps *within the config file itself* still fail fast at startup.
+- Deleting the **last** catch-all node is refused, so hostname targets always have somewhere to go.
 
-Static zone configuration is the first step; scanner-node **self-registration** into a dynamic
-registry is tracked separately (#22).
+Node **health** (backend-side capability polling) and a **nodes admin UI** are tracked separately
+(#98, #99).

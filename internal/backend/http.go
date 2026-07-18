@@ -87,6 +87,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/targets/{id}", s.mutation(eventConfigChanged, "target.update", "target", RoleOperator, s.handleUpdateTarget))
 	mux.HandleFunc("DELETE /api/targets/{id}", s.mutation(eventConfigChanged, "target.delete", "target", RoleAdmin, s.handleDeleteTarget))
 
+	// Scanner nodes (#22) — the DB-backed dispatch registry. Reads → viewer;
+	// create/update/delete → admin (managing scan infrastructure), audited as
+	// config changes. Nodes never call the backend; the admin manages them here.
+	mux.HandleFunc("GET /api/nodes", s.requireRole(RoleViewer, s.handleListNodes))
+	mux.HandleFunc("POST /api/nodes", s.mutation(eventConfigChanged, "scanner_node.create", "scanner_node", RoleAdmin, s.handleCreateNode))
+	mux.HandleFunc("GET /api/nodes/{id}", s.requireRole(RoleViewer, s.handleGetNode))
+	mux.HandleFunc("PUT /api/nodes/{id}", s.mutation(eventConfigChanged, "scanner_node.update", "scanner_node", RoleAdmin, s.handleUpdateNode))
+	mux.HandleFunc("DELETE /api/nodes/{id}", s.mutation(eventConfigChanged, "scanner_node.delete", "scanner_node", RoleAdmin, s.handleDeleteNode))
+
 	// Schedules (config) — cron-driven scans. Reads → viewer; create/edit/run →
 	// operator; delete → admin (matches targets/template-sets). Run is a dispatch.
 	mux.HandleFunc("GET /api/schedules", s.requireRole(RoleViewer, s.handleListSchedules))

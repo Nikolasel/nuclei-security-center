@@ -17,11 +17,11 @@ import (
 
 // Orchestrator dispatches scans to a scanner node, polls to completion, then
 // pulls and ingests the results. The backend is the system of record; the node
-// is stateless. The Dispatcher selects the node by scan zone (#15); a
-// single-zone deployment routes every scan to one node as before.
+// is stateless. The scanner node is selected from the DB-backed registry (#22)
+// by the target's CIDR; a single-node deployment routes every scan to the one
+// catch-all node.
 type Orchestrator struct {
 	store    *store.Store
-	dispatch *Dispatcher
 	archiver ObjectStore // nil when object storage is not configured
 	log      *slog.Logger
 
@@ -36,18 +36,29 @@ type Orchestrator struct {
 	progress   map[string]*types.ScanProgress
 }
 
-// NewOrchestrator wires the store and zone dispatcher together. archiver may be
-// nil, in which case raw output is ingested but not archived.
-func NewOrchestrator(st *store.Store, dispatch *Dispatcher, archiver ObjectStore, log *slog.Logger) *Orchestrator {
+// NewOrchestrator wires the store together with the archiver. Scanner nodes are
+// resolved per scan from the store's registry. archiver may be nil, in which case
+// raw output is ingested but not archived.
+func NewOrchestrator(st *store.Store, archiver ObjectStore, log *slog.Logger) *Orchestrator {
 	return &Orchestrator{
 		store:        st,
-		dispatch:     dispatch,
 		archiver:     archiver,
 		log:          log,
 		pollInterval: 3 * time.Second,
 		maxPolls:     600, // ~30 min ceiling at 3s
 		progress:     make(map[string]*types.ScanProgress),
 	}
+}
+
+// clientForScan resolves the scanner node for a scan's targets from the registry
+// and returns a client for it plus the node's name (for logging). A spanning-node
+// or no-node error propagates so run() can fail the scan before contacting anyone.
+func (o *Orchestrator) clientForScan(ctx context.Context, targets []string) (*ScannerClient, string, error) {
+	node, err := o.store.SelectScannerNode(ctx, targets)
+	if err != nil {
+		return nil, "", err
+	}
+	return NewScannerClient(node.Endpoint, node.Token), node.Name, nil
 }
 
 // Progress returns the latest cached live progress for a running scan, or nil
@@ -146,14 +157,14 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 
 	log := o.log.With("scan_id", scanID)
 
-	// Pick the scanner node whose zone reaches the scan's targets (#15).
-	client, zoneName, err := o.dispatch.ClientFor(spec.Targets)
+	// Resolve the scanner node serving the scan's targets from the registry (#22).
+	client, nodeName, err := o.clientForScan(ctx, spec.Targets)
 	if err != nil {
 		// No node was contacted yet, so no version is known to record.
 		o.failScan(ctx, scanID, "dispatch: "+err.Error(), "", "")
 		return
 	}
-	log = log.With("zone", zoneName)
+	log = log.With("node", nodeName)
 
 	nodeScanID, err := client.StartScan(ctx, spec)
 	if err != nil {
@@ -311,18 +322,22 @@ func (o *Orchestrator) archiveRaw(ctx context.Context, scanID string, raw *os.Fi
 // authority), so a node that can't be reached only means the run keeps burning
 // until its own timeout — never a correctness problem. Errors are logged, not
 // returned.
-//
-// With scan zones (#15) the node that ran a given scan isn't known from the
-// node scan id alone, so the cancel is broadcast to every zone's node: the node
-// actually running it aborts, the rest 404 harmlessly. In a single-zone
-// deployment this is exactly one node, as before.
 func (o *Orchestrator) SignalNodeCancel(ctx context.Context, nodeScanID string) {
 	if nodeScanID == "" {
 		return // never dispatched (still queued) — nothing running on a node
 	}
-	for _, client := range o.dispatch.Clients() {
+	// The node that ran a given scan isn't recoverable from the node scan id
+	// alone, so broadcast the cancel to every registered node: the one running it
+	// aborts, the rest 404 harmlessly. One node in a single-node deployment.
+	nodes, err := o.store.ListScannerNodes(ctx)
+	if err != nil {
+		o.log.Warn("signal node cancel: list nodes", "node_scan_id", nodeScanID, "err", err)
+		return
+	}
+	for _, n := range nodes {
+		client := NewScannerClient(n.Endpoint, n.Token)
 		if err := client.Cancel(ctx, nodeScanID); err != nil {
-			o.log.Warn("signal node cancel", "node_scan_id", nodeScanID, "err", err)
+			o.log.Warn("signal node cancel", "node", n.Name, "node_scan_id", nodeScanID, "err", err)
 		}
 	}
 }

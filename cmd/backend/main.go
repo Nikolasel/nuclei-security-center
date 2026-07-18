@@ -69,7 +69,14 @@ func main() {
 		log.Error("seed scanner nodes", "err", err)
 		os.Exit(1)
 	}
-	orch := backend.NewOrchestrator(st, archive, log)
+
+	// Node health (#98): poll each registered node's /v1/capabilities to derive
+	// liveness (strictly backend→node). Dispatch fails fast to a known-unhealthy
+	// node instead of a black hole.
+	health := backend.NewHealthMonitor(st, nodeHealthInterval(), log)
+	health.Start(ctx)
+
+	orch := backend.NewOrchestrator(st, archive, health, log)
 
 	auth, err := buildAuthenticator(ctx, st, log)
 	if err != nil {
@@ -260,4 +267,16 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// nodeHealthInterval is how often the backend polls each scanner node's
+// capabilities for liveness (#98). Defaults to 30s; a node is considered healthy
+// for 3× this after its last successful poll.
+func nodeHealthInterval() time.Duration {
+	if v := os.Getenv("NODE_HEALTH_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 30 * time.Second
 }

@@ -4,6 +4,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 )
@@ -16,19 +17,49 @@ import (
 // serialized back (blanked on every read path), the same posture as a
 // service-account token.
 
+// nodeView is a scanner node as returned by the API: the stored node (token
+// blanked) plus derived liveness from the health monitor (#98). Healthy is a
+// pointer so a not-yet-polled node reads as null ("unknown"), distinct from a
+// node known to be down (false).
+type nodeView struct {
+	store.ScannerNode
+	Healthy         *bool      `json:"healthy"`
+	LastSeen        *time.Time `json:"last_seen,omitempty"`
+	NucleiVersion   string     `json:"nuclei_version,omitempty"`
+	TemplatesCommit string     `json:"templates_commit,omitempty"`
+}
+
+// nodeView builds the API view of a node, merging in its health record. The
+// token is always blanked (write-only).
+func (s *Server) nodeView(n store.ScannerNode) nodeView {
+	n.Token = ""
+	v := nodeView{ScannerNode: n}
+	if h := s.orch.Health(); h != nil {
+		if rec, known := h.Get(n.ID); known {
+			healthy := rec.Healthy
+			v.Healthy = &healthy
+			if !rec.LastSeen.IsZero() {
+				ls := rec.LastSeen
+				v.LastSeen = &ls
+			}
+			v.NucleiVersion = rec.Capabilities.NucleiVersion
+			v.TemplatesCommit = rec.Capabilities.TemplatesCommit
+		}
+	}
+	return v
+}
+
 func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	nodes, err := s.store.ListScannerNodes(r.Context())
 	if err != nil {
 		s.writeStoreErr(w, err)
 		return
 	}
-	for i := range nodes {
-		nodes[i].Token = ""
+	views := make([]nodeView, 0, len(nodes))
+	for _, n := range nodes {
+		views = append(views, s.nodeView(n))
 	}
-	if nodes == nil {
-		nodes = []store.ScannerNode{}
-	}
-	writeJSON(w, http.StatusOK, nodes)
+	writeJSON(w, http.StatusOK, views)
 }
 
 func (s *Server) handleGetNode(w http.ResponseWriter, r *http.Request) {
@@ -37,8 +68,7 @@ func (s *Server) handleGetNode(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreErr(w, err)
 		return
 	}
-	node.Token = ""
-	writeJSON(w, http.StatusOK, node)
+	writeJSON(w, http.StatusOK, s.nodeView(node))
 }
 
 func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
@@ -56,8 +86,7 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreErr(w, err)
 		return
 	}
-	node.Token = ""
-	writeJSON(w, http.StatusCreated, node)
+	writeJSON(w, http.StatusCreated, s.nodeView(node))
 }
 
 func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
@@ -74,8 +103,7 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreErr(w, err)
 		return
 	}
-	node.Token = ""
-	writeJSON(w, http.StatusOK, node)
+	writeJSON(w, http.StatusOK, s.nodeView(node))
 }
 
 func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {

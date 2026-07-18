@@ -180,7 +180,7 @@ schedules, or the database — only how to run one scan and hand back results.
 | `GET /v1/scans/{id}/results` | Stream NDJSON results (backend pulls on completion) |
 | `POST /v1/scans/{id}/cancel` | Cancel a running scan |
 | `POST /v1/templates/sync` | Force a template ref sync (also done inline before each scan) |
-| `GET /v1/capabilities` | `{ nuclei_version, templates_commit, zone, tags }` for the registry |
+| `GET /v1/capabilities` | `{ nuclei_version, templates_commit }` — polled by the backend for node liveness (#98) |
 | `GET /healthz` | Liveness / readiness |
 
 - **Auth:** `Authorization: Bearer <service-token>`, TLS required. Upgrade path: mTLS.
@@ -188,8 +188,9 @@ schedules, or the database — only how to run one scan and hand back results.
   the admin via `/api/nodes` (or a service-account script); `SCANNER_URL`/`SCAN_ZONES` only
   **seed** it on first boot. Each node serves a set of CIDRs (a node with none is a catch-all);
   CIDRs are non-overlapping, so a target's IP maps to exactly one node — no load-balancing.
-  **Not** self-registration: nodes never call the backend (see the invariant below). Node
-  health via backend-side capability polling is a follow-up (#98).
+  **Not** self-registration: nodes never call the backend (see the invariant below). The backend
+  polls each node's `GET /v1/capabilities` for liveness (#98), and dispatch fails fast to a
+  known-unhealthy node.
 - **Node initiates nothing toward the backend** — all traffic is backend → node
   (dispatch, poll, pull results). The node's only outbound paths are scan targets and the
   template repo, which keeps a segmented node easy to firewall.

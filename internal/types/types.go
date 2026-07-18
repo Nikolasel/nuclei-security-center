@@ -51,6 +51,15 @@ type ScanStatus struct {
 	Progress        *ScanProgress `json:"progress,omitempty"`
 }
 
+// Capabilities is the response from GET /v1/capabilities on the scanner node —
+// the runtime facts only the node knows, polled by the backend to derive node
+// liveness (#98). Zone/CIDRs/tags are NOT here: those live in the backend's node
+// registry, not on the (stateless) node.
+type Capabilities struct {
+	NucleiVersion   string `json:"nuclei_version,omitempty"`
+	TemplatesCommit string `json:"templates_commit,omitempty"`
+}
+
 // ScanProgress is a live snapshot of a running scan's progress, parsed from
 // Nuclei's periodic -stats-json output on the scanner node (#66). It is
 // ephemeral/in-memory — never persisted (the node is stateless per run; the

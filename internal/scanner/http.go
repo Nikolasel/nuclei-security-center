@@ -33,7 +33,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/scans/{id}", s.auth(s.handleStatus))
 	mux.HandleFunc("GET /v1/scans/{id}/results", s.auth(s.handleResults))
 	mux.HandleFunc("POST /v1/scans/{id}/cancel", s.auth(s.handleCancel))
+	mux.HandleFunc("GET /v1/capabilities", s.auth(s.handleCapabilities))
 	return mux
+}
+
+// handleCapabilities reports the node's runtime facts (nuclei version, template
+// commit). The backend polls this to derive node liveness (#98) — it is the read
+// side of a strictly backend→node call, so it stays authed like the rest of /v1.
+func (s *Server) handleCapabilities(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.runner.Capabilities())
 }
 
 // auth enforces the bearer token in constant time.

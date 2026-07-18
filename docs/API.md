@@ -267,6 +267,35 @@ Both resources support the full REST set: `GET|POST /api/targets`,
 `GET|PUT|DELETE /api/targets/{id}` (and likewise `/api/template-sets`). Deleting a target or
 template set nulls the link on past scans but never deletes scan history.
 
+## Scanner nodes
+
+The **scanner node registry** (#22) is the DB-backed list of nodes the backend dispatches to. A
+scan runs on the node whose `cidrs` contain its target's IP; a node with no CIDRs is a **catch-all**
+for hostname targets and IPs matching no other node. Reads need `viewer`; create/update/delete need
+`admin` and are audited as config changes.
+
+```sh
+# list nodes (each includes derived health: healthy / last_seen / nuclei_version)
+curl -sb jar.txt localhost:8080/api/nodes
+# add a node serving a CIDR range
+curl -sb jar.txt -X POST localhost:8080/api/nodes \
+  -d '{"name":"corp","endpoint":"http://scanner-corp:8081","token":"<bearer>","cidrs":["10.0.0.0/8"],"tags":["corp"]}'
+```
+
+- `token` is **write-only** — required on create, never returned by `GET`. On update, **leave it
+  blank to keep the stored one** (so other fields can be edited without re-supplying the secret).
+- CIDRs must **not overlap** another node (`400`), so a target's IP maps to exactly one node. A scan
+  whose targets span two nodes is rejected. Deleting the **last** catch-all node is refused (`409`),
+  so hostname targets always have somewhere to dispatch.
+- Endpoints: `GET|POST /api/nodes`, `GET|PUT|DELETE /api/nodes/{id}`.
+- **Health (#98):** the backend polls each node's `GET /v1/capabilities` (`nuclei_version`) every
+  `NODE_HEALTH_INTERVAL` to derive liveness; `healthy` is `null` until the first poll. When a node
+  is unhealthy, `health_error` carries the last poll failure (e.g. `capabilities: 401 Unauthorized`
+  for a wrong token vs. a connection error for an unreachable node), so the cause is visible without
+  reading server logs. A scan whose matching node is known-unhealthy fails fast with a clear error.
+  Config (`SCANNER_URL`/`SCAN_ZONES`) seeds this registry on first boot only —
+  see [CONFIGURATION.md](CONFIGURATION.md#scanner-node-registry).
+
 ## Scope guardrail
 
 A scan may only target hosts that fall inside an **approved target record** — the union of all

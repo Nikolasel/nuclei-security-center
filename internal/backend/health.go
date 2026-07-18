@@ -29,10 +29,13 @@ type HealthMonitor struct {
 
 // nodeHealth is the per-node poll record. LastSeen is the last *successful* poll
 // (zero = never succeeded); the entry existing at all means the node has been
-// polled at least once ("known").
+// polled at least once ("known"). LastErr is the most recent poll failure's
+// message (cleared on success), so the UI can show *why* a node is unhealthy
+// (e.g. a 401 from a wrong token vs. an unreachable endpoint).
 type nodeHealth struct {
 	LastSeen time.Time
 	Caps     types.Capabilities
+	LastErr  string
 }
 
 // NodeHealth is the read-side view of a node's liveness for the API.
@@ -40,6 +43,7 @@ type NodeHealth struct {
 	Healthy      bool
 	LastSeen     time.Time
 	Capabilities types.Capabilities
+	LastError    string
 }
 
 // pollTimeout bounds a single node's capability poll so one hung node can't stall
@@ -98,6 +102,9 @@ func (m *HealthMonitor) poll(ctx context.Context) {
 		if err == nil {
 			rec.LastSeen = m.now()
 			rec.Caps = caps
+			rec.LastErr = ""
+		} else {
+			rec.LastErr = err.Error()
 		}
 		m.health[n.ID] = rec // record exists after first attempt ⇒ "known"
 		m.mu.Unlock()
@@ -129,6 +136,7 @@ func (m *HealthMonitor) Get(nodeID string) (NodeHealth, bool) {
 		Healthy:      m.healthyLocked(rec),
 		LastSeen:     rec.LastSeen,
 		Capabilities: rec.Caps,
+		LastError:    rec.LastErr,
 	}, true
 }
 

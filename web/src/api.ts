@@ -24,6 +24,38 @@ export interface Target {
   updated_at: string;
 }
 
+// ScannerNode is a registered scanner endpoint the backend dispatches to (#22).
+// `cidrs` are the ranges it serves (empty = a catch-all for hostname/unmatched
+// targets). `token` is write-only — it is set on create/edit but never returned,
+// so it's absent here. Health fields (#98) are derived from the backend's poll of
+// the node's /v1/capabilities: `healthy` is null until the first poll (unknown).
+export interface ScannerNode {
+  id: string;
+  name: string;
+  endpoint: string;
+  cidrs: string[];
+  tags: string[];
+  healthy?: boolean | null;
+  last_seen?: string;
+  nuclei_version?: string;
+  /** the last poll failure's message; present only while unhealthy (e.g. a 401
+   *  from a wrong token, or a connection error from an unreachable node). */
+  health_error?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** ScannerNodeInput is the create/edit payload. `token` is the write-only bearer
+ *  secret — required on create; on edit, leave it blank to keep the stored one. */
+export interface ScannerNodeInput {
+  name: string;
+  endpoint: string;
+  token?: string;
+  cidrs: string[];
+  tags: string[];
+}
+
 export interface TemplateSet {
   id: string;
   name: string;
@@ -339,6 +371,14 @@ export const api = {
   updateTarget: (id: string, t: Partial<Target>) =>
     request<Target>("PUT", `/api/targets/${id}`, t),
   deleteTarget: (id: string) => request<void>("DELETE", `/api/targets/${id}`),
+
+  // Scanner nodes (#22). Reads are viewer; create/update/delete are admin. The
+  // token is write-only — never returned, blank on update keeps the stored one.
+  listNodes: () => request<ScannerNode[]>("GET", "/api/nodes"),
+  createNode: (n: ScannerNodeInput) => request<ScannerNode>("POST", "/api/nodes", n),
+  updateNode: (id: string, n: ScannerNodeInput) =>
+    request<ScannerNode>("PUT", `/api/nodes/${id}`, n),
+  deleteNode: (id: string) => request<void>("DELETE", `/api/nodes/${id}`),
 
   listTemplateSets: () => request<TemplateSet[]>("GET", "/api/template-sets"),
   createTemplateSet: (t: Partial<TemplateSet>) =>

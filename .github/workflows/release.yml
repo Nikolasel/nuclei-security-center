@@ -12,6 +12,11 @@ on:
 permissions:
   contents: read
 
+# Pinned nuclei version baked into the scanner image. Bump here (and in
+# deploy/Dockerfile.scanner's default) to upgrade nuclei; see docs/CONFIGURATION.md.
+env:
+  NUCLEI_VERSION: "3.11.0"
+
 jobs:
   # Gate the release on a green test run so a tag can never ship untested code.
   test:
@@ -37,10 +42,18 @@ jobs:
         include:
           - name: backend
             dockerfile: deploy/Dockerfile.backend
+            build-args: ""
           - name: scanner
             dockerfile: deploy/Dockerfile.scanner
+            build-args: |
+              NUCLEI_VERSION=${{ env.NUCLEI_VERSION }}
     steps:
       - uses: actions/checkout@v7
+
+      # QEMU covers any target-arch execution during the build. The Go/SPA/nuclei
+      # stages are pinned to BUILDPLATFORM (no emulation), but keep this so the
+      # arm64 leg still works if a future stage adds a target-arch RUN.
+      - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v4
 
@@ -67,6 +80,8 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          build-args: ${{ matrix.build-args }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

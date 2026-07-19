@@ -1,17 +1,54 @@
 # syntax=docker/dockerfile:1
 
-# ---- build the scanner binary ----
-FROM golang:1.26-alpine AS build
+# Pinned nuclei release baked into the image (overridable: --build-arg
+# NUCLEI_VERSION=…). Bumping this is the whole "nuclei upgrade" workflow, per
+# invariant #3 (nuclei is a binary, not a linked SDK). Keep in sync with the
+# NUCLEI_VERSION documented in docs/CONFIGURATION.md.
+ARG NUCLEI_VERSION=3.11.0
+
+# ---- build the scanner binary (cross-compiled for the target arch) ----
+# Pinned to the native build platform so the Go toolchain never runs under
+# emulation; GOOS/GOARCH come from buildx and produce a static binary for the
+# target arch.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -o /out/scanner ./cmd/scanner
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/scanner ./cmd/scanner
 
-# ---- runtime: the official Nuclei image ships the nuclei binary + updater,
-#      so the node needs nothing else to sync templates and run scans ----
-FROM projectdiscovery/nuclei:latest
+# ---- fetch + verify the pinned nuclei binary for the target arch ----
+# Runs on the native builder (BUILDPLATFORM) and downloads the TARGETARCH asset,
+# so no emulation is needed. The checksum is verified against the release's own
+# signed checksums file before the binary is trusted (replaces the implicit
+# trust in the old mutable upstream nuclei image tag).
+FROM --platform=$BUILDPLATFORM alpine:3.21 AS nuclei
+ARG NUCLEI_VERSION
+ARG TARGETARCH
+# ca-certificates is also copied into the runtime image below — nuclei fetches
+# its community templates over HTTPS at runtime, which fails on the trust-store-less
+# UBI Micro base without it (x509: certificate signed by unknown authority).
+RUN apk add --no-cache curl unzip ca-certificates
+WORKDIR /dl
+RUN set -eux; \
+    base="https://github.com/projectdiscovery/nuclei/releases/download/v${NUCLEI_VERSION}"; \
+    zip="nuclei_${NUCLEI_VERSION}_linux_${TARGETARCH}.zip"; \
+    curl -fsSLO "${base}/${zip}"; \
+    curl -fsSLO "${base}/nuclei_${NUCLEI_VERSION}_checksums.txt"; \
+    grep " ${zip}\$" "nuclei_${NUCLEI_VERSION}_checksums.txt" | sha256sum -c -; \
+    unzip -o "${zip}" nuclei -d /out; \
+    chmod 0755 /out/nuclei
+
+# ---- runtime: minimal, security-hardened Red Hat UBI 10 Micro ----
+# Ships no package manager / shell / updater — just the scanner and the pinned
+# nuclei binary. UBI Micro is glibc-based like the previous Debian base, so the
+# Runner's subprocess handling is unaffected.
+FROM redhat/ubi10-micro
+COPY --from=nuclei /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/scanner /usr/local/bin/scanner
+COPY --from=nuclei /out/nuclei /usr/local/bin/nuclei
 # SCANNER_WORK_DIR is intentionally left unset: the node then creates a private,
 # process-exclusive work dir (0700, unguessable name) under the system temp dir.
 # Set it explicitly only to point at a mounted private volume.

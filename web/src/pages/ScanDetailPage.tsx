@@ -4,6 +4,7 @@ import { api, scanRawUrl } from "../api";
 import { hasRole, useMe } from "../auth";
 import { ScanFindingsView } from "../components/ScanFindingsView";
 import { Button, Card, ErrorText, ProgressBar, Spinner, StateBadge } from "../components/ui";
+import { formatDuration, scanEtaSeconds } from "../util";
 
 export function ScanDetailPage() {
   const { id = "" } = useParams();
@@ -106,6 +107,25 @@ export function ScanDetailPage() {
                 </dd>
               </div>
               <div>
+                <dt className="text-xs text-neutral-500">Scanner node</dt>
+                <dd>
+                  {scan.data.node_name ? (
+                    scan.data.node_id ? (
+                      <Link
+                        to="/nodes"
+                        className="text-indigo-600 hover:underline dark:text-indigo-400"
+                      >
+                        {scan.data.node_name}
+                      </Link>
+                    ) : (
+                      scan.data.node_name
+                    )
+                  ) : (
+                    <span className="text-neutral-400">—</span>
+                  )}
+                </dd>
+              </div>
+              <div>
                 <dt className="text-xs text-neutral-500">Created</dt>
                 <dd>{new Date(scan.data.created_at).toLocaleString()}</dd>
               </div>
@@ -130,6 +150,14 @@ export function ScanDetailPage() {
                   {scan.data.progress.total?.toLocaleString() ?? 0} requests
                   {scan.data.progress.hosts ? ` · ${scan.data.progress.hosts} hosts` : ""}
                   {scan.data.progress.rps ? ` · ${scan.data.progress.rps} rps` : ""}
+                  {" · "}
+                  {(() => {
+                    // ETA is an estimate off Nuclei's own request-based progress,
+                    // not a countdown clock; show "estimating…" until it settles.
+                    const elapsed = (Date.now() - new Date(scan.data.created_at).getTime()) / 1000;
+                    const eta = scanEtaSeconds(scan.data.progress, elapsed);
+                    return eta != null ? `${formatDuration(eta)} remaining` : "estimating…";
+                  })()}
                 </p>
               </div>
             )}

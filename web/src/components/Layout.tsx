@@ -131,7 +131,7 @@ export function Layout({
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
       <header className="border-b border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
-        <div className="mx-auto flex max-w-6xl items-center gap-6 px-4">
+        <div className="mx-auto flex max-w-[96rem] items-center gap-6 px-4">
           <span className="py-3 font-semibold">Nuclei Security Center</span>
           <div className="ml-auto">
             <DropdownMenu.Root>
@@ -177,7 +177,7 @@ export function Layout({
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-6xl px-4 py-6">
+      <main className="mx-auto max-w-[96rem] px-4 py-6">
         <div className={cn("grid gap-8", collapsed ? "grid-cols-[3.25rem_1fr]" : "grid-cols-[12rem_1fr]")}>
           <aside>
             <div className={cn("mb-4 flex", collapsed ? "justify-center" : "justify-end")}>

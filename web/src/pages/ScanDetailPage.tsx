@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { api, scanRawUrl } from "../api";
+import { api, scanLogUrl, scanRawUrl } from "../api";
 import { hasRole, useMe } from "../auth";
 import { ScanFindingsView } from "../components/ScanFindingsView";
 import { Button, Card, ErrorText, ProgressBar, Spinner, StateBadge } from "../components/ui";
@@ -62,6 +62,14 @@ export function ScanDetailPage() {
                 className="text-sm font-normal text-indigo-600 hover:underline dark:text-indigo-400"
               >
                 Download raw output (JSONL)
+              </a>
+            )}
+            {scan.data?.has_log && (
+              <a
+                href={scanLogUrl(id)}
+                className="text-sm font-normal text-indigo-600 hover:underline dark:text-indigo-400"
+              >
+                Download log
               </a>
             )}
           </span>

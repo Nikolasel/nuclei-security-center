@@ -3,6 +3,7 @@ package scanner
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"strconv"
 	"sync"
 
@@ -65,14 +66,18 @@ func numAny(raw json.RawMessage) float64 {
 	return 0
 }
 
-// statsWriter is an io.Writer for Nuclei's stderr/stdout. It splits the stream
-// into lines: stats-JSON lines update the job's live progress; every other line
-// is forwarded to errOut (so genuine error output is still captured for failure
-// reporting). Nuclei's stdout and stderr are copied by separate goroutines, so
-// writes are serialized with a mutex.
+// statsWriter is the io.Writer for Nuclei's stderr (findings go to stdout, which
+// run() discards). It splits the stream into lines: stats-JSON lines update the
+// job's live progress; every other line (banner, [INF]/[WRN]/[ERR] diagnostics)
+// is forwarded to errOut so genuine error output is captured for failure
+// reporting. When rawOut is set, the full byte stream is also mirrored to it
+// verbatim (the per-run execution-log archive, #94) — stats lines included,
+// findings excluded (they never reach this writer). Writes are serialized with a
+// mutex so a future multi-stream wiring stays safe.
 type statsWriter struct {
 	setProgress func(types.ScanProgress)
 	errOut      *bytes.Buffer
+	rawOut      io.Writer // nil disables the verbatim log mirror
 
 	mu  sync.Mutex
 	buf []byte
@@ -81,6 +86,11 @@ type statsWriter struct {
 func (w *statsWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.rawOut != nil {
+		// Best-effort verbatim mirror; a log-file write error must not disrupt
+		// the scan (we still return len(p) so the pipe copy keeps flowing).
+		_, _ = w.rawOut.Write(p)
+	}
 	w.buf = append(w.buf, p...)
 	for {
 		i := bytes.IndexByte(w.buf, '\n')

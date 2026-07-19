@@ -115,6 +115,15 @@ func (o *Orchestrator) clearProgress(scanID string) {
 // rawObjectKey is the bucket key under which a scan's verbatim out.jsonl lives.
 func rawObjectKey(scanID string) string { return "scans/" + scanID + "/raw.jsonl" }
 
+// logObjectKey is the bucket key under which a scan's execution log (Nuclei's
+// stdout/stderr, #94) lives. A separate object from rawObjectKey.
+func logObjectKey(scanID string) string { return "scans/" + scanID + "/log.txt" }
+
+// maxLogBytes caps how much of a scan's execution log is archived, so a
+// misbehaving or compromised node can't stream an unbounded log into object
+// storage (CWE-400), mirroring the results-stream ceiling.
+const maxLogBytes = 128 << 20 // 128 MiB execution-log ceiling
+
 // Ingest quotas. The node/results stream is otherwise trusted for volume: a
 // compromised node, or a target crafted to make Nuclei emit an enormous number
 // of findings, could drive unbounded DB writes and temp-file growth. These cap
@@ -228,6 +237,10 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 			log.Warn("record scan versions", "err", err)
 		}
 	}
+	// Archive the node's execution log regardless of outcome (it's most useful
+	// on failure). pollToDone only returns on a terminal node state, so the log
+	// is complete on the node by now. Best-effort, like the raw archive.
+	o.archiveLog(ctx, client, scanID, nodeScanID)
 	if status.State == types.ScanFailed {
 		// The node reports its nuclei version before running the scan (see
 		// Runner.run), so it's already known even though the run itself failed
@@ -348,6 +361,34 @@ func (o *Orchestrator) archiveRaw(ctx context.Context, scanID string, raw *os.Fi
 		return
 	}
 	o.log.Info("archived raw output", "scan_id", scanID, "key", key, "bytes", size)
+}
+
+// archiveLog pulls the scan's execution log from the node and uploads it to
+// object storage under logObjectKey, recording the key. It is best-effort and a
+// no-op when archiving is disabled: the log is a debugging convenience, never the
+// system of record, so a fetch/storage error is logged, never fatal to the scan.
+func (o *Orchestrator) archiveLog(ctx context.Context, client *ScannerClient, scanID, nodeScanID string) {
+	if o.archiver == nil {
+		return
+	}
+	body, err := client.Log(ctx, nodeScanID)
+	if err != nil {
+		o.log.Warn("log archive: fetch", "scan_id", scanID, "err", err)
+		return
+	}
+	defer body.Close()
+	key := logObjectKey(scanID)
+	// size unknown (-1) → streamed upload; capped so a runaway log can't grow
+	// storage without bound.
+	if err := o.archiver.Put(ctx, key, io.LimitReader(body, maxLogBytes), -1, "text/plain; charset=utf-8"); err != nil {
+		o.log.Warn("log archive: upload", "scan_id", scanID, "err", err)
+		return
+	}
+	if err := o.store.SetScanLogObject(ctx, scanID, key); err != nil {
+		o.log.Warn("log archive: record key", "scan_id", scanID, "err", err)
+		return
+	}
+	o.log.Info("archived execution log", "scan_id", scanID, "key", key)
 }
 
 // SignalNodeCancel best-effort asks the scanner node to abort a running scan.

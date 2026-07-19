@@ -36,6 +36,18 @@ func TestBuildArgs(t *testing.T) {
 	if !slices.Contains(args, "-jsonl") {
 		t.Errorf("expected -jsonl in args: %v", args)
 	}
+	// The execution-log archive (#94) captures Nuclei's stderr, which -silent
+	// would strip of diagnostics (while still leaking findings to the captured
+	// stream). It must stay off; -no-color keeps the log ANSI-free.
+	if slices.Contains(args, "-silent") {
+		t.Errorf("-silent must not be set (it suppresses diagnostics from the log): %v", args)
+	}
+	if !slices.Contains(args, "-no-color") {
+		t.Errorf("expected -no-color in args: %v", args)
+	}
+	if !slices.Contains(args, "-stats-json") {
+		t.Errorf("expected -stats-json in args: %v", args)
+	}
 }
 
 func TestBuildArgsMinimal(t *testing.T) {

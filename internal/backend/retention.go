@@ -101,7 +101,7 @@ func (s *RetentionSweeper) tick(ctx context.Context) {
 // deleted. A scan that raced into a non-deletable state (ErrConflict) or vanished
 // (ErrNotFound) is skipped quietly — the next tick reconsiders the set.
 func (s *RetentionSweeper) deleteScan(ctx context.Context, id string) bool {
-	rawKey, err := s.store.DeleteScan(ctx, id)
+	rawKey, logKey, err := s.store.DeleteScan(ctx, id)
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrNotFound):
@@ -111,9 +111,14 @@ func (s *RetentionSweeper) deleteScan(ctx context.Context, id string) bool {
 		}
 		return false
 	}
-	if s.archiver != nil && rawKey != "" {
-		if err := s.archiver.Delete(ctx, rawKey); err != nil {
-			s.log.Warn("retention: purge archived raw output", "scan_id", id, "key", rawKey, "err", err)
+	if s.archiver != nil {
+		for _, key := range []string{rawKey, logKey} {
+			if key == "" {
+				continue
+			}
+			if err := s.archiver.Delete(ctx, key); err != nil {
+				s.log.Warn("retention: purge archived object", "scan_id", id, "key", key, "err", err)
+			}
 		}
 	}
 	// Every mutation is audited (docs/ARCHITECTURE.md); a background delete has no

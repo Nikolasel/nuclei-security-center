@@ -155,6 +155,8 @@ export interface Scan {
   error?: string;
   /** whether the verbatim Nuclei output was archived to object storage. */
   has_raw?: boolean;
+  /** whether the scanner's execution log (stdout/stderr) was archived (#94). */
+  has_log?: boolean;
   /** live progress; present only for running scans. */
   progress?: ScanProgress;
   created_at: string;
@@ -166,6 +168,12 @@ export interface Scan {
  *  authenticates the download (like findingsExportUrl). */
 export function scanRawUrl(id: string): string {
   return `/api/scans/${id}/raw`;
+}
+
+/** scanLogUrl is the download URL for a scan's archived execution log (Nuclei's
+ *  stdout/stderr, #94), streamed through the BFF behind the session cookie. */
+export function scanLogUrl(id: string): string {
+  return `/api/scans/${id}/log`;
 }
 
 // Occurrence is one per-scan observation (the immutable scan-detail row). It

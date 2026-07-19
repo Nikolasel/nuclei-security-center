@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,6 +36,7 @@ type job struct {
 	mu          sync.Mutex
 	status      types.ScanStatus
 	resultsPath string
+	logPath     string // Nuclei's stdout/stderr for this run (#94)
 	cancel      context.CancelFunc
 }
 
@@ -65,6 +67,7 @@ func (r *Runner) Start(spec types.ScanSpec) (string, error) {
 	j := &job{
 		status:      types.ScanStatus{ID: id, State: types.ScanRunning},
 		resultsPath: filepath.Join(dir, "results.jsonl"),
+		logPath:     filepath.Join(dir, "scan.log"),
 	}
 	r.mu.Lock()
 	r.scans[id] = j
@@ -96,6 +99,18 @@ func (r *Runner) ResultsPath(id string) (string, bool) {
 		return "", false
 	}
 	return j.resultsPath, true
+}
+
+// LogPath returns the execution-log file path for a scan (Nuclei's stdout/stderr,
+// #94), or ok=false if the scan is unknown.
+func (r *Runner) LogPath(id string) (string, bool) {
+	r.mu.Lock()
+	j, ok := r.scans[id]
+	r.mu.Unlock()
+	if !ok {
+		return "", false
+	}
+	return j.logPath, true
 }
 
 // Cancel stops a running scan by killing its process group.
@@ -147,14 +162,24 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string) {
 		return nil
 	}
 
-	// Route Nuclei's stderr/stdout through statsWriter: -stats-json lines update
-	// live progress, everything else is captured for failure reporting. Both
-	// streams share one writer (mutex-serialized) so stats land wherever Nuclei
-	// emits them across versions.
+	// Nuclei writes its findings to stdout and its diagnostics + -stats-json to
+	// stderr (verified for the pinned v3.11.0). We route ONLY stderr through
+	// statsWriter: -stats-json lines drive live progress (#66), and the full
+	// stderr stream is mirrored verbatim to a per-run log file (rawOut) as the
+	// execution-log archive (#94) — so the log captures template-load warnings
+	// and host errors. stdout (the findings) is sent to io.Discard: the findings
+	// are already persisted via -output and pulled by the backend as raw.jsonl,
+	// so capturing them here would only duplicate results into the execution log.
+	// Best-effort: a log file we can't open just disables the archive for this
+	// run; the scan itself is unaffected.
 	var stderr bytes.Buffer
 	sw := &statsWriter{setProgress: j.setProgress, errOut: &stderr}
+	if logFile, ferr := os.Create(j.logPath); ferr == nil {
+		defer logFile.Close()
+		sw.rawOut = logFile
+	}
 	cmd.Stderr = sw
-	cmd.Stdout = sw
+	cmd.Stdout = io.Discard
 
 	err := cmd.Run()
 	sw.flush()
@@ -179,11 +204,16 @@ func buildArgs(targetsFile, out string, spec types.ScanSpec) []string {
 		"-list", targetsFile,
 		"-jsonl",
 		"-output", out,
-		"-silent", // suppress banner/progress noise on stdout
+		// Deliberately NOT -silent: that flag prints findings to stdout but
+		// suppresses Nuclei's diagnostic logs (template-load warnings, host
+		// errors) — the opposite of what the execution-log archive (#94) needs.
+		// Without it, findings still go to -output (→ raw.jsonl) and stderr
+		// carries the banner + [INF]/[WRN]/[ERR] logs + -stats-json, which is what
+		// run() captures as the log. -no-color keeps that log free of ANSI codes.
+		"-no-color",
 		"-disable-update-check",
 		// Emit periodic JSON progress stats (parsed for the live progress bar,
-		// #66). Findings still go to -output; stats go to stderr/stdout where
-		// statsWriter separates them from error output.
+		// #66). Nuclei writes these to stderr, where statsWriter parses them.
 		"-stats-json",
 		"-stats-interval", "3",
 	}

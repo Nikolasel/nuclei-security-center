@@ -57,26 +57,27 @@ func NewOrchestrator(st *store.Store, archiver ObjectStore, health *HealthMonito
 func (o *Orchestrator) Health() *HealthMonitor { return o.health }
 
 // clientForScan resolves the scanner node for a scan's targets from the registry
-// and returns a client for it plus the node's name (for logging). A spanning-node
-// or no-node error propagates so run() can fail the scan before contacting anyone.
-// If the resolved node is *known* unhealthy (polled and failed within the TTL),
-// the scan fails fast with a clear error rather than dispatching into a black
-// hole; a not-yet-polled node dispatches optimistically.
-func (o *Orchestrator) clientForScan(ctx context.Context, targets []string) (*ScannerClient, string, error) {
+// and returns a client for it plus the node itself (for logging + recording which
+// node ran the scan, #107). A spanning-node or no-node error propagates so run()
+// can fail the scan before contacting anyone. If the resolved node is *known*
+// unhealthy (polled and failed within the TTL), the scan fails fast with a clear
+// error rather than dispatching into a black hole; a not-yet-polled node
+// dispatches optimistically.
+func (o *Orchestrator) clientForScan(ctx context.Context, targets []string) (*ScannerClient, store.ScannerNode, error) {
 	node, err := o.store.SelectScannerNode(ctx, targets)
 	if err != nil {
-		return nil, "", err
+		return nil, store.ScannerNode{}, err
 	}
 	if o.health != nil {
 		if h, known := o.health.Get(node.ID); known && !h.Healthy {
-			return nil, "", fmt.Errorf("matching scanner node %q is unhealthy (last seen %s)", node.Name, lastSeenText(h.LastSeen))
+			return nil, store.ScannerNode{}, fmt.Errorf("matching scanner node %q is unhealthy (last seen %s)", node.Name, lastSeenText(h.LastSeen))
 		}
 	}
 	client, err := clientForNode(node)
 	if err != nil {
-		return nil, "", err
+		return nil, store.ScannerNode{}, err
 	}
-	return client, node.Name, nil
+	return client, node, nil
 }
 
 // lastSeenText renders a node's last-successful-poll time for an error message,
@@ -185,13 +186,18 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 	log := o.log.With("scan_id", scanID)
 
 	// Resolve the scanner node serving the scan's targets from the registry (#22).
-	client, nodeName, err := o.clientForScan(ctx, spec.Targets)
+	client, node, err := o.clientForScan(ctx, spec.Targets)
 	if err != nil {
 		// No node was contacted yet, so no version is known to record.
 		o.failScan(ctx, scanID, "dispatch: "+err.Error(), "", "")
 		return
 	}
-	log = log.With("node", nodeName)
+	log = log.With("node", node.Name)
+	// Record which node was selected (#107), before contacting it — so the choice
+	// is visible for triage even if the dispatch/run then fails.
+	if err := o.store.SetScanNode(ctx, scanID, node.ID); err != nil {
+		log.Warn("record scan node", "err", err)
+	}
 
 	nodeScanID, err := client.StartScan(ctx, spec)
 	if err != nil {

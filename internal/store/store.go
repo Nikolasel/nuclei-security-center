@@ -170,6 +170,18 @@ func (s *Store) CreateScan(ctx context.Context, spec types.ScanSpec, link ScanLi
 	return id, nil
 }
 
+// SetScanNode records which registered scanner node was selected to run a scan
+// (#107). Called at dispatch, before the node is even contacted, so the choice is
+// visible even if the run then fails. nodeID may be empty (no-op) defensively.
+func (s *Store) SetScanNode(ctx context.Context, scanID, nodeID string) error {
+	if nodeID == "" {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx,
+		`UPDATE scans SET node_id = $1 WHERE id = $2`, nodeID, scanID)
+	return err
+}
+
 // MarkRunning records the node's scan id and moves the scan to running.
 func (s *Store) MarkRunning(ctx context.Context, scanID, nodeScanID string) error {
 	_, err := s.pool.Exec(ctx,
@@ -283,13 +295,19 @@ func (s *Store) ScanRawKey(ctx context.Context, id string) (string, error) {
 // zero-valued for an ad-hoc spec scan, or once the target has been deleted —
 // scans.target_id is ON DELETE SET NULL so history survives). TargetHostCount
 // is the real address-range size (types.HostCount), not len(target.Hosts) — a
-// CIDR entry counts as its full range, not as one array element.
+// CIDR entry counts as its full range, not as one array element. NodeID /
+// NodeName identify the registered scanner node dispatch selected (#107); both
+// zero-valued for a scan whose node was deleted (node_id is ON DELETE SET NULL)
+// or that failed before a node was chosen. The node's token/endpoint are never
+// exposed — only the human-facing name.
 type ScanRow struct {
 	ID              string     `json:"id"`
 	State           string     `json:"state"`
 	TargetID        string     `json:"target_id,omitempty"`
 	TargetName      string     `json:"target_name,omitempty"`
 	TargetHostCount int64      `json:"target_host_count,omitempty"`
+	NodeID          string     `json:"node_id,omitempty"`
+	NodeName        string     `json:"node_name,omitempty"`
 	NucleiVersion   string     `json:"nuclei_version,omitempty"`
 	TemplatesCommit string     `json:"templates_commit,omitempty"`
 	Error           string     `json:"error,omitempty"`
@@ -308,26 +326,29 @@ type ScanRow struct {
 // scanScan expands it into a real host count rather than counting array
 // elements.
 const scanSelect = `
-	SELECT s.id, s.state, s.target_id, t.name, t.hosts,
+	SELECT s.id, s.state, s.target_id, t.name, t.hosts, s.node_id, n.name,
 	       s.nuclei_version, s.templates_commit, s.error, s.raw_object_key,
 	       s.created_at, s.finished_at
 	  FROM scans s
-	  LEFT JOIN targets t ON t.id = s.target_id`
+	  LEFT JOIN targets t ON t.id = s.target_id
+	  LEFT JOIN scanner_nodes n ON n.id = s.node_id`
 
 // scanClientCancellable reports the states a scan can still be cancelled from.
 const scanCancellableStates = `('queued', 'running')`
 
 func scanScan(row pgx.Row) (ScanRow, error) {
 	var r ScanRow
-	var targetID, targetName, nucleiVersion, templatesCommit, errStr, rawKey *string
+	var targetID, targetName, nodeID, nodeName, nucleiVersion, templatesCommit, errStr, rawKey *string
 	var hosts []string
-	if err := row.Scan(&r.ID, &r.State, &targetID, &targetName, &hosts,
+	if err := row.Scan(&r.ID, &r.State, &targetID, &targetName, &hosts, &nodeID, &nodeName,
 		&nucleiVersion, &templatesCommit, &errStr, &rawKey, &r.CreatedAt, &r.FinishedAt); err != nil {
 		return ScanRow{}, err
 	}
 	r.TargetID = deref(targetID)
 	r.TargetName = deref(targetName)
 	r.TargetHostCount = types.HostCount(hosts)
+	r.NodeID = deref(nodeID)
+	r.NodeName = deref(nodeName)
 	r.NucleiVersion = deref(nucleiVersion)
 	r.TemplatesCommit = deref(templatesCommit)
 	r.Error = deref(errStr)

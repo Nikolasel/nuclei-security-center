@@ -146,6 +146,10 @@ export interface Scan {
   target_id?: string;
   target_name?: string;
   target_host_count?: number;
+  /** the registered scanner node dispatch selected (#107); absent once the node
+   *  is deleted or if the scan failed before a node was chosen. */
+  node_id?: string;
+  node_name?: string;
   nuclei_version?: string;
   templates_commit?: string;
   error?: string;

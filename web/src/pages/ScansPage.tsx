@@ -119,7 +119,7 @@ export function ScansPage() {
   const invalidate = () => void qc.invalidateQueries({ queryKey: ["scans"] });
   const cancel = useMutation({ mutationFn: (id: string) => api.cancelScan(id), onSuccess: invalidate });
   const del = useMutation({ mutationFn: (id: string) => api.deleteScan(id), onSuccess: invalidate });
-  const colCount = 6 + (showActions ? 1 : 0);
+  const colCount = 7 + (showActions ? 1 : 0);
 
   return (
     <div className="space-y-4">
@@ -144,6 +144,7 @@ export function ScansPage() {
                 <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
                   <th className="px-3 py-2 font-medium">Scan</th>
                   <th className="px-3 py-2 font-medium">Target</th>
+                  <th className="px-3 py-2 font-medium">Node</th>
                   <th className="px-3 py-2 font-medium">State</th>
                   <th className="px-3 py-2 font-medium">Started</th>
                   <th className="px-3 py-2 font-medium">Finished</th>
@@ -175,6 +176,13 @@ export function ScansPage() {
                         </span>
                       ) : (
                         <span className="text-neutral-400">ad-hoc</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      {s.node_name ? (
+                        <span className="text-neutral-600 dark:text-neutral-300">{s.node_name}</span>
+                      ) : (
+                        <span className="text-neutral-400">—</span>
                       )}
                     </td>
                     <td className="px-3 py-2">

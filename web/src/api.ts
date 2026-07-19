@@ -250,6 +250,16 @@ export interface LifecycleFinding {
   latest_occurrence_id?: number;
 }
 
+// AppSettings is the global settings singleton (#95). Today it carries only the
+// scan-retention policy. scan_retention_days is null when unset; retention only
+// runs when retention_enabled is true AND the day window is a positive integer.
+export interface AppSettings {
+  retention_enabled: boolean;
+  scan_retention_days: number | null;
+  updated_by?: string;
+  updated_at: string;
+}
+
 export interface Page<T> {
   items: T[];
   total: number;
@@ -411,6 +421,12 @@ export const api = {
   rotateServiceAccount: (id: string, body: { ttl_days?: number } = {}) =>
     request<ServiceAccountWithToken>("POST", `/api/service-accounts/${id}/rotate`, body),
   deleteServiceAccount: (id: string) => request<void>("DELETE", `/api/service-accounts/${id}`),
+
+  // Global app settings (#95) — admin only. The retention policy governs the
+  // background scan-deletion sweeper.
+  getSettings: () => request<AppSettings>("GET", "/api/settings"),
+  updateSettings: (body: { retention_enabled: boolean; scan_retention_days: number | null }) =>
+    request<AppSettings>("PUT", "/api/settings", body),
 
   listScans: () => request<Scan[]>("GET", "/api/scans"),
   getScan: (id: string) => request<Scan>("GET", `/api/scans/${id}`),

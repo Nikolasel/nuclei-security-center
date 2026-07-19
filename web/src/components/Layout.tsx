@@ -10,6 +10,7 @@ import {
   PanelLeftOpen,
   Radar,
   Server,
+  SlidersHorizontal,
   Target,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -44,6 +45,7 @@ const categories: Category[] = [
     panes: [
       { to: "/nodes", label: "Scanner Nodes", icon: Server },
       { to: "/service-accounts", label: "Service Accounts", icon: KeyRound },
+      { to: "/settings", label: "Settings", icon: SlidersHorizontal },
     ],
   },
 ];

@@ -9,6 +9,7 @@ import { ScansPage } from "./pages/ScansPage";
 import { ScanDetailPage } from "./pages/ScanDetailPage";
 import { SchedulesPage } from "./pages/SchedulesPage";
 import { ServiceAccountsPage } from "./pages/ServiceAccountsPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { TargetsPage } from "./pages/TargetsPage";
 import { TemplateSetsPage } from "./pages/TemplateSetsPage";
 
@@ -58,6 +59,7 @@ export default function App() {
         <Route path="/template-sets" element={<TemplateSetsPage />} />
         <Route path="/nodes" element={<NodesPage />} />
         <Route path="/service-accounts" element={<ServiceAccountsPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/findings" replace />} />
       </Routes>
     </Layout>

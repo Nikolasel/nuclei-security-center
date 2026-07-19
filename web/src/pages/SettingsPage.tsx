@@ -17,6 +17,7 @@ export function SettingsPage() {
 
   const [enabled, setEnabled] = useState(false);
   const [days, setDays] = useState("");
+  const [includeAdhoc, setIncludeAdhoc] = useState(false);
 
   // Seed the form from the server once it loads; re-seed whenever the fetched
   // record changes (e.g. after a save invalidates and refetches).
@@ -24,6 +25,7 @@ export function SettingsPage() {
     if (settings.data) {
       setEnabled(settings.data.retention_enabled);
       setDays(settings.data.scan_retention_days != null ? String(settings.data.scan_retention_days) : "");
+      setIncludeAdhoc(settings.data.retention_include_adhoc);
     }
   }, [settings.data]);
 
@@ -38,6 +40,7 @@ export function SettingsPage() {
       api.updateSettings({
         retention_enabled: enabled,
         scan_retention_days: daysValid ? daysNum : null,
+        retention_include_adhoc: includeAdhoc,
       }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["settings"] }),
   });
@@ -68,9 +71,8 @@ export function SettingsPage() {
             <h2 className="text-sm font-semibold">Scan retention</h2>
             <p className="mt-1 text-sm text-neutral-500">
               Automatically delete scans (and their findings occurrences and archived output) older than a
-              set number of days. Each target&apos;s most recent scan is always kept, and ad-hoc scans are
-              never auto-deleted. Deletion is evidence-preserving — a finding&apos;s lifecycle is recomputed
-              from the scans that remain.
+              set number of days. Each target&apos;s most recent scan is always kept. Deletion is
+              evidence-preserving — a finding&apos;s lifecycle is recomputed from the scans that remain.
             </p>
           </div>
 
@@ -100,6 +102,23 @@ export function SettingsPage() {
               Enter a positive whole number of days.
             </p>
           )}
+
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={includeAdhoc}
+              disabled={!enabled}
+              onChange={(e) => setIncludeAdhoc(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-neutral-300 dark:border-neutral-700"
+            />
+            <span>
+              Also delete ad-hoc scans (not tied to a target)
+              <span className="mt-0.5 block text-xs text-neutral-500">
+                Ad-hoc scans have no target history to anchor, so when included they&apos;re deleted purely
+                on age. Off by default — only target-linked scans are swept.
+              </span>
+            </span>
+          </label>
 
           {save.isError && <ErrorText error={save.error} />}
 

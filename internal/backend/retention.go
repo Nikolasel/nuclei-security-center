@@ -73,7 +73,7 @@ func (s *RetentionSweeper) tick(ctx context.Context) {
 		return
 	}
 	cutoff := time.Now().Add(-time.Duration(*settings.ScanRetentionDays) * 24 * time.Hour)
-	ids, err := s.store.ScansForRetention(ctx, cutoff, maxRetentionDeletePerTick)
+	ids, err := s.store.ScansForRetention(ctx, cutoff, settings.RetentionIncludeAdhoc, maxRetentionDeletePerTick)
 	if err != nil {
 		s.log.Error("list scans for retention", "err", err)
 		return
@@ -82,6 +82,7 @@ func (s *RetentionSweeper) tick(ctx context.Context) {
 		return
 	}
 	s.log.Info("retention sweep starting", "retention_days", *settings.ScanRetentionDays,
+		"include_adhoc", settings.RetentionIncludeAdhoc,
 		"cutoff", cutoff.UTC().Format(time.RFC3339), "candidates", len(ids))
 	deleted := 0
 	for _, id := range ids {

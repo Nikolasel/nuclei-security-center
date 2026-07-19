@@ -23,10 +23,12 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 
 // updateSettingsRequest is the PUT /api/settings body. RetentionDays is a pointer
 // so an explicit null (clear the window) is distinguishable from omitted. When
-// retention is enabled the window must be a positive integer.
+// retention is enabled the window must be a positive integer. RetentionIncludeAdhoc
+// opts ad-hoc (target-less) scans into the sweep.
 type updateSettingsRequest struct {
-	RetentionEnabled  bool `json:"retention_enabled"`
-	ScanRetentionDays *int `json:"scan_retention_days"`
+	RetentionEnabled      bool `json:"retention_enabled"`
+	ScanRetentionDays     *int `json:"scan_retention_days"`
+	RetentionIncludeAdhoc bool `json:"retention_include_adhoc"`
 }
 
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
@@ -45,8 +47,9 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updated, err := s.store.UpdateAppSettings(r.Context(), store.AppSettings{
-		RetentionEnabled:  req.RetentionEnabled,
-		ScanRetentionDays: req.ScanRetentionDays,
+		RetentionEnabled:      req.RetentionEnabled,
+		ScanRetentionDays:     req.ScanRetentionDays,
+		RetentionIncludeAdhoc: req.RetentionIncludeAdhoc,
 	}, actorFrom(r))
 	if err != nil {
 		s.serverError(w, "update app settings", err)

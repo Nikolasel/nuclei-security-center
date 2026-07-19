@@ -121,6 +121,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/service-accounts/{id}/rotate", s.mutation(eventServiceAccountChanged, "service_account.rotate", "service_account", RoleAdmin, s.handleRotateServiceAccount))
 	mux.HandleFunc("DELETE /api/service-accounts/{id}", s.mutation(eventServiceAccountChanged, "service_account.revoke", "service_account", RoleAdmin, s.handleDeleteServiceAccount))
 
+	// Global app settings (#95) — the scan-retention policy. Admin-only surface;
+	// the read is admin too (it's an infrastructure config page, not a viewer
+	// read). The write is audited as a config change.
+	mux.HandleFunc("GET /api/settings", s.requireRole(RoleAdmin, s.handleGetSettings))
+	mux.HandleFunc("PUT /api/settings", s.mutation(eventConfigChanged, "settings.update", "settings", RoleAdmin, s.handleUpdateSettings))
+
 	// Unknown /api/* paths get a JSON-ish 404 rather than the SPA's index.html.
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)

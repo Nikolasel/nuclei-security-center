@@ -96,6 +96,12 @@ func main() {
 	backend.NewScheduler(st, apiSrv, log).Start(ctx)
 	log.Info("scheduler started")
 
+	// The retention sweeper (#95) deletes scans older than the admin-configured
+	// window. It reads the policy fresh each tick (no-op until an admin enables
+	// it), so it's always safe to start.
+	backend.NewRetentionSweeper(st, archive, retentionSweepInterval(), log).Start(ctx)
+	log.Info("retention sweeper started")
+
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           apiSrv.Handler(),
@@ -279,4 +285,16 @@ func nodeHealthInterval() time.Duration {
 		}
 	}
 	return 30 * time.Second
+}
+
+// retentionSweepInterval is how often the retention sweeper (#95) checks for
+// scans past the retention window. Defaults to hourly (this isn't cron-precision
+// work); RETENTION_SWEEP_INTERVAL overrides it (a short value is handy in tests).
+func retentionSweepInterval() time.Duration {
+	if v := os.Getenv("RETENTION_SWEEP_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return time.Hour
 }

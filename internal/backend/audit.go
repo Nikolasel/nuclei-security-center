@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -110,6 +111,33 @@ func (s *Server) recordAudit(r *http.Request, id store.Identity, eventID, action
 	}
 
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "audit "+action, attrs...)
+}
+
+// logSystemAudit emits an audit event for a mutation the system performs on its
+// own — no HTTP request, no user (e.g. the retention sweeper deleting scans).
+// recordAudit needs an *http.Request for the actor/method/path, which a
+// background job doesn't have; this keeps the same event=audit contract with
+// actor_type="system" so automated mutations are still visible in the aggregator
+// (docs/ARCHITECTURE.md's guarantee that every mutation is logged). Always INFO,
+// like recordAudit — a routine automated action isn't a fault.
+func logSystemAudit(ctx context.Context, log *slog.Logger, eventID, action, objectType, objectID string) {
+	if log == nil {
+		return
+	}
+	attrs := []slog.Attr{
+		slog.String("event", "audit"),
+		slog.String("event_id", eventID),
+		slog.String("action", action),
+		slog.String("actor_subject", "system"),
+		slog.String("actor_type", "system"),
+	}
+	if objectType != "" {
+		attrs = append(attrs, slog.String("object_type", objectType))
+	}
+	if objectID != "" {
+		attrs = append(attrs, slog.String("object_id", objectID))
+	}
+	log.LogAttrs(ctx, slog.LevelInfo, "audit "+action, attrs...)
 }
 
 // actorType classifies the caller for audit detections: a service-account token

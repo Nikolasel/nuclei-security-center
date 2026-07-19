@@ -1,25 +1,40 @@
 # syntax=docker/dockerfile:1
 
 # ---- build the SPA (embedded into the backend binary) ----
-FROM node:26-alpine AS web
+# Arch-independent JS build; pinned to the native platform so npm never runs
+# under emulation.
+FROM --platform=$BUILDPLATFORM node:26-alpine AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-# ---- build the backend binary (embeds web/dist) ----
-FROM golang:1.26-alpine AS build
+# ---- build the backend binary (embeds web/dist), cross-compiled ----
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 # Overwrite the committed placeholder with the freshly built SPA before embedding.
 COPY --from=web /web/dist ./web/dist
-RUN CGO_ENABLED=0 go build -trimpath -o /out/backend ./cmd/backend
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/backend ./cmd/backend
 
-# ---- minimal runtime: static binary on distroless, non-root ----
-FROM gcr.io/distroless/static-debian12:nonroot
+# ---- CA bundle for outbound TLS (Postgres / OIDC IdP / S3) ----
+# UBI 10 Micro ships no CA trust store at all (verified: none of the standard
+# /etc/ssl or /etc/pki paths exist), so copy a known-good bundle to a path Go's
+# crypto/x509 searches on Linux. The backend needs this for its outbound TLS.
+FROM alpine:3.21 AS certs
+RUN apk add --no-cache ca-certificates
+
+# ---- minimal runtime: static binary on Red Hat UBI 10 Micro, non-root ----
+FROM redhat/ubi10-micro
+COPY --from=certs /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/backend /backend
+# Run unprivileged. UBI Micro has no useradd, so use a bare numeric UID; the Go
+# binary needs no passwd entry.
+USER 1001
 EXPOSE 8080
 ENTRYPOINT ["/backend"]

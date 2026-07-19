@@ -52,10 +52,11 @@ RUN HOME=/root /gen/nuclei -update-templates
 # Ships no package manager / shell / updater / trust store — just the scanner,
 # the pinned nuclei binary, and the pre-baked templates. UBI Micro is glibc-based
 # like the previous Debian base, so the Runner's subprocess handling is unaffected.
-# No CA bundle is needed here: templates are baked in (the Runner's best-effort
-# pre-scan refresh simply no-ops offline), and nuclei does not verify scan-target
-# certificates.
+# UBI Micro ships no CA store, so copy one in for nuclei's outbound TLS (OOB /
+# interactsh, honest template refresh); templates are already baked so scanning
+# works even when that TLS is unavailable.
 FROM redhat/ubi10-micro
+COPY --from=nuclei /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/scanner /usr/local/bin/scanner
 COPY --from=nuclei /out/nuclei /usr/local/bin/nuclei
 COPY --from=nuclei /root/nuclei-templates /root/nuclei-templates

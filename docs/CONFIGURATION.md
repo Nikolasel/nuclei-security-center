@@ -217,13 +217,13 @@ Apple-silicon runners without a second image). The Go binaries are cross-compile
 `CGO_ENABLED=0` (static, no glibc surprises) from the native build platform, so nothing runs under
 emulation.
 
-UBI 10 Micro ships **no CA trust store** at all. The **backend** therefore carries a CA bundle at
-`/etc/ssl/certs/ca-certificates.crt` for its outbound TLS (Postgres / OIDC IdP / S3) and runs as a
-non-root user. The **scanner needs no CA bundle**: its templates are baked in at build time (below),
-and nuclei does not verify scan-target certificates.
+UBI 10 Micro ships **no CA trust store** at all, so **both** images copy a CA bundle to
+`/etc/ssl/certs/ca-certificates.crt` for outbound TLS. The **backend** needs it for Postgres / OIDC
+IdP / S3 (and runs as a non-root user); the **scanner** needs it for nuclei's outbound TLS (OOB /
+interactsh interactions, honest template refresh).
 
-The **scanner image is fully self-contained** — it bakes in both a pinned `nuclei` binary and the
-community templates, so a node needs no network or trust store at runtime to scan:
+The **scanner image is also fully self-contained** — it bakes in both a pinned `nuclei` binary and
+the community templates, so a node can still scan even with no network or unreachable TLS at runtime:
 
 - **Pinned, checksum-verified `nuclei`** — a build stage downloads the release asset and **verifies
   its SHA-256 against the release checksums file** before copying just the `nuclei` binary onto the

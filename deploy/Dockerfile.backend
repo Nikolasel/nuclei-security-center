@@ -23,8 +23,9 @@ COPY --from=web /web/dist ./web/dist
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/backend ./cmd/backend
 
 # ---- CA bundle for outbound TLS (Postgres / OIDC IdP / S3) ----
-# UBI Micro is intentionally minimal and may not ship a trust store; copy a
-# known-good bundle to a path Go's crypto/x509 searches on Linux.
+# UBI 10 Micro ships no CA trust store at all (verified: none of the standard
+# /etc/ssl or /etc/pki paths exist), so copy a known-good bundle to a path Go's
+# crypto/x509 searches on Linux. The backend needs this for its outbound TLS.
 FROM alpine:3.21 AS certs
 RUN apk add --no-cache ca-certificates
 

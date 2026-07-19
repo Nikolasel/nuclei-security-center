@@ -214,21 +214,31 @@ Both images build on **Red Hat UBI 10 Micro** — a minimal, security-hardened b
 enterprise support window and no package manager/shell — and publish as **multi-arch manifest
 lists** for `linux/amd64` and `linux/arm64` (so they run on ARM hosts like AWS Graviton or
 Apple-silicon runners without a second image). The Go binaries are cross-compiled with
-`CGO_ENABLED=0` (static, no glibc surprises); the backend runs as a non-root user and carries a CA
-bundle at `/etc/ssl/certs/ca-certificates.crt` for outbound TLS (Postgres / OIDC IdP / S3).
+`CGO_ENABLED=0` (static, no glibc surprises) from the native build platform, so nothing runs under
+emulation.
 
-The **scanner image bakes in a pinned `nuclei` binary** rather than inheriting it from an upstream
-`latest` tag: a build stage downloads the release asset for the target arch and **verifies its
-SHA-256 against the release checksums file** before copying just the `nuclei` binary onto the
-runtime image (on `PATH`, so `NUCLEI_PATH=nuclei` still works). This makes the scanner runtime
-reproducible and removes the trust dependency on a mutable upstream tag.
+UBI 10 Micro ships **no CA trust store** at all. The **backend** therefore carries a CA bundle at
+`/etc/ssl/certs/ca-certificates.crt` for its outbound TLS (Postgres / OIDC IdP / S3) and runs as a
+non-root user. The **scanner needs no CA bundle**: its templates are baked in at build time (below),
+and nuclei does not verify scan-target certificates.
+
+The **scanner image is fully self-contained** — it bakes in both a pinned `nuclei` binary and the
+community templates, so a node needs no network or trust store at runtime to scan:
+
+- **Pinned, checksum-verified `nuclei`** — a build stage downloads the release asset and **verifies
+  its SHA-256 against the release checksums file** before copying just the `nuclei` binary onto the
+  runtime (on `PATH`, so `NUCLEI_PATH=nuclei` still works). This removes the trust dependency on a
+  mutable upstream image tag.
+- **Templates baked at build time** — the same stage runs `nuclei -update-templates` (templates are
+  arch-independent YAML) and copies the result into the image. The node's best-effort pre-scan
+  refresh then simply no-ops when offline, using the baked set.
 
 | Build arg | Image | Default | Purpose |
 | --- | --- | --- | --- |
-| `NUCLEI_VERSION` | scanner | pinned in `deploy/Dockerfile.scanner` | nuclei release baked into the image. **Bumping nuclei = bump this** (per architecture invariant #3, nuclei is a binary, not a linked SDK). |
+| `NUCLEI_VERSION` | scanner | **pinned in `deploy/Dockerfile.scanner`** | nuclei release baked into the image. This `ARG` is the **single source of truth** — CI does not override it. Bumping nuclei = bump this (per architecture invariant #3, nuclei is a binary, not a linked SDK). |
 
-To upgrade nuclei, change the `ARG NUCLEI_VERSION` default in `deploy/Dockerfile.scanner` **and** the
-`NUCLEI_VERSION` env in `.github/workflows/release.yml` (kept in sync), or override per-build:
+To upgrade nuclei, change the `ARG NUCLEI_VERSION` default in `deploy/Dockerfile.scanner` (that also
+re-bakes the current templates on the next build), or override per-build:
 
 ```sh
 docker buildx build -f deploy/Dockerfile.scanner \

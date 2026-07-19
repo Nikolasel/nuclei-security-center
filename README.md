@@ -32,8 +32,9 @@ Traffic is strictly backend → scanner. See **[docs/ARCHITECTURE.md](docs/ARCHI
 the design rationale.
 
 Both services ship as multi-arch (`linux/amd64` + `linux/arm64`) images on a minimal **Red Hat UBI
-10 Micro** base; the scanner bakes in a checksum-verified, pinned `nuclei` binary (`NUCLEI_VERSION`).
-See **[docs/CONFIGURATION.md → Container images](docs/CONFIGURATION.md#container-images)**.
+10 Micro** base; the scanner is fully self-contained, baking in a checksum-verified, pinned `nuclei`
+binary (`NUCLEI_VERSION`) plus the community templates. See
+**[docs/CONFIGURATION.md → Container images](docs/CONFIGURATION.md#container-images)**.
 
 ## Quick start
 

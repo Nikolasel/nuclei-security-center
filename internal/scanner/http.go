@@ -32,6 +32,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/scans", s.auth(s.handleStart))
 	mux.HandleFunc("GET /v1/scans/{id}", s.auth(s.handleStatus))
 	mux.HandleFunc("GET /v1/scans/{id}/results", s.auth(s.handleResults))
+	mux.HandleFunc("GET /v1/scans/{id}/log", s.auth(s.handleLog))
 	mux.HandleFunc("POST /v1/scans/{id}/cancel", s.auth(s.handleCancel))
 	mux.HandleFunc("GET /v1/capabilities", s.auth(s.handleCapabilities))
 	return mux
@@ -100,6 +101,27 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, f)
+}
+
+// handleLog streams a scan's execution log (Nuclei's verbatim stdout/stderr for
+// the run, #94). Mirrors handleResults: an absent log file (e.g. the scan never
+// produced one) is an empty 200, not an error.
+func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
+	path, ok := s.runner.LogPath(r.PathValue("id"))
+	if !ok {
+		http.Error(w, "scan not found", http.StatusNotFound)
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, f)
 }

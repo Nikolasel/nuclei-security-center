@@ -71,6 +71,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/scans/{id}", s.mutation(eventScanDispatched, "scan.delete", "scan", RoleAdmin, s.handleDeleteScan))
 	mux.HandleFunc("GET /api/scans/{id}/findings", s.requireRole(RoleViewer, s.handleListScanFindings))
 	mux.HandleFunc("GET /api/scans/{id}/raw", s.requireRole(RoleViewer, s.handleGetScanRaw))
+	mux.HandleFunc("GET /api/scans/{id}/log", s.requireRole(RoleViewer, s.handleGetScanLog))
 
 	// Findings — the deduplicated, triageable lifecycle entities (§3). Analyst
 	// overlays (disposition, severity recast) are mutations → operator; reads → viewer.
@@ -355,7 +356,7 @@ func (s *Server) handleCancelScan(w http.ResponseWriter, r *http.Request) {
 // is already the system of record and the row is gone).
 func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	rawKey, err := s.store.DeleteScan(r.Context(), id)
+	rawKey, logKey, err := s.store.DeleteScan(r.Context(), id)
 	if err != nil {
 		switch {
 		case errors.Is(err, store.ErrNotFound):
@@ -367,9 +368,14 @@ func (s *Server) handleDeleteScan(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if s.archive != nil && rawKey != "" {
-		if err := s.archive.Delete(r.Context(), rawKey); err != nil {
-			s.log.Warn("purge archived raw output", "scan_id", id, "key", rawKey, "err", err)
+	if s.archive != nil {
+		for _, key := range []string{rawKey, logKey} {
+			if key == "" {
+				continue
+			}
+			if err := s.archive.Delete(r.Context(), key); err != nil {
+				s.log.Warn("purge archived scan object", "scan_id", id, "key", key, "err", err)
+			}
 		}
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -413,6 +419,47 @@ func (s *Server) handleGetScanRaw(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="scan-%s.jsonl"`, id))
 	if _, err := io.Copy(w, obj); err != nil {
 		s.log.Warn("stream raw archive", "scan_id", id, "err", err)
+	}
+}
+
+// handleGetScanLog streams a scan's archived execution log (Nuclei's
+// stdout/stderr, #94) from object storage, through the BFF like handleGetScanRaw
+// — same-origin behind the session cookie, no presigned URLs.
+func (s *Server) handleGetScanLog(w http.ResponseWriter, r *http.Request) {
+	if s.archive == nil {
+		http.Error(w, "object storage is not configured", http.StatusNotFound)
+		return
+	}
+	id := r.PathValue("id")
+	key, err := s.store.ScanLogKey(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.Error(w, "scan not found", http.StatusNotFound)
+			return
+		}
+		s.serverError(w, "get scan log key", err)
+		return
+	}
+	if key == "" {
+		http.Error(w, "no archived log for this scan", http.StatusNotFound)
+		return
+	}
+
+	obj, err := s.archive.Get(r.Context(), key)
+	if err != nil {
+		if errors.Is(err, ErrObjectNotFound) {
+			http.Error(w, "archived log is missing from storage", http.StatusNotFound)
+			return
+		}
+		s.serverError(w, "get archived log", err)
+		return
+	}
+	defer obj.Close()
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="scan-%s.log"`, id))
+	if _, err := io.Copy(w, obj); err != nil {
+		s.log.Warn("stream log archive", "scan_id", id, "err", err)
 	}
 }
 

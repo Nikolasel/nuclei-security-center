@@ -169,6 +169,25 @@ func (c *ScannerClient) Results(ctx context.Context, nodeScanID string) (io.Read
 	return resp.Body, nil
 }
 
+// Log streams the node's execution log for a scan (Nuclei's verbatim
+// stdout/stderr, #94). The caller must close the reader. Like Results it uses a
+// generously-timed client since the log can stream a while.
+func (c *ScannerClient) Log(ctx context.Context, nodeScanID string) (io.ReadCloser, error) {
+	req, err := c.newReq(ctx, http.MethodGet, "/v1/scans/"+nodeScanID+"/log", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.newHTTPClient(resultsClientTimeout).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		return nil, fmt.Errorf("log: %s", statusErr(resp))
+	}
+	return resp.Body, nil
+}
+
 func statusErr(resp *http.Response) string {
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 	msg := strings.TrimSpace(string(b))

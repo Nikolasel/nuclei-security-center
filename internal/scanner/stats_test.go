@@ -74,3 +74,25 @@ func TestStatsWriterSeparatesStatsFromErrors(t *testing.T) {
 		t.Fatalf("error output = %q", got)
 	}
 }
+
+// The rawOut mirror (#94) must capture the full byte stream verbatim — stats
+// lines included — so the archived execution log is exactly what Nuclei emitted,
+// even as errOut still filters stats out of the failure-report buffer.
+func TestStatsWriterMirrorsRawOut(t *testing.T) {
+	var errBuf, rawBuf bytes.Buffer
+	sw := &statsWriter{errOut: &errBuf, rawOut: &rawBuf}
+
+	sw.Write([]byte("[INF] loading templates\n"))
+	sw.Write([]byte(`{"percent":"50","total":"10","requests":"5"}` + "\n"))
+	sw.Write([]byte("[ERR] host down"))
+	sw.flush()
+
+	want := "[INF] loading templates\n" + `{"percent":"50","total":"10","requests":"5"}` + "\n" + "[ERR] host down"
+	if got := rawBuf.String(); got != want {
+		t.Fatalf("rawOut = %q, want %q", got, want)
+	}
+	// errOut still excludes the stats line.
+	if got := errBuf.String(); got != "[INF] loading templates\n[ERR] host down\n" {
+		t.Fatalf("errOut = %q", got)
+	}
+}

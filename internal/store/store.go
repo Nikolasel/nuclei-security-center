@@ -289,6 +289,29 @@ func (s *Store) ScanRawKey(ctx context.Context, id string) (string, error) {
 	return deref(key), nil
 }
 
+// SetScanLogObject records the bucket key of a scan's archived execution log
+// (Nuclei's stdout/stderr, #94). The key is internal; the API exposes only
+// ScanRow.HasLog. Independent of raw_object_key — the two are separate objects.
+func (s *Store) SetScanLogObject(ctx context.Context, scanID, key string) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE scans SET log_object_key = $1 WHERE id = $2`, key, scanID)
+	return err
+}
+
+// ScanLogKey returns the bucket key of a scan's archived execution log, or "" if
+// the scan has none. ErrNotFound if the scan itself is unknown.
+func (s *Store) ScanLogKey(ctx context.Context, id string) (string, error) {
+	var key *string
+	err := s.pool.QueryRow(ctx, `SELECT log_object_key FROM scans WHERE id = $1`, id).Scan(&key)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", ErrNotFound
+		}
+		return "", err
+	}
+	return deref(key), nil
+}
+
 // ScanRow is a scan as returned to API callers. HasRaw reports whether the
 // verbatim Nuclei output was archived (and is thus downloadable). TargetID /
 // TargetName / TargetHostCount name the stored target the scan ran against (all
@@ -312,6 +335,7 @@ type ScanRow struct {
 	TemplatesCommit string     `json:"templates_commit,omitempty"`
 	Error           string     `json:"error,omitempty"`
 	HasRaw          bool       `json:"has_raw"`
+	HasLog          bool       `json:"has_log"`
 	CreatedAt       time.Time  `json:"created_at"`
 	FinishedAt      *time.Time `json:"finished_at,omitempty"`
 	// Progress is live scan progress (#66), attached by the API layer for running
@@ -327,7 +351,7 @@ type ScanRow struct {
 // elements.
 const scanSelect = `
 	SELECT s.id, s.state, s.target_id, t.name, t.hosts, s.node_id, n.name,
-	       s.nuclei_version, s.templates_commit, s.error, s.raw_object_key,
+	       s.nuclei_version, s.templates_commit, s.error, s.raw_object_key, s.log_object_key,
 	       s.created_at, s.finished_at
 	  FROM scans s
 	  LEFT JOIN targets t ON t.id = s.target_id
@@ -338,10 +362,10 @@ const scanCancellableStates = `('queued', 'running')`
 
 func scanScan(row pgx.Row) (ScanRow, error) {
 	var r ScanRow
-	var targetID, targetName, nodeID, nodeName, nucleiVersion, templatesCommit, errStr, rawKey *string
+	var targetID, targetName, nodeID, nodeName, nucleiVersion, templatesCommit, errStr, rawKey, logKey *string
 	var hosts []string
 	if err := row.Scan(&r.ID, &r.State, &targetID, &targetName, &hosts, &nodeID, &nodeName,
-		&nucleiVersion, &templatesCommit, &errStr, &rawKey, &r.CreatedAt, &r.FinishedAt); err != nil {
+		&nucleiVersion, &templatesCommit, &errStr, &rawKey, &logKey, &r.CreatedAt, &r.FinishedAt); err != nil {
 		return ScanRow{}, err
 	}
 	r.TargetID = deref(targetID)
@@ -353,6 +377,7 @@ func scanScan(row pgx.Row) (ScanRow, error) {
 	r.TemplatesCommit = deref(templatesCommit)
 	r.Error = deref(errStr)
 	r.HasRaw = rawKey != nil
+	r.HasLog = logKey != nil
 	return r, nil
 }
 
@@ -417,29 +442,30 @@ func (s *Store) CancelScan(ctx context.Context, id, reason string) (nodeScanID s
 // lifecycle references are set NULL). It refuses to delete a queued/running scan
 // — that must be cancelled first — returning ErrConflict so the in-flight
 // orchestrator goroutine never writes to a deleted row. It returns the scan's
-// archived raw-object key (if any) so the caller can best-effort purge storage.
-func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey string, err error) {
+// archived object keys (raw output and execution log, either possibly empty) so
+// the caller can best-effort purge storage.
+func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey string, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer tx.Rollback(ctx)
 
-	var key, targetID *string
+	var rkey, lkey, targetID *string
 	var state string
-	err = tx.QueryRow(ctx, `SELECT state, raw_object_key, target_id FROM scans WHERE id = $1`, id).
-		Scan(&state, &key, &targetID)
+	err = tx.QueryRow(ctx, `SELECT state, raw_object_key, log_object_key, target_id FROM scans WHERE id = $1`, id).
+		Scan(&state, &rkey, &lkey, &targetID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return "", ErrNotFound
+			return "", "", ErrNotFound
 		}
-		return "", err
+		return "", "", err
 	}
 	if state == string(types.ScanQueued) || state == string(types.ScanRunning) {
-		return "", ErrConflict
+		return "", "", ErrConflict
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM scans WHERE id = $1`, id); err != nil {
-		return "", err
+		return "", "", err
 	}
 	// The delete just cascaded this scan's findings occurrences and (via
 	// ON DELETE SET NULL) nulled any first_seen_scan/last_seen_scan/
@@ -450,12 +476,12 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey string, err e
 	// only the scans that still exist, so every finding's story stays
 	// explainable from what's currently visible.
 	if err := repairLifecycleForTarget(ctx, tx, targetID); err != nil {
-		return "", fmt.Errorf("repair lifecycle: %w", err)
+		return "", "", fmt.Errorf("repair lifecycle: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return "", err
+		return "", "", err
 	}
-	return deref(key), nil
+	return deref(rkey), deref(lkey), nil
 }
 
 // FindingRow is a single per-scan occurrence as returned to API callers (the

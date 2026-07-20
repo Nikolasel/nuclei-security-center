@@ -1,19 +1,20 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Filter } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { api, findingsExportUrl, type ExportFormat } from "../api";
 import {
-  api,
-  DISPOSITION_LABELS,
-  DISPOSITIONS,
-  EFFECTIVE_STATES,
-  findingsExportUrl,
-  STATE_LABELS,
-  type Disposition,
-  type EffectiveState,
-  type ExportFormat,
-} from "../api";
-import { Button, Card, cn, ErrorText, FindingStateBadge, Input, Pill, Select, SeverityBadge, Spinner } from "./ui";
+  ConditionBuilder,
+  countActiveConditions,
+  makeRow,
+  queryToRows,
+  rowsToCrumbs,
+  rowsToQuery,
+  type Row,
+} from "./ConditionBuilder";
+import { type Option } from "./filters";
+import { Button, Card, cn, ErrorText, FindingStateBadge, Pill, SeverityBadge, Spinner } from "./ui";
 
 const EXPORT_FORMATS: { format: ExportFormat; label: string }[] = [
   { format: "json", label: "JSON" },
@@ -22,22 +23,13 @@ const EXPORT_FORMATS: { format: ExportFormat; label: string }[] = [
   { format: "raw", label: "Raw (JSONL)" },
 ];
 
-const SEVERITIES = ["critical", "high", "medium", "low", "info"];
 const PAGE_SIZE = 50;
 
-// Tab cuts over the derived effective state. "" = All.
-const TABS: { key: EffectiveState | ""; label: string }[] = [
-  { key: "", label: "All" },
-  ...EFFECTIVE_STATES.map((s) => ({ key: s, label: STATE_LABELS[s] })),
-];
-
-const sevChip: Record<string, string> = {
-  critical: "bg-red-600 text-white border-red-600",
-  high: "bg-orange-500 text-white border-orange-500",
-  medium: "bg-amber-500 text-white border-amber-500",
-  low: "bg-yellow-500 text-white border-yellow-500",
-  info: "bg-sky-500 text-white border-sky-500",
-};
+// The default view shows the findings that still need attention — currently
+// detected states (New / Active / Resurfaced) — hiding the resolved ones
+// (Mitigated / Previously mitigated) and the handled overlays (Accepted / False
+// positive). Resurfaced is the "was mitigated, detected again" case, so it stays.
+const defaultRows = (): Row[] => [makeRow({ field: "state", op: "any_of", values: ["new", "active", "resurfaced"] })];
 
 function relTime(iso: string): string {
   const d = new Date(iso).getTime();
@@ -57,43 +49,64 @@ function relTime(iso: string): string {
 export function FindingsView() {
   const navigate = useNavigate();
 
-  const [q, setQ] = useState("");
-  const [host, setHost] = useState("");
-  const [cve, setCve] = useState("");
-  const [tag, setTag] = useState("");
-  const [severities, setSeverities] = useState<string[]>([]);
-  const [disposition, setDisposition] = useState<Disposition | "">("");
-  const [state, setState] = useState<EffectiveState | "">("");
-  const [applied, setApplied] = useState({ q: "", host: "", cve: "", tag: "" });
-  const [offset, setOffset] = useState(0);
+  // Filter + page live in the URL (browser state): navigating into a finding and
+  // back, a refresh, or a shared link all restore them. The parent owns the
+  // condition rows (so they survive the builder collapsing); the compiled query
+  // is debounced (text inputs change per keystroke) before it drives the list +
+  // export. With no `filter` param, the default "open findings" filter applies.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [rows, setRows] = useState<Row[]>(() => {
+    const raw = searchParams.get("filter");
+    if (raw) {
+      try {
+        return queryToRows(JSON.parse(raw));
+      } catch {
+        // fall through to the default on a malformed param
+      }
+    }
+    return defaultRows();
+  });
+  const compiled = useMemo(() => rowsToQuery(rows), [rows]);
+  const [filter, setFilter] = useState(compiled);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [offset, setOffset] = useState(() => Math.max(0, Number(searchParams.get("offset")) || 0));
 
   useEffect(() => {
-    const t = setTimeout(
-      () => setApplied({ q: q.trim(), host: host.trim(), cve: cve.trim(), tag: tag.trim() }),
-      300,
-    );
+    const t = setTimeout(() => setFilter(compiled), 300);
     return () => clearTimeout(t);
-  }, [q, host, cve, tag]);
+  }, [compiled]);
 
-  const sevKey = severities.join(",");
+  // Mirror the applied filter + page into the URL (replace, so it doesn't spam
+  // history). Navigating to a finding pushes a new entry, so Back restores this
+  // one with its query intact.
   useEffect(() => {
-    setOffset(0);
-  }, [applied, sevKey, disposition, state]);
+    const p = new URLSearchParams();
+    p.set("filter", JSON.stringify(filter));
+    if (offset > 0) p.set("offset", String(offset));
+    setSearchParams(p, { replace: true });
+  }, [filter, offset, setSearchParams]);
+
+  // Targets power the Target condition's value picker (value = id, label = name).
+  const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
+  const targetOpts: Option[] = useMemo(
+    () => (targets.data ?? []).map((t) => ({ value: t.id, label: t.name })),
+    [targets.data],
+  );
+
+  const crumbs = useMemo(() => rowsToCrumbs(rows, targetOpts), [rows, targetOpts]);
+  const activeCount = useMemo(() => countActiveConditions(rows), [rows]);
+
+  // Changing the applied filter jumps back to page 1 — but not on first mount, so
+  // an offset restored from the URL survives a back-navigation.
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (mounted.current) setOffset(0);
+    else mounted.current = true;
+  }, [filter]);
 
   const query = useQuery({
-    queryKey: ["findings", { applied, sevKey, disposition, state, offset }],
-    queryFn: () =>
-      api.listFindings({
-        q: applied.q,
-        host: applied.host,
-        cve: applied.cve,
-        tag: applied.tag,
-        severities,
-        disposition: disposition || undefined,
-        state: state || undefined,
-        limit: PAGE_SIZE,
-        offset,
-      }),
+    queryKey: ["findings", filter, offset],
+    queryFn: () => api.listFindings({ filter, limit: PAGE_SIZE, offset }),
     placeholderData: keepPreviousData,
   });
 
@@ -102,69 +115,67 @@ export function FindingsView() {
   const from = total === 0 ? 0 : offset + 1;
   const to = Math.min(offset + PAGE_SIZE, total);
 
-  const activeCount = useMemo(
-    () =>
-      severities.length +
-      (disposition ? 1 : 0) +
-      [applied.q, applied.host, applied.cve, applied.tag].filter(Boolean).length,
-    [severities, disposition, applied],
-  );
-
-  // Export URL uses the same filters the list is currently showing.
-  const exportQuery = {
-    q: applied.q,
-    host: applied.host,
-    cve: applied.cve,
-    tag: applied.tag,
-    severities,
-    disposition: disposition || undefined,
-    state: state || undefined,
-  };
   const download = (format: ExportFormat) => {
     const a = document.createElement("a");
-    a.href = findingsExportUrl(format, exportQuery);
+    a.href = findingsExportUrl(format, { filter });
     a.rel = "noopener";
     document.body.appendChild(a);
     a.click();
     a.remove();
   };
 
-  const toggleSeverity = (s: string) =>
-    setSeverities((cur) => (cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]));
-
-  const clearAll = () => {
-    setQ("");
-    setHost("");
-    setCve("");
-    setTag("");
-    setSeverities([]);
-    setDisposition("");
-  };
-
   return (
     <div className="space-y-3">
-      {/* Effective-state tabs + export */}
+      {/* Filter toggle + active-filter breadcrumb + export */}
       <div className="flex flex-wrap items-center gap-2">
-        <div className="flex flex-wrap gap-1">
-          {TABS.map((t) => (
-            <button
-              key={t.key || "all"}
-              onClick={() => setState(t.key)}
-              className={cn(
-                "rounded-md px-3 py-1.5 text-sm font-medium transition",
-                state === t.key
-                  ? "bg-indigo-600 text-white"
-                  : "text-neutral-600 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800",
-              )}
-            >
-              {t.label}
-            </button>
+        <button
+          type="button"
+          onClick={() => setFilterOpen((v) => !v)}
+          aria-expanded={filterOpen}
+          title={filterOpen ? "Hide filter" : "Show filter"}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm font-medium transition",
+            filterOpen || activeCount > 0
+              ? "border-indigo-400 bg-indigo-50 text-indigo-700 dark:border-indigo-600 dark:bg-indigo-950 dark:text-indigo-300"
+              : "border-neutral-300 text-neutral-600 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800",
+          )}
+        >
+          <Filter className="h-4 w-4" aria-hidden />
+          Filter
+          {activeCount > 0 && (
+            <span className="rounded bg-indigo-600 px-1.5 text-xs font-semibold text-white">{activeCount}</span>
+          )}
+        </button>
+
+        {/* Compact read-only summary of the active filter (visible when collapsed). */}
+        {!filterOpen &&
+          (crumbs.length > 0 ? (
+            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-neutral-500">
+              {crumbs.map((b, i) => (
+                <span key={i} className="inline-flex items-center gap-1.5">
+                  {b.connector && (
+                    <span className={b.connector === "or" ? "font-medium text-indigo-600 dark:text-indigo-400" : "text-neutral-400"}>
+                      {b.connector}
+                    </span>
+                  )}
+                  <span>
+                    <span className="font-medium text-neutral-700 dark:text-neutral-200">{b.field}</span> {b.op}
+                    {b.value && (
+                      <span className="ml-1 rounded bg-indigo-50 px-1.5 py-0.5 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
+                        {b.value}
+                      </span>
+                    )}
+                  </span>
+                </span>
+              ))}
+            </div>
+          ) : (
+            <span className="text-sm text-neutral-400">No filter — showing all findings</span>
           ))}
-        </div>
 
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild>
-            <Button className="ml-auto" title="Export the findings matching the current filters">
+            <Button className="ml-auto" title="Export the findings matching the current filter">
               Export ▾
             </Button>
           </DropdownMenu.Trigger>
@@ -175,7 +186,7 @@ export function FindingsView() {
               className="min-w-40 rounded-md border border-neutral-200 bg-white p-1 shadow-lg dark:border-neutral-800 dark:bg-neutral-900"
             >
               <div className="px-2 py-1 text-xs text-neutral-500">
-                {total} finding{total === 1 ? "" : "s"} (current filters)
+                {total} finding{total === 1 ? "" : "s"} (current filter)
               </div>
               {EXPORT_FORMATS.map((f) => (
                 <DropdownMenu.Item
@@ -191,64 +202,11 @@ export function FindingsView() {
         </DropdownMenu.Root>
       </div>
 
-      <Card className="p-3">
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="space-y-1">
-            <span className="block text-xs font-medium text-neutral-500">Search (name or template)</span>
-            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="e.g. ssl, log4j…" className="w-56" />
-          </label>
-          <label className="space-y-1">
-            <span className="block text-xs font-medium text-neutral-500">CVE</span>
-            <Input value={cve} onChange={(e) => setCve(e.target.value)} placeholder="CVE-2021-…" className="w-40" />
-          </label>
-          <label className="space-y-1">
-            <span className="block text-xs font-medium text-neutral-500">Host</span>
-            <Input value={host} onChange={(e) => setHost(e.target.value)} placeholder="filter host…" className="w-40" />
-          </label>
-          <label className="space-y-1">
-            <span className="block text-xs font-medium text-neutral-500">Tag</span>
-            <Input value={tag} onChange={(e) => setTag(e.target.value)} placeholder="exact tag…" className="w-36" />
-          </label>
-          <label className="space-y-1">
-            <span className="block text-xs font-medium text-neutral-500">Disposition</span>
-            <Select value={disposition} onChange={(e) => setDisposition(e.target.value as Disposition | "")}>
-              <option value="">Any</option>
-              {DISPOSITIONS.map((d) => (
-                <option key={d} value={d}>
-                  {DISPOSITION_LABELS[d]}
-                </option>
-              ))}
-            </Select>
-          </label>
-          <div className="space-y-1">
-            <span className="block text-xs font-medium text-neutral-500">Severity</span>
-            <div className="flex flex-wrap gap-1">
-              {SEVERITIES.map((s) => {
-                const active = severities.includes(s);
-                return (
-                  <button
-                    key={s}
-                    onClick={() => toggleSeverity(s)}
-                    className={cn(
-                      "rounded border px-2 py-1 text-xs font-medium uppercase tracking-wide transition",
-                      active
-                        ? sevChip[s]
-                        : "border-neutral-300 text-neutral-600 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800",
-                    )}
-                  >
-                    {s}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          {activeCount > 0 && (
-            <Button variant="ghost" onClick={clearAll} className="text-sm">
-              Clear ({activeCount})
-            </Button>
-          )}
-        </div>
-      </Card>
+      {filterOpen && (
+        <Card className="p-3">
+          <ConditionBuilder rows={rows} onChange={setRows} targetOptions={targetOpts} />
+        </Card>
+      )}
 
       <div className="px-1 text-sm text-neutral-500">
         {query.isLoading ? "…" : total === 0 ? "0 findings" : `${from}–${to} of ${total}`}

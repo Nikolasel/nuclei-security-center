@@ -115,15 +115,35 @@ curl -sb jar.txt -X PATCH localhost:8080/api/findings/<finding_id>/severity \
   -H 'content-type: application/json' -d '{"severity":"high","note":"internet-facing"}'
 ```
 
-`GET /api/findings` supports server-side filtering + pagination: `q` (name/template substring),
-`severity` (comma-separated, any-of, matched against the effective severity), `host`
-(substring), `cve` (substring), `tag` (exact), `disposition` (exact), `state` (exact effective
-state), plus `target_id`, `limit`, `offset`. CVE ids and tags are promoted to indexed columns
-so these filters are cheap.
+`GET /api/findings` supports server-side filtering + pagination. The filter is a **structured
+condition grammar** (a ServiceNow-style condition builder in the UI), passed as one JSON
+`filter` param: **OR-of-AND groups** — conditions within a group are ANDed, groups are ORed, so
+it expresses e.g. *(severity is one of critical, high AND host contains scanme) OR (cve is
+empty)*. Each condition is `{field, op, values}`:
+
+| Field | Operators |
+| --- | --- |
+| `severity`, `state`, `disposition`, `target` | `any_of`, `none_of` |
+| `name` (name/template) | `contains`, `starts_with` |
+| `host` | `contains`, `not_contains`, `starts_with`, `is_empty`, `is_not_empty` |
+| `cve` | `contains`, `not_contains`, `is_empty`, `is_not_empty` |
+| `tag` | `any_of`, `none_of`, `is_empty`, `is_not_empty` |
+
+Fields and operators are allowlisted (an unknown one is a `400`); every value is bound as a SQL
+parameter, so a filter never concatenates user input into the query. Plus `limit`, `offset`.
 
 ```sh
-curl -sb jar.txt "localhost:8080/api/findings?severity=critical,high&state=new&limit=50" | jq
+# (critical OR high) AND host contains scanme  — one AND-group
+FILTER='{"groups":[{"conditions":[
+  {"field":"severity","op":"any_of","values":["critical","high"]},
+  {"field":"host","op":"contains","values":["scanme"]}]}]}'
+curl -sb jar.txt --get "localhost:8080/api/findings" --data-urlencode "filter=$FILTER" --data limit=50 | jq
 ```
+
+The legacy flat params (`severity=critical,high&host=…`, repeated or comma-separated) are still
+accepted when no `filter` is given — compiled into a single AND-group — so old bookmarks and API
+callers keep working. Arbitrary nested parenthesized grouping (beyond OR-of-AND) remains a
+possible future extension.
 
 ## Export
 

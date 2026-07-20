@@ -224,20 +224,6 @@ type LifecycleDetail struct {
 	Raw             json.RawMessage `json:"raw,omitempty"`
 }
 
-// LifecycleFilter narrows and pages the deduplicated findings list.
-type LifecycleFilter struct {
-	TargetID    string
-	Query       string   // substring on name OR template id
-	Severities  []string // any-of, matched against the effective (recast-aware) severity
-	Host        string   // substring
-	CVE         string   // substring on any CVE id
-	Tag         string   // exact tag membership
-	Disposition string   // exact disposition (none|false_positive|accepted)
-	State       string   // exact effective state (new|active|resurfaced|mitigated|previously_mitigated|accepted|false_positive)
-	Limit       int
-	Offset      int
-}
-
 // lcSelectCols is the projection shared by list + detail (up to the raw payload).
 const lcSelectCols = `l.id, l.target_id, l.template_id, l.name, l.severity, l.recast_severity,
 	` + effSevExpr + ` AS eff_sev, l.host, l.matched_at, l.type, l.cve, l.tags,
@@ -252,50 +238,6 @@ func scanLifecycleRow(row pgx.Row, r *LifecycleRow) error {
 		&r.FirstSeenScan, &r.LastSeenScan, &r.FirstSeenAt, &r.LastSeenAt, &r.LatestOccurrenceID)
 }
 
-// lifecycleWhere builds the shared WHERE clause for the lifecycle filter,
-// appending its bind values onto *args (owned by the caller, so callers can push
-// further LIMIT/OFFSET placeholders onto the same slice with correct `$N`).
-func lifecycleWhere(f LifecycleFilter, args *[]any) (where string) {
-	push := func(val any) int {
-		*args = append(*args, val)
-		return len(*args)
-	}
-	var conds []string
-	if f.TargetID != "" {
-		conds = append(conds, fmt.Sprintf("l.target_id = $%d", push(f.TargetID)))
-	}
-	if f.Query != "" {
-		n := push("%" + f.Query + "%")
-		conds = append(conds, fmt.Sprintf("(l.name ILIKE $%d OR l.template_id ILIKE $%d)", n, n))
-	}
-	if len(f.Severities) > 0 {
-		lowered := make([]string, len(f.Severities))
-		for i, s := range f.Severities {
-			lowered[i] = strings.ToLower(s)
-		}
-		conds = append(conds, fmt.Sprintf("lower(%s) = ANY($%d)", effSevExpr, push(lowered)))
-	}
-	if f.Host != "" {
-		conds = append(conds, fmt.Sprintf("l.host ILIKE $%d", push("%"+f.Host+"%")))
-	}
-	if f.CVE != "" {
-		conds = append(conds, fmt.Sprintf("EXISTS (SELECT 1 FROM unnest(l.cve) c WHERE c ILIKE $%d)", push("%"+f.CVE+"%")))
-	}
-	if f.Tag != "" {
-		conds = append(conds, fmt.Sprintf("$%d = ANY(l.tags)", push(f.Tag)))
-	}
-	if f.Disposition != "" {
-		conds = append(conds, fmt.Sprintf("l.disposition = $%d", push(f.Disposition)))
-	}
-	if f.State != "" {
-		conds = append(conds, fmt.Sprintf("(%s) = $%d", lcEffectiveExpr, push(f.State)))
-	}
-	if len(conds) > 0 {
-		where = "WHERE " + strings.Join(conds, " AND ")
-	}
-	return where
-}
-
 // lcOrderBy is the shared sort: highest effective severity first, then most
 // recently seen. Kept identical across list + export so an export matches the UI.
 const lcOrderBy = ` ORDER BY ` + effSevOrder + ` DESC, l.last_seen_at DESC, l.id DESC`
@@ -305,16 +247,19 @@ const exportMaxRows = 50000
 
 // ListLifecycleFindings returns a page of deduplicated findings (severity-sorted,
 // then most-recently-seen first) plus the total matching the filter.
-func (s *Store) ListLifecycleFindings(ctx context.Context, f LifecycleFilter) ([]LifecycleRow, int, error) {
-	if f.Limit <= 0 || f.Limit > 500 {
-		f.Limit = 50
+func (s *Store) ListLifecycleFindings(ctx context.Context, q FindingQuery, limit, offset int) ([]LifecycleRow, int, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
 	}
-	if f.Offset < 0 {
-		f.Offset = 0
+	if offset < 0 {
+		offset = 0
 	}
 
 	var args []any
-	where := lifecycleWhere(f, &args)
+	where, err := buildFindingWhere(q, &args)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	var total int
 	if err := s.pool.QueryRow(ctx,
@@ -323,9 +268,9 @@ func (s *Store) ListLifecycleFindings(ctx context.Context, f LifecycleFilter) ([
 		return nil, 0, err
 	}
 
-	args = append(args, f.Limit)
+	args = append(args, limit)
 	limitPH := len(args)
-	args = append(args, f.Offset)
+	args = append(args, offset)
 	offsetPH := len(args)
 	query := fmt.Sprintf(`SELECT %s %s %s%s LIMIT $%d OFFSET $%d`,
 		lcSelectCols, lifecycleFrom, where, lcOrderBy, limitPH, offsetPH)
@@ -349,9 +294,12 @@ func (s *Store) ListLifecycleFindings(ctx context.Context, f LifecycleFilter) ([
 // ExportLifecycleFindings returns all deduplicated findings matching the filter
 // (up to exportMaxRows), in the same order as the list — for bulk export. The
 // filter's Limit/Offset are ignored.
-func (s *Store) ExportLifecycleFindings(ctx context.Context, f LifecycleFilter) ([]LifecycleRow, error) {
+func (s *Store) ExportLifecycleFindings(ctx context.Context, q FindingQuery) ([]LifecycleRow, error) {
 	var args []any
-	where := lifecycleWhere(f, &args)
+	where, err := buildFindingWhere(q, &args)
+	if err != nil {
+		return nil, err
+	}
 	args = append(args, exportMaxRows)
 	limitPH := len(args)
 	query := fmt.Sprintf(`SELECT %s %s %s%s LIMIT $%d`,
@@ -385,9 +333,12 @@ type RawExportRow struct {
 // Nuclei JSON of its latest occurrence (same filter + order as the list), for a
 // raw JSONL export. Findings whose latest occurrence is missing are skipped
 // (INNER JOIN).
-func (s *Store) ExportLifecycleRaw(ctx context.Context, f LifecycleFilter) ([]RawExportRow, error) {
+func (s *Store) ExportLifecycleRaw(ctx context.Context, q FindingQuery) ([]RawExportRow, error) {
 	var args []any
-	where := lifecycleWhere(f, &args)
+	where, err := buildFindingWhere(q, &args)
+	if err != nil {
+		return nil, err
+	}
 	args = append(args, exportMaxRows)
 	limitPH := len(args)
 	query := fmt.Sprintf(`SELECT l.id, o.raw %s JOIN findings o ON o.id = l.latest_occurrence_id %s%s LIMIT $%d`,

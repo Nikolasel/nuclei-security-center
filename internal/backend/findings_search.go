@@ -11,12 +11,12 @@ import (
 // from Postgres, which is the system of record. A derived search index can be
 // added later behind this interface with no change to handlers.
 type FindingsSearcher interface {
-	ListLifecycle(ctx context.Context, f store.LifecycleFilter) ([]store.LifecycleRow, int, error)
+	ListLifecycle(ctx context.Context, q store.FindingQuery, limit, offset int) ([]store.LifecycleRow, int, error)
 }
 
 // pgSearcher is the default FindingsSearcher: it reads from Postgres directly.
 type pgSearcher struct{ store *store.Store }
 
-func (p pgSearcher) ListLifecycle(ctx context.Context, f store.LifecycleFilter) ([]store.LifecycleRow, int, error) {
-	return p.store.ListLifecycleFindings(ctx, f)
+func (p pgSearcher) ListLifecycle(ctx context.Context, q store.FindingQuery, limit, offset int) ([]store.LifecycleRow, int, error) {
+	return p.store.ListLifecycleFindings(ctx, q, limit, offset)
 }

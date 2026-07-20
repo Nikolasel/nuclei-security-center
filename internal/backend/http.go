@@ -474,28 +474,60 @@ type findingsPage struct {
 	Offset int                  `json:"offset"`
 }
 
-// lifecycleFilterFromQuery parses the shared findings filter query params (used
-// by both the list and export endpoints). Limit/Offset are left zero.
-func lifecycleFilterFromQuery(q url.Values) store.LifecycleFilter {
-	return store.LifecycleFilter{
-		TargetID:    q.Get("target_id"),
-		Query:       strings.TrimSpace(q.Get("q")),
-		Severities:  splitCSV(q.Get("severity")),
-		Host:        strings.TrimSpace(q.Get("host")),
-		CVE:         strings.TrimSpace(q.Get("cve")),
-		Tag:         strings.TrimSpace(q.Get("tag")),
-		Disposition: strings.TrimSpace(q.Get("disposition")),
-		State:       strings.TrimSpace(q.Get("state")),
+// findingQueryFromRequest parses the shared findings filter (used by both the
+// list and export endpoints, so they stay in lockstep). The structured filter
+// travels as one JSON `filter` param (the condition-builder tree). When absent,
+// it falls back to the legacy flat params (`severity=…&host=…`) compiled into a
+// single AND-group, so old bookmarks and API callers keep working.
+func findingQueryFromRequest(q url.Values) (store.FindingQuery, error) {
+	if raw := strings.TrimSpace(q.Get("filter")); raw != "" {
+		var fq store.FindingQuery
+		if err := json.Unmarshal([]byte(raw), &fq); err != nil {
+			return store.FindingQuery{}, fmt.Errorf("invalid filter: %w", err)
+		}
+		return fq, nil
 	}
+	return legacyFlatQuery(q), nil
+}
+
+// legacyFlatQuery compiles the pre-condition-builder query params into a single
+// AND-group (any-of within each field), preserving backwards compatibility.
+func legacyFlatQuery(q url.Values) store.FindingQuery {
+	var conds []store.FindingCondition
+	add := func(field, op string, vals []string) {
+		if len(vals) > 0 {
+			conds = append(conds, store.FindingCondition{Field: field, Op: op, Values: vals})
+		}
+	}
+	if v := strings.TrimSpace(q.Get("q")); v != "" {
+		add("name", "contains", []string{v})
+	}
+	add("severity", "any_of", multiCSV(q, "severity"))
+	add("state", "any_of", multiCSV(q, "state"))
+	add("disposition", "any_of", multiCSV(q, "disposition"))
+	add("target", "any_of", multiCSV(q, "target_id"))
+	add("host", "contains", multiCSV(q, "host"))
+	add("cve", "contains", multiCSV(q, "cve"))
+	add("tag", "any_of", multiCSV(q, "tag"))
+	if len(conds) == 0 {
+		return store.FindingQuery{}
+	}
+	return store.FindingQuery{Groups: []store.FindingGroup{{Conditions: conds}}}
 }
 
 func (s *Server) handleListFindings(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, offset := pageParams(q)
-	filter := lifecycleFilterFromQuery(q)
-	filter.Limit = limit
-	filter.Offset = offset
-	rows, total, err := s.searcher.ListLifecycle(r.Context(), filter)
+	fq, err := findingQueryFromRequest(q)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := store.ValidateFindingQuery(fq); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	rows, total, err := s.searcher.ListLifecycle(r.Context(), fq, limit, offset)
 	if err != nil {
 		s.serverError(w, "list lifecycle findings", err)
 		return
@@ -641,6 +673,24 @@ func splitCSV(s string) []string {
 	for _, p := range strings.Split(s, ",") {
 		if p = strings.TrimSpace(p); p != "" {
 			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// multiCSV collects a multi-value query param: every repetition of the key, each
+// itself split on commas (so `k=a&k=b`, `k=a,b`, and `k=a` all work). Empties are
+// dropped; returns nil when absent. Duplicate values are de-duplicated so a
+// repeated pick doesn't bloat the bind array.
+func multiCSV(q url.Values, key string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, raw := range q[key] {
+		for _, p := range splitCSV(raw) {
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
 		}
 	}
 	return out

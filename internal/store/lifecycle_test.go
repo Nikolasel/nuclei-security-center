@@ -1,6 +1,67 @@
 package store
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestBuildFindingWhere(t *testing.T) {
+	// Empty query → no WHERE, no args.
+	var args []any
+	if w, err := buildFindingWhere(FindingQuery{}, &args); err != nil || w != "" || len(args) != 0 {
+		t.Fatalf("empty query: where=%q args=%v err=%v", w, args, err)
+	}
+
+	// OR-of-AND: (severity any_of [critical,high] AND host contains scanme)
+	// OR (cve is_empty). Groups are parenthesized + OR-joined; conditions AND-joined.
+	args = nil
+	q := FindingQuery{Groups: []FindingGroup{
+		{Conditions: []FindingCondition{
+			{Field: "severity", Op: "any_of", Values: []string{"Critical", "High"}},
+			{Field: "host", Op: "contains", Values: []string{"scanme.sh"}},
+		}},
+		{Conditions: []FindingCondition{
+			{Field: "cve", Op: "is_empty"},
+		}},
+	}}
+	where, err := buildFindingWhere(q, &args)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	for _, want := range []string{
+		"lower(coalesce(l.recast_severity, l.severity)) = ANY($1)",
+		"l.host ILIKE ANY($2)",
+		") OR (",                         // two groups OR-joined
+		" AND ",                          // conditions within group 1 AND-joined
+		"array_length(l.cve, 1), 0) = 0", // cve is_empty, no bind
+	} {
+		if !strings.Contains(where, want) {
+			t.Errorf("where missing %q:\n%s", want, where)
+		}
+	}
+	if len(args) != 2 { // only severity + host bind; is_empty binds nothing
+		t.Fatalf("want 2 bind args, got %d: %v", len(args), args)
+	}
+	if sev := args[0].([]string); sev[0] != "critical" || sev[1] != "high" {
+		t.Errorf("severities not lowercased: %v", args[0])
+	}
+	if hosts := args[1].([]string); hosts[0] != "%scanme.sh%" {
+		t.Errorf("host not wrapped for substring: %v", args[1])
+	}
+
+	// Unknown field / operator / missing value are validation errors.
+	bad := []FindingQuery{
+		{Groups: []FindingGroup{{Conditions: []FindingCondition{{Field: "bogus", Op: "any_of", Values: []string{"x"}}}}}},
+		{Groups: []FindingGroup{{Conditions: []FindingCondition{{Field: "severity", Op: "contains", Values: []string{"x"}}}}}},
+		{Groups: []FindingGroup{{Conditions: []FindingCondition{{Field: "severity", Op: "any_of"}}}}},
+	}
+	for i, q := range bad {
+		var a []any
+		if _, err := buildFindingWhere(q, &a); err == nil {
+			t.Errorf("bad query %d compiled without error", i)
+		}
+	}
+}
 
 // TestDedupKey pins the exact string form of the dedup key. The backfill in
 // migration 0005 computes the same key in SQL —

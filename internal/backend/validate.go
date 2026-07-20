@@ -104,29 +104,59 @@ func validateTemplatePath(p string) error {
 	return nil
 }
 
-// validateSchedule trims and checks a schedule in place. The cron expression is
-// validated against the same parser the ticker uses, so a schedule that saves is
-// one the ticker can run. Target/template-set existence is enforced by the store
-// (FK → ErrNotFound); here we only require a target_id to be present.
+// validateScanPolicy trims and checks a scan policy in place. A policy is the
+// full scan config, so it must name a target (the scope); the template set is
+// optional (empty = all templates), and its existence — like the target's — is
+// enforced by the store (FK → ErrInvalidRef). Every execution knob is optional
+// (nil = built-in default), but any knob that IS set must be positive — a
+// zero/negative value is meaningless and would either be silently dropped by
+// buildArgs (<= 0 omits the flag) or produce a nonsensical scan.
+func validateScanPolicy(p *store.ScanPolicy) error {
+	p.Name = strings.TrimSpace(p.Name)
+	if p.Name == "" {
+		return errors.New("name is required")
+	}
+	p.TargetID = strings.TrimSpace(p.TargetID)
+	if p.TargetID == "" {
+		return errors.New("target_id is required")
+	}
+	p.TemplateSetID = strings.TrimSpace(p.TemplateSetID)
+	for _, f := range []struct {
+		name string
+		val  *int
+	}{
+		{"rate_limit", p.RateLimit},
+		{"concurrency", p.Concurrency},
+		{"timeout_sec", p.TimeoutSec},
+		{"max_host_error", p.MaxHostError},
+	} {
+		if f.val != nil && *f.val <= 0 {
+			return fmt.Errorf("%s must be positive when set", f.name)
+		}
+	}
+	return nil
+}
+
+// validateSchedule trims and checks a schedule in place. A schedule just pairs a
+// scan policy with a cadence (#87 — the policy carries the target, template set,
+// and knobs). The cron expression is validated against the same parser the ticker
+// uses, so a schedule that saves is one the ticker can run. The policy's existence
+// is enforced by the store (FK → ErrInvalidRef); here we only require it present.
 func validateSchedule(s *store.Schedule) error {
 	s.Name = strings.TrimSpace(s.Name)
 	if s.Name == "" {
 		return errors.New("name is required")
 	}
-	s.TargetID = strings.TrimSpace(s.TargetID)
-	if s.TargetID == "" {
-		return errors.New("target_id is required")
+	s.ScanPolicyID = strings.TrimSpace(s.ScanPolicyID)
+	if s.ScanPolicyID == "" {
+		return errors.New("scan_policy_id is required")
 	}
-	s.TemplateSetID = strings.TrimSpace(s.TemplateSetID)
 	s.Cron = strings.TrimSpace(s.Cron)
 	if s.Cron == "" {
 		return errors.New("cron is required")
 	}
 	if _, err := parseCron(s.Cron); err != nil {
 		return fmt.Errorf("invalid cron %q: %w", s.Cron, err)
-	}
-	if s.TimeoutSec != nil && *s.TimeoutSec <= 0 {
-		return errors.New("timeout_sec must be positive")
 	}
 	return nil
 }

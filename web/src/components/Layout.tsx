@@ -3,6 +3,7 @@ import * as Tooltip from "@radix-ui/react-tooltip";
 import {
   Bug,
   CalendarClock,
+  Gauge,
   KeyRound,
   Layers,
   type LucideIcon,
@@ -34,6 +35,7 @@ const categories: Category[] = [
     panes: [
       { to: "/scans", label: "Scans", icon: Radar },
       { to: "/schedules", label: "Schedules", icon: CalendarClock },
+      { to: "/scan-policies", label: "Scan Policies", icon: Gauge },
       { to: "/targets", label: "Targets", icon: Target },
       { to: "/template-sets", label: "Template Sets", icon: Layers },
     ],

@@ -80,9 +80,18 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
 - **targets** — `id, name, hosts[] (CIDRs/URLs), tags[], created_by`. Targets are the
   **scope allowlist** — scans can only hit pre-approved hosts (guardrail, see §6).
 - **template_sets** — `id, name, git_ref, filter (severities[], tags[], paths[])`.
-- **schedules** — `id, target_id, template_set_id, cron, rate_limit, concurrency, enabled`.
-- **scans** — `id, source (schedule|adhoc), status, started_at, finished_at,
-  nuclei_version, templates_commit, triggered_by`.
+- **scan_policies** — `id, name, target_id, template_set_id, rate_limit, concurrency,
+  timeout_sec, max_host_error`. The **central, reusable scan configuration**: it bundles
+  *everything* a scan needs — the target (required — the scope), an optional template set
+  (NULL = all templates), and Nuclei's execution knobs (each nullable = "use the built-in
+  default"). **Every scan and schedule is launched by selecting a policy.** Deleting a policy's
+  target cascades the policy away; deleting a template set nulls it back to "all templates".
+- **schedules** — `id, scan_policy_id, cron, enabled` — a policy paired with a cadence. Deleting
+  the policy cascades the schedule away.
+- **scans** — `id, source (schedule|adhoc), scan_policy_id, target_id, template_set_id, status,
+  started_at, finished_at, nuclei_version, templates_commit, triggered_by`. The policy's target/
+  template set are resolved and recorded on the scan at dispatch (so findings keep working and
+  history survives `scan_policy_id` being nulled on policy delete — `ON DELETE SET NULL`).
 - **findings** (occurrences) — the immutable per-scan observation log: `id, scan_id,
   target_id, dedup_key, template_id, name, severity, host, matched_at, raw_json`. Answers
   "what did scan X observe"; feeds the raw archive in object storage.
@@ -230,8 +239,11 @@ trade; the native-services path only wins if you're committed to one cloud forev
   results, nothing more. A compromised node in a segmented network can't reach the system
   of record. This is the main security payoff of splitting it out.
 - **Scope guardrail (most important):** a scan may only target hosts inside an approved
-  `target` record. Prevents fat-fingering a scan at out-of-scope / third-party assets —
-  which for a scanner is the difference between a tool and an incident.
+  `target` record. Every scan runs a **scan policy**, and a policy always references a
+  stored target, so a scan is in scope **by construction** — there is no path to name a
+  host that isn't already an approved target. Prevents fat-fingering a scan at
+  out-of-scope / third-party assets, which for a scanner is the difference between a tool
+  and an incident.
 - **Egress control:** run scanner nodes in a segmented network / per zone; the node makes
   active connections to targets, so treat its egress like an attack surface.
 - **BFF token custody:** OIDC access/refresh tokens live server-side in the backend; the

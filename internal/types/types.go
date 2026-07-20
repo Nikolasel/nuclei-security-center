@@ -33,11 +33,15 @@ type TemplateSelector struct {
 	Paths      []string `json:"paths,omitempty"`
 }
 
-// ScanOptions maps to Nuclei's rate/concurrency/timeout knobs.
+// ScanOptions maps to Nuclei's rate/concurrency/timeout knobs. MaxHostError is
+// Nuclei's -max-host-error: how many errors a single host may accumulate (across
+// every protocol, not per port) before Nuclei abandons it for the rest of the
+// run. <= 0 omits the flag, so Nuclei's own default of 30 applies.
 type ScanOptions struct {
-	RateLimit   int `json:"rate_limit,omitempty"`
-	Concurrency int `json:"concurrency,omitempty"`
-	TimeoutSec  int `json:"timeout_sec,omitempty"`
+	RateLimit    int `json:"rate_limit,omitempty"`
+	Concurrency  int `json:"concurrency,omitempty"`
+	TimeoutSec   int `json:"timeout_sec,omitempty"`
+	MaxHostError int `json:"max_host_error,omitempty"`
 }
 
 // ScanStatus is the response from GET /v1/scans/{id} on the scanner node.

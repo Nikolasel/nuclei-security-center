@@ -232,6 +232,12 @@ func buildArgs(targetsFile, out string, spec types.ScanSpec) []string {
 	if spec.Options.Concurrency > 0 {
 		args = append(args, "-concurrency", strconv.Itoa(spec.Options.Concurrency))
 	}
+	// -max-host-error: raise it for fragile devices that trip Nuclei's default of
+	// 30 on HTTP alone (which makes Nuclei abandon the host, silently skipping its
+	// not-yet-run executors like the SSL/TLS pass). <= 0 leaves Nuclei's default.
+	if spec.Options.MaxHostError > 0 {
+		args = append(args, "-max-host-error", strconv.Itoa(spec.Options.MaxHostError))
+	}
 	return args
 }
 

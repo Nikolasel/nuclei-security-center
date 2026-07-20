@@ -22,14 +22,13 @@ container-image releases run on GitHub Actions (`.github/workflows/`). Future wo
 GitHub issues (see §8 of the architecture doc).
 
 **Scope guardrail (§6 — the most important guardrail):** a scan may only target
-hosts inside an approved `target` record. The union of all targets' hosts is the allowlist
-(`store.AllTargetHosts`); the ad-hoc `POST /api/scans` `spec` path validates host formats and
-matches every target against it (`internal/backend/scope.go`, `outOfScopeHosts`), rejecting
-out-of-scope targets with `400` before dispatch. Matching is host-granular and DNS-free —
-exact hostname (no wildcard), IP-in-CIDR, CIDR-within-CIDR, ports/URL-paths ignored — and
-**fails closed** (no approved targets ⇒ every scan rejected). The stored-target (`target_id`)
-and schedule paths are in-scope by construction. The old implicit `scanme.sh` default scan
-(empty body) was **removed** — empty body now `400`s; provide `target_id` or `spec.targets`.
+hosts inside an approved `target` record. Every scan is launched from a **scan policy**
+(`POST /api/scans` takes only a `scan_policy_id`), and a policy always references a stored
+target, so a scan is **in scope by construction** — there is no ad-hoc host/spec path to name
+an out-of-scope host. Target hosts are validated (hostname/IP/CIDR/URL, host-granular, DNS-free)
+when a target is created. **Fails closed:** no approved targets ⇒ no policy to build ⇒ no scan.
+(`internal/backend/scope.go`'s `outOfScopeHosts`/`AllTargetHosts` remain as the allowlist
+primitives, retained for reuse though the removed ad-hoc `spec` path was their only caller.)
 
 **Object storage:** the verbatim Nuclei `out.jsonl` is archived per scan to an
 S3-compatible bucket (MinIO locally; any S3 API in the cloud) via `github.com/minio/minio-go/v7`
@@ -55,16 +54,35 @@ schedules CUD), `scan_dispatched` (scan submit or schedule run), `finding_triage
 INFO (a denial is normal enforcement, not a fault). Each event also carries `actor_type`
 (`user` vs `service_account`) so headless token callers are never conflated with people.
 
-**Scheduling:** `schedules` (migration 0007) ties a `target_id` (+ optional
-`template_set_id`) to a `cron` expression. A backend `Scheduler` ticker (`internal/backend/
-scheduler.go`, wakes each minute) selects rows where `enabled AND next_run_at <= now()`,
-dispatches each via `orch.Submit` with `ScanLink{Source:"schedule", ScheduleID:…}`, and
-advances `next_run_at`. **Postgres is the source of truth** (survives restart / persists
-enable-disable); `github.com/robfig/cron/v3` is used *only* to parse cron and compute the
-next fire time — no cron logic in SQL or long-lived in-memory schedulers. Endpoints:
-`GET/POST /api/schedules`, `GET/PUT/DELETE /api/schedules/{id}` (viewer/operator/operator/
-admin), `POST /api/schedules/{id}/run` (operator, off-cycle dispatch, leaves cadence
-untouched).
+**Scan policies (#87 — the central scan config):** `scan_policies`
+(migration 0017) is the reusable, named scan configuration and **the only way to launch a
+scan**. It bundles everything a scan needs: `target_id` (required — the scope, FK
+`ON DELETE CASCADE`), `template_set_id` (optional, FK `ON DELETE SET NULL`, NULL = all
+templates), and Nuclei's execution knobs `rate_limit` / `concurrency` / `timeout_sec` /
+`max_host_error` (each column nullable = "use the built-in default"). `POST /api/scans` takes
+only `{scan_policy_id}`; `Server.resolvePolicySpec` loads the policy, resolves its target +
+template set via `resolveConfigSpec`, and overlays the policy's non-nil knobs over
+`defaultOptions()` (pure step: `overlayScanPolicy`). The resolved `target_id`/`template_set_id`
+are recorded on the scan (via `ScanLink`) so findings/lifecycle work unchanged; `scan_policy_id`
+on `scans` is `ON DELETE SET NULL` (history survives a policy delete). `max_host_error` wires
+Nuclei's `-max-host-error` into `buildArgs` (`<= 0` omits the flag, so Nuclei's own default of 30
+applies) — the fix for fragile devices Nuclei would otherwise abandon mid-scan, silently skipping
+their not-yet-run executors. CRUD at `GET/POST /api/scan-policies`,
+`GET/PUT/DELETE /api/scan-policies/{id}` (viewer/operator/operator/admin, audited
+`config_changed`, action `scan_policy.*`). `internal/backend/crud.go` +
+`internal/store/scanpolicies.go`.
+
+**Scheduling:** `schedules` (migration 0007; reshaped by 0017) pairs a
+`scan_policy_id` (required, FK `ON DELETE CASCADE`) with a `cron` expression — the policy
+carries the target/templates/knobs, so the schedule just picks one and a cadence. A backend
+`Scheduler` ticker (`internal/backend/scheduler.go`, wakes each minute) selects rows where
+`enabled AND next_run_at <= now()`, dispatches each via `orch.Submit` (resolving the policy with
+the same `resolvePolicySpec`) with `ScanLink{Source:"schedule", ScheduleID:…}`, and advances
+`next_run_at`. **Postgres is the source of truth** (survives restart / persists enable-disable);
+`github.com/robfig/cron/v3` is used *only* to parse cron and compute the next fire time — no cron
+logic in SQL or long-lived in-memory schedulers. Endpoints: `GET/POST /api/schedules`,
+`GET/PUT/DELETE /api/schedules/{id}` (viewer/operator/operator/admin),
+`POST /api/schedules/{id}/run` (operator, off-cycle dispatch, leaves cadence untouched).
 
 **Findings are two tables:** `findings` is the immutable per-scan
 **occurrence** log (holds the verbatim raw JSONL; answers "what did scan X observe");

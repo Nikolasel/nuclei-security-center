@@ -134,6 +134,25 @@ export function ScanDetailPage() {
                 </dd>
               </div>
               <div>
+                <dt className="text-xs text-neutral-500">Scan policy</dt>
+                <dd>
+                  {scan.data.scan_policy_name ? (
+                    scan.data.scan_policy_id ? (
+                      <Link
+                        to="/scan-policies"
+                        className="text-indigo-600 hover:underline dark:text-indigo-400"
+                      >
+                        {scan.data.scan_policy_name}
+                      </Link>
+                    ) : (
+                      scan.data.scan_policy_name
+                    )
+                  ) : (
+                    <span className="text-neutral-400">Default</span>
+                  )}
+                </dd>
+              </div>
+              <div>
                 <dt className="text-xs text-neutral-500">Created</dt>
                 <dd>{new Date(scan.data.created_at).toLocaleString()}</dd>
               </div>

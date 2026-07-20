@@ -14,7 +14,7 @@ func TestBuildArgs(t *testing.T) {
 			Severities: []string{"critical", "high"},
 			Tags:       []string{"cve"},
 		},
-		Options: types.ScanOptions{RateLimit: 150, Concurrency: 25},
+		Options: types.ScanOptions{RateLimit: 150, Concurrency: 25, MaxHostError: 50},
 	}
 	args := buildArgs("/t/targets.txt", "/t/out.jsonl", spec)
 
@@ -33,6 +33,7 @@ func TestBuildArgs(t *testing.T) {
 	mustHavePair("-tags", "cve")
 	mustHavePair("-rate-limit", "150")
 	mustHavePair("-concurrency", "25")
+	mustHavePair("-max-host-error", "50")
 	if !slices.Contains(args, "-jsonl") {
 		t.Errorf("expected -jsonl in args: %v", args)
 	}
@@ -53,7 +54,8 @@ func TestBuildArgs(t *testing.T) {
 func TestBuildArgsMinimal(t *testing.T) {
 	// No filters/options => no severity/tags/rate flags, but core flags present.
 	args := buildArgs("/t/targets.txt", "/t/out.jsonl", types.ScanSpec{Targets: []string{"x"}})
-	if slices.Contains(args, "-rate-limit") || slices.Contains(args, "-severity") {
+	if slices.Contains(args, "-rate-limit") || slices.Contains(args, "-severity") ||
+		slices.Contains(args, "-max-host-error") {
 		t.Errorf("unexpected optional flags in minimal args: %v", args)
 	}
 	if !slices.Contains(args, "-jsonl") {

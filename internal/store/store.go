@@ -143,6 +143,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 type ScanLink struct {
 	TargetID      string
 	TemplateSetID string
+	ScanPolicyID  string
 	Source        string
 	ScheduleID    string
 }
@@ -159,10 +160,10 @@ func (s *Store) CreateScan(ctx context.Context, spec types.ScanSpec, link ScanLi
 		source = "adhoc"
 	}
 	_, err = s.pool.Exec(ctx,
-		`INSERT INTO scans (id, state, spec, target_id, template_set_id, source, schedule_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		`INSERT INTO scans (id, state, spec, target_id, template_set_id, scan_policy_id, source, schedule_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		id, types.ScanQueued, specJSON, nullStr(link.TargetID), nullStr(link.TemplateSetID),
-		source, nullStr(link.ScheduleID),
+		nullStr(link.ScanPolicyID), source, nullStr(link.ScheduleID),
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert scan: %w", err)
@@ -329,6 +330,8 @@ type ScanRow struct {
 	TargetID        string     `json:"target_id,omitempty"`
 	TargetName      string     `json:"target_name,omitempty"`
 	TargetHostCount int64      `json:"target_host_count,omitempty"`
+	ScanPolicyID    string     `json:"scan_policy_id,omitempty"`
+	ScanPolicyName  string     `json:"scan_policy_name,omitempty"`
 	NodeID          string     `json:"node_id,omitempty"`
 	NodeName        string     `json:"node_name,omitempty"`
 	NucleiVersion   string     `json:"nuclei_version,omitempty"`
@@ -350,11 +353,12 @@ type ScanRow struct {
 // scanScan expands it into a real host count rather than counting array
 // elements.
 const scanSelect = `
-	SELECT s.id, s.state, s.target_id, t.name, t.hosts, s.node_id, n.name,
+	SELECT s.id, s.state, s.target_id, t.name, t.hosts, s.scan_policy_id, sp.name, s.node_id, n.name,
 	       s.nuclei_version, s.templates_commit, s.error, s.raw_object_key, s.log_object_key,
 	       s.created_at, s.finished_at
 	  FROM scans s
 	  LEFT JOIN targets t ON t.id = s.target_id
+	  LEFT JOIN scan_policies sp ON sp.id = s.scan_policy_id
 	  LEFT JOIN scanner_nodes n ON n.id = s.node_id`
 
 // scanClientCancellable reports the states a scan can still be cancelled from.
@@ -362,15 +366,17 @@ const scanCancellableStates = `('queued', 'running')`
 
 func scanScan(row pgx.Row) (ScanRow, error) {
 	var r ScanRow
-	var targetID, targetName, nodeID, nodeName, nucleiVersion, templatesCommit, errStr, rawKey, logKey *string
+	var targetID, targetName, scanPolicyID, scanPolicyName, nodeID, nodeName, nucleiVersion, templatesCommit, errStr, rawKey, logKey *string
 	var hosts []string
-	if err := row.Scan(&r.ID, &r.State, &targetID, &targetName, &hosts, &nodeID, &nodeName,
+	if err := row.Scan(&r.ID, &r.State, &targetID, &targetName, &hosts, &scanPolicyID, &scanPolicyName, &nodeID, &nodeName,
 		&nucleiVersion, &templatesCommit, &errStr, &rawKey, &logKey, &r.CreatedAt, &r.FinishedAt); err != nil {
 		return ScanRow{}, err
 	}
 	r.TargetID = deref(targetID)
 	r.TargetName = deref(targetName)
 	r.TargetHostCount = types.HostCount(hosts)
+	r.ScanPolicyID = deref(scanPolicyID)
+	r.ScanPolicyName = deref(scanPolicyName)
 	r.NodeID = deref(nodeID)
 	r.NodeName = deref(nodeName)
 	r.NucleiVersion = deref(nucleiVersion)

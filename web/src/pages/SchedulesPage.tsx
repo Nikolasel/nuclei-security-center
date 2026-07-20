@@ -21,30 +21,24 @@ function fmt(iso?: string): string {
 
 function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: () => void }) {
   const qc = useQueryClient();
+  const scanPolicies = useQuery({ queryKey: ["scan-policies"], queryFn: () => api.listScanPolicies() });
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
-  const templateSets = useQuery({ queryKey: ["template-sets"], queryFn: () => api.listTemplateSets() });
 
   const [name, setName] = useState(existing?.name ?? "");
-  const [targetId, setTargetId] = useState(existing?.target_id ?? "");
-  const [templateSetId, setTemplateSetId] = useState(existing?.template_set_id ?? "");
+  const [scanPolicyId, setScanPolicyId] = useState(existing?.scan_policy_id ?? "");
   const [cron, setCron] = useState(existing?.cron ?? "0 3 * * *");
   const [enabled, setEnabled] = useState(existing?.enabled ?? true);
-  const [timeoutSec, setTimeoutSec] = useState(existing?.timeout_sec ? String(existing.timeout_sec) : "");
 
-  const selectedTarget = (targets.data ?? []).find((t) => t.id === targetId);
-  const timeoutNum = Number(timeoutSec);
-  // Empty means "use the backend default" — only a non-empty value is validated.
-  const timeoutInvalid = timeoutSec.trim() !== "" && (!Number.isInteger(timeoutNum) || timeoutNum <= 0);
+  const targetName = (id: string) => targets.data?.find((t) => t.id === id)?.name ?? id.slice(0, 8);
+  const policies = scanPolicies.data ?? [];
 
   const save = useMutation({
     mutationFn: () => {
       const body: Partial<Schedule> = {
         name: name.trim(),
-        target_id: targetId,
-        template_set_id: templateSetId || undefined,
+        scan_policy_id: scanPolicyId,
         cron: cron.trim(),
         enabled,
-        timeout_sec: timeoutSec.trim() === "" ? undefined : timeoutNum,
       };
       return existing ? api.updateSchedule(existing.id, body) : api.createSchedule(body);
     },
@@ -54,7 +48,7 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
     },
   });
 
-  const canSave = name.trim() && targetId && cron.trim() && !timeoutInvalid;
+  const canSave = name.trim() && scanPolicyId && cron.trim();
 
   return (
     <Modal open onOpenChange={(v) => !v && onClose()} title={existing ? "Edit schedule" : "New schedule"}>
@@ -62,26 +56,21 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
         <Field label="Name">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="nightly-prod" />
         </Field>
-        <Field label="Target">
-          <Select value={targetId} onChange={(e) => setTargetId(e.target.value)} className="w-full">
-            <option value="">Select a target…</option>
-            {(targets.data ?? []).map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
+        <Field label="Scan policy (target + templates + execution settings)">
+          <Select value={scanPolicyId} onChange={(e) => setScanPolicyId(e.target.value)} className="w-full">
+            <option value="">Select a scan policy…</option>
+            {policies.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} → {targetName(p.target_id)}
               </option>
             ))}
           </Select>
         </Field>
-        <Field label="Template set (optional — all templates if unset)">
-          <Select value={templateSetId} onChange={(e) => setTemplateSetId(e.target.value)} className="w-full">
-            <option value="">All templates</option>
-            {(templateSets.data ?? []).map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </Select>
-        </Field>
+        {!scanPolicies.isLoading && policies.length === 0 && (
+          <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
+            No scan policies yet — create one under Scan Policies first.
+          </p>
+        )}
         <Field label="Cron (min hour day-of-month month day-of-week)">
           <Input value={cron} onChange={(e) => setCron(e.target.value)} placeholder="0 3 * * *" className="font-mono" />
         </Field>
@@ -97,21 +86,6 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
             </button>
           ))}
         </div>
-        <Field label="Timeout (seconds, optional — default 600)">
-          <Input
-            type="number"
-            min={1}
-            value={timeoutSec}
-            onChange={(e) => setTimeoutSec(e.target.value)}
-            placeholder="600"
-          />
-        </Field>
-        {selectedTarget && selectedTarget.host_count > 50 && (
-          <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
-            {selectedTarget.host_count} hosts in scope — the default 10 min may not be enough; consider setting a
-            longer timeout.
-          </p>
-        )}
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
           Enabled (the ticker dispatches this schedule)
@@ -136,8 +110,8 @@ export function SchedulesPage() {
   const [editing, setEditing] = useState<Schedule | "new" | null>(null);
 
   const q = useQuery({ queryKey: ["schedules"], queryFn: () => api.listSchedules() });
-  const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
-  const targetName = (id: string) => targets.data?.find((t) => t.id === id)?.name ?? id.slice(0, 8);
+  const policies = useQuery({ queryKey: ["scan-policies"], queryFn: () => api.listScanPolicies() });
+  const policyName = (id: string) => policies.data?.find((p) => p.id === id)?.name ?? id.slice(0, 8);
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ["schedules"] });
   const del = useMutation({ mutationFn: (id: string) => api.deleteSchedule(id), onSuccess: invalidate });
@@ -145,11 +119,9 @@ export function SchedulesPage() {
     mutationFn: (s: Schedule) =>
       api.updateSchedule(s.id, {
         name: s.name,
-        target_id: s.target_id,
-        template_set_id: s.template_set_id || undefined,
+        scan_policy_id: s.scan_policy_id,
         cron: s.cron,
         enabled: !s.enabled,
-        timeout_sec: s.timeout_sec,
       }),
     onSuccess: invalidate,
   });
@@ -180,7 +152,7 @@ export function SchedulesPage() {
               <thead>
                 <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
                   <th className="px-3 py-2 font-medium">Name</th>
-                  <th className="px-3 py-2 font-medium">Target</th>
+                  <th className="px-3 py-2 font-medium">Scan policy</th>
                   <th className="px-3 py-2 font-medium">Cron</th>
                   <th className="px-3 py-2 font-medium">Status</th>
                   <th className="px-3 py-2 font-medium">Next run</th>
@@ -192,7 +164,7 @@ export function SchedulesPage() {
                 {(q.data ?? []).map((s) => (
                   <tr key={s.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
                     <td className="px-3 py-2 font-medium">{s.name}</td>
-                    <td className="px-3 py-2 text-neutral-600 dark:text-neutral-400">{targetName(s.target_id)}</td>
+                    <td className="px-3 py-2 text-neutral-600 dark:text-neutral-400">{policyName(s.scan_policy_id)}</td>
                     <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">{s.cron}</td>
                     <td className="px-3 py-2">
                       {s.enabled ? (

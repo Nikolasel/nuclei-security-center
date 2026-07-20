@@ -81,28 +81,19 @@ func TestScheduleNextRun(t *testing.T) {
 }
 
 func TestValidateSchedule(t *testing.T) {
-	ok := store.Schedule{Name: " nightly ", TargetID: " t1 ", Cron: " 0 3 * * * "}
+	ok := store.Schedule{Name: " nightly ", ScanPolicyID: " p1 ", Cron: " 0 3 * * * "}
 	if err := validateSchedule(&ok); err != nil {
 		t.Fatalf("validateSchedule(valid) = %v", err)
 	}
-	if ok.Name != "nightly" || ok.TargetID != "t1" || ok.Cron != "0 3 * * *" {
+	if ok.Name != "nightly" || ok.ScanPolicyID != "p1" || ok.Cron != "0 3 * * *" {
 		t.Errorf("validateSchedule did not trim fields: %+v", ok)
 	}
 
-	positiveTimeout := 1800
-	okWithTimeout := store.Schedule{Name: "nightly", TargetID: "t1", Cron: "0 3 * * *", TimeoutSec: &positiveTimeout}
-	if err := validateSchedule(&okWithTimeout); err != nil {
-		t.Errorf("validateSchedule(positive timeout_sec) = %v, want nil", err)
-	}
-
-	zero, negative := 0, -5
 	bad := []store.Schedule{
-		{Name: "", TargetID: "t1", Cron: "0 3 * * *"},                         // no name
-		{Name: "x", TargetID: "", Cron: "0 3 * * *"},                          // no target
-		{Name: "x", TargetID: "t1", Cron: ""},                                 // no cron
-		{Name: "x", TargetID: "t1", Cron: "not a cron"},                       // bad cron
-		{Name: "x", TargetID: "t1", Cron: "0 3 * * *", TimeoutSec: &zero},     // timeout_sec = 0
-		{Name: "x", TargetID: "t1", Cron: "0 3 * * *", TimeoutSec: &negative}, // negative timeout_sec
+		{Name: "", ScanPolicyID: "p1", Cron: "0 3 * * *"},   // no name
+		{Name: "x", ScanPolicyID: "", Cron: "0 3 * * *"},    // no scan policy
+		{Name: "x", ScanPolicyID: "p1", Cron: ""},           // no cron
+		{Name: "x", ScanPolicyID: "p1", Cron: "not a cron"}, // bad cron
 	}
 	for _, s := range bad {
 		s := s

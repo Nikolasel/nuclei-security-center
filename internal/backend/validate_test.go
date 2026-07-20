@@ -6,6 +6,42 @@ import (
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 )
 
+func ptr[T any](v T) *T { return &v }
+
+func TestValidateScanPolicy(t *testing.T) {
+	// Missing name / missing target (a policy must name a target — the scope).
+	if err := validateScanPolicy(&store.ScanPolicy{TargetID: "t1"}); err == nil {
+		t.Error("expected error for missing name")
+	}
+	if err := validateScanPolicy(&store.ScanPolicy{Name: "p"}); err == nil {
+		t.Error("expected error for missing target_id")
+	}
+	// A target + all knobs nil (every knob "use the default", no template set) is
+	// valid — the leanest complete policy.
+	if err := validateScanPolicy(&store.ScanPolicy{Name: "lean", TargetID: "t1"}); err != nil {
+		t.Errorf("target-only policy rejected: %v", err)
+	}
+	// A set-but-non-positive knob is rejected (buildArgs would silently drop it).
+	for _, p := range []*store.ScanPolicy{
+		{Name: "p", TargetID: "t1", RateLimit: ptr(0)},
+		{Name: "p", TargetID: "t1", Concurrency: ptr(-5)},
+		{Name: "p", TargetID: "t1", TimeoutSec: ptr(0)},
+		{Name: "p", TargetID: "t1", MaxHostError: ptr(-1)},
+	} {
+		if err := validateScanPolicy(p); err == nil {
+			t.Errorf("non-positive knob accepted: %+v", p)
+		}
+	}
+	// Valid, trims name/target/template-set in place.
+	ok := &store.ScanPolicy{Name: "  fragile  ", TargetID: " t1 ", TemplateSetID: " ts1 ", RateLimit: ptr(20), MaxHostError: ptr(100)}
+	if err := validateScanPolicy(ok); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if ok.Name != "fragile" || ok.TargetID != "t1" || ok.TemplateSetID != "ts1" {
+		t.Errorf("fields not trimmed: %+v", ok)
+	}
+}
+
 func TestValidateHost(t *testing.T) {
 	valid := []string{
 		"scanme.sh",

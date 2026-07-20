@@ -130,13 +130,10 @@ func (s *Scheduler) dispatch(ctx context.Context, sc store.Schedule, now time.Ti
 	}
 
 	scanID := ""
-	spec, link, err := s.srv.resolveConfigSpec(ctx, sc.TargetID, sc.TemplateSetID)
+	spec, link, err := s.srv.resolvePolicySpec(ctx, sc.ScanPolicyID)
 	if err != nil {
-		log.Error("resolve schedule config", "err", err)
+		log.Error("resolve schedule scan policy", "err", err)
 	} else {
-		if sc.TimeoutSec != nil {
-			spec.Options.TimeoutSec = *sc.TimeoutSec
-		}
 		link.Source = "schedule"
 		link.ScheduleID = sc.ID
 		scanID, err = s.srv.orch.Submit(ctx, spec, link)

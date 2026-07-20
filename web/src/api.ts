@@ -77,17 +77,36 @@ export interface TemplateSet {
   updated_at: string;
 }
 
-// Schedule ties a target (+ optional template set) to a cron expression. The
-// backend ticker dispatches schedules whose next_run_at has arrived. next_run_at
-// is null when disabled; last_run_at/last_scan_id record the most recent run.
-export interface Schedule {
+// ScanPolicy (#87) is the central, reusable scan configuration: it bundles
+// EVERYTHING a scan needs — the target to scan (target_id, required — the scope),
+// an optional template set (template_set_id, empty = all templates), and Nuclei's
+// execution knobs. Every scan (ad-hoc or scheduled) is launched by selecting a
+// policy. Each knob is optional: a null field means "use the built-in default"
+// (rate 150 / concurrency 25 / timeout 600s / max-host-error Nuclei's own 30).
+export interface ScanPolicy {
   id: string;
   name: string;
   target_id: string;
   template_set_id?: string;
+  rate_limit?: number | null;
+  concurrency?: number | null;
+  timeout_sec?: number | null;
+  max_host_error?: number | null;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// Schedule pairs a scan policy with a cron cadence (#87 — the policy carries the
+// target, template set, and knobs). The backend ticker dispatches schedules whose
+// next_run_at has arrived. next_run_at is null when disabled; last_run_at/
+// last_scan_id record the most recent run.
+export interface Schedule {
+  id: string;
+  name: string;
+  scan_policy_id: string;
   cron: string;
   enabled: boolean;
-  timeout_sec?: number;
   next_run_at?: string;
   last_run_at?: string;
   last_scan_id?: string;
@@ -146,6 +165,10 @@ export interface Scan {
   target_id?: string;
   target_name?: string;
   target_host_count?: number;
+  /** the scan policy applied (#87); absent when the scan used the built-in
+   *  defaults, or once the policy has been deleted. */
+  scan_policy_id?: string;
+  scan_policy_name?: string;
   /** the registered scanner node dispatch selected (#107); absent once the node
    *  is deleted or if the scan failed before a node was chosen. */
   node_id?: string;
@@ -420,6 +443,15 @@ export const api = {
     request<TemplateSet>("PUT", `/api/template-sets/${id}`, t),
   deleteTemplateSet: (id: string) => request<void>("DELETE", `/api/template-sets/${id}`),
 
+  // Scan policies (#87). Reads are viewer; create/edit are operator; delete is
+  // admin. A null knob means "use the built-in default" for that field.
+  listScanPolicies: () => request<ScanPolicy[]>("GET", "/api/scan-policies"),
+  createScanPolicy: (p: Partial<ScanPolicy>) =>
+    request<ScanPolicy>("POST", "/api/scan-policies", p),
+  updateScanPolicy: (id: string, p: Partial<ScanPolicy>) =>
+    request<ScanPolicy>("PUT", `/api/scan-policies/${id}`, p),
+  deleteScanPolicy: (id: string) => request<void>("DELETE", `/api/scan-policies/${id}`),
+
   listSchedules: () => request<Schedule[]>("GET", "/api/schedules"),
   createSchedule: (s: Partial<Schedule>) => request<Schedule>("POST", "/api/schedules", s),
   updateSchedule: (id: string, s: Partial<Schedule>) =>
@@ -447,7 +479,7 @@ export const api = {
 
   listScans: () => request<Scan[]>("GET", "/api/scans"),
   getScan: (id: string) => request<Scan>("GET", `/api/scans/${id}`),
-  createScan: (body: { target_id?: string; template_set_id?: string; timeout_sec?: number }) =>
+  createScan: (body: { scan_policy_id: string }) =>
     request<{ scan_id: string }>("POST", "/api/scans", body),
   cancelScan: (id: string) => request<void>("POST", `/api/scans/${id}/cancel`),
   deleteScan: (id: string) => request<void>("DELETE", `/api/scans/${id}`),

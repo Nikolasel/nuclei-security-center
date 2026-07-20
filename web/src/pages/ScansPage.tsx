@@ -3,33 +3,21 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { hasRole, useMe } from "../auth";
-import { Button, Card, ErrorText, Field, Input, Modal, ProgressBar, Spinner, StateBadge } from "../components/ui";
-
-// Mirrors the backend's defaultOptions() (internal/backend/http.go) — shown as
-// the field's placeholder/starting value, not hardcoded into the request, so
-// omitting it still gets the backend's own default.
-const DEFAULT_TIMEOUT_SEC = 600;
+import { Button, Card, ErrorText, Field, Modal, ProgressBar, Spinner, StateBadge } from "../components/ui";
 
 function RunScanModal({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const scanPolicies = useQuery({ queryKey: ["scan-policies"], queryFn: () => api.listScanPolicies() });
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
-  const templateSets = useQuery({ queryKey: ["template-sets"], queryFn: () => api.listTemplateSets() });
-  const [targetId, setTargetId] = useState("");
-  const [templateSetId, setTemplateSetId] = useState("");
-  const [timeoutSec, setTimeoutSec] = useState(String(DEFAULT_TIMEOUT_SEC));
+  const [scanPolicyId, setScanPolicyId] = useState("");
 
-  const selectedTarget = (targets.data ?? []).find((t) => t.id === targetId);
-  const timeoutNum = Number(timeoutSec);
-  const timeoutInvalid = timeoutSec.trim() === "" || !Number.isInteger(timeoutNum) || timeoutNum <= 0;
+  const targetName = (id: string) => targets.data?.find((t) => t.id === id)?.name ?? id.slice(0, 8);
+  const selectedPolicy = (scanPolicies.data ?? []).find((p) => p.id === scanPolicyId);
+  const policies = scanPolicies.data ?? [];
 
   const run = useMutation({
-    mutationFn: () =>
-      api.createScan({
-        target_id: targetId,
-        template_set_id: templateSetId || undefined,
-        timeout_sec: timeoutNum !== DEFAULT_TIMEOUT_SEC ? timeoutNum : undefined,
-      }),
+    mutationFn: () => api.createScan({ scan_policy_id: scanPolicyId }),
     onSuccess: (res) => {
       void qc.invalidateQueries({ queryKey: ["scans"] });
       onClose();
@@ -43,53 +31,33 @@ function RunScanModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal open onOpenChange={(v) => !v && onClose()} title="Run scan">
       <div className="space-y-4">
-        <Field label="Target (scope allowlist)">
-          <select value={targetId} onChange={(e) => setTargetId(e.target.value)} className={selectCls}>
-            <option value="">Select a target…</option>
-            {(targets.data ?? []).map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name} ({t.host_count} host{t.host_count === 1 ? "" : "s"})
+        <Field label="Scan policy">
+          <select value={scanPolicyId} onChange={(e) => setScanPolicyId(e.target.value)} className={selectCls}>
+            <option value="">Select a scan policy…</option>
+            {policies.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} → {targetName(p.target_id)}
               </option>
             ))}
           </select>
         </Field>
-        <Field label="Template set (optional)">
-          <select
-            value={templateSetId}
-            onChange={(e) => setTemplateSetId(e.target.value)}
-            className={selectCls}
-          >
-            <option value="">Default (all templates)</option>
-            {(templateSets.data ?? []).map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Timeout (seconds)">
-          <Input
-            type="number"
-            min={1}
-            value={timeoutSec}
-            onChange={(e) => setTimeoutSec(e.target.value)}
-            placeholder={String(DEFAULT_TIMEOUT_SEC)}
-          />
-        </Field>
-        {selectedTarget && selectedTarget.host_count > 50 && (
+        {selectedPolicy && (
+          <p className="-mt-2 text-xs text-neutral-500">
+            Runs the <span className="font-medium">{selectedPolicy.name}</span> policy against{" "}
+            <span className="font-medium">{targetName(selectedPolicy.target_id)}</span>
+            {selectedPolicy.template_set_id ? "" : " with all templates"}.
+          </p>
+        )}
+        {!scanPolicies.isLoading && policies.length === 0 && (
           <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
-            {selectedTarget.host_count} hosts in scope — the default {DEFAULT_TIMEOUT_SEC / 60} min may not be
-            enough; consider raising the timeout.
+            No scan policies yet — create one under Scan Policies first (it carries the target, templates, and
+            execution settings a scan needs).
           </p>
         )}
         {run.isError && <ErrorText error={run.error} />}
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>
-          <Button
-            variant="primary"
-            disabled={!targetId || timeoutInvalid || run.isPending}
-            onClick={() => run.mutate()}
-          >
+          <Button variant="primary" disabled={!scanPolicyId || run.isPending} onClick={() => run.mutate()}>
             {run.isPending ? "Starting…" : "Run scan"}
           </Button>
         </div>

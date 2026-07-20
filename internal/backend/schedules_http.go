@@ -96,13 +96,10 @@ func (s *Server) handleRunSchedule(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreErr(w, err)
 		return
 	}
-	spec, link, err := s.resolveConfigSpec(r.Context(), sc.TargetID, sc.TemplateSetID)
+	spec, link, err := s.resolvePolicySpec(r.Context(), sc.ScanPolicyID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
-	}
-	if sc.TimeoutSec != nil {
-		spec.Options.TimeoutSec = *sc.TimeoutSec
 	}
 	link.Source = "schedule"
 	link.ScheduleID = sc.ID
@@ -119,7 +116,7 @@ func (s *Server) handleRunSchedule(w http.ResponseWriter, r *http.Request) {
 // distinct from a 404 on the schedule itself; everything else falls through.
 func (s *Server) writeScheduleErr(w http.ResponseWriter, err error) {
 	if errors.Is(err, store.ErrInvalidRef) {
-		http.Error(w, "unknown target_id or template_set_id", http.StatusBadRequest)
+		http.Error(w, "unknown scan_policy_id", http.StatusBadRequest)
 		return
 	}
 	s.writeStoreErr(w, err)

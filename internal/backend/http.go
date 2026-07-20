@@ -106,6 +106,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/schedules/{id}/run", s.mutation(eventScanDispatched, "schedule.run", "schedule", RoleOperator, s.handleRunSchedule))
 	mux.HandleFunc("DELETE /api/schedules/{id}", s.mutation(eventConfigChanged, "schedule.delete", "schedule", RoleAdmin, s.handleDeleteSchedule))
 
+	// Scan policies (config) — reusable rate/concurrency/timeout/max-host-error
+	// bundles (#87). Reads → viewer; create/edit → operator; delete → admin
+	// (matches targets/template-sets). Audited as config changes.
+	mux.HandleFunc("GET /api/scan-policies", s.requireRole(RoleViewer, s.handleListScanPolicies))
+	mux.HandleFunc("POST /api/scan-policies", s.mutation(eventConfigChanged, "scan_policy.create", "scan_policy", RoleOperator, s.handleCreateScanPolicy))
+	mux.HandleFunc("GET /api/scan-policies/{id}", s.requireRole(RoleViewer, s.handleGetScanPolicy))
+	mux.HandleFunc("PUT /api/scan-policies/{id}", s.mutation(eventConfigChanged, "scan_policy.update", "scan_policy", RoleOperator, s.handleUpdateScanPolicy))
+	mux.HandleFunc("DELETE /api/scan-policies/{id}", s.mutation(eventConfigChanged, "scan_policy.delete", "scan_policy", RoleAdmin, s.handleDeleteScanPolicy))
+
 	// Template sets (config)
 	mux.HandleFunc("GET /api/template-sets", s.requireRole(RoleViewer, s.handleListTemplateSets))
 	mux.HandleFunc("POST /api/template-sets", s.mutation(eventConfigChanged, "template_set.create", "template_set", RoleOperator, s.handleCreateTemplateSet))
@@ -148,17 +157,13 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, identityFrom(r.Context()))
 }
 
-// createScanRequest launches a scan one of three ways: from a stored target
-// (+ optional template set), from an ad-hoc raw spec, or — with an empty body —
-// the default smoke-test scan. TimeoutSec overrides defaultOptions' fixed
-// 600s for the stored-target path (the ad-hoc spec path already carries its
-// own Options.TimeoutSec) — a target scoped to a large CIDR range needs more
-// than 10 minutes, and there was previously no way to ask for it.
+// createScanRequest launches a scan by selecting a scan policy (#87) — the
+// policy is the central, reusable scan configuration, carrying the target,
+// template set, and execution knobs. There is no ad-hoc target/spec path: every
+// scan names a policy, so scope is guaranteed by construction (a policy always
+// references a stored target).
 type createScanRequest struct {
-	TargetID      string          `json:"target_id"`
-	TemplateSetID string          `json:"template_set_id"`
-	Spec          *types.ScanSpec `json:"spec"`
-	TimeoutSec    *int            `json:"timeout_sec,omitempty"`
+	ScanPolicyID string `json:"scan_policy_id"`
 }
 
 func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
@@ -186,73 +191,36 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildScanSpec resolves a createScanRequest into a concrete spec + config link.
+// Every scan is launched from a scan policy, so this just requires one and
+// delegates to resolvePolicySpec.
 func (s *Server) buildScanSpec(ctx context.Context, req createScanRequest) (types.ScanSpec, store.ScanLink, error) {
-	if req.TemplateSetID != "" && req.TargetID == "" {
-		return types.ScanSpec{}, store.ScanLink{}, errors.New("template_set_id requires a target_id")
+	if req.ScanPolicyID == "" {
+		return types.ScanSpec{}, store.ScanLink{}, errors.New("scan_policy_id is required")
 	}
-
-	switch {
-	case req.TargetID != "":
-		spec, link, err := s.resolveConfigSpec(ctx, req.TargetID, req.TemplateSetID)
-		if err != nil {
-			return spec, link, err
-		}
-		if req.TimeoutSec != nil {
-			if *req.TimeoutSec <= 0 {
-				return types.ScanSpec{}, store.ScanLink{}, errors.New("timeout_sec must be positive")
-			}
-			spec.Options.TimeoutSec = *req.TimeoutSec
-		}
-		return spec, link, nil
-
-	case req.Spec != nil:
-		spec := *req.Spec
-		if len(spec.Targets) == 0 {
-			return types.ScanSpec{}, store.ScanLink{}, errors.New("spec.targets must not be empty")
-		}
-		// An ad-hoc spec bypasses the stored-target allowlist, so validate the
-		// host formats and enforce the scope guardrail (§6) here: every target
-		// must fall inside an approved target record.
-		for i, h := range spec.Targets {
-			h = strings.TrimSpace(h)
-			if err := validateHost(h); err != nil {
-				return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("target %q: %w", h, err)
-			}
-			spec.Targets[i] = h
-		}
-		if err := s.enforceScope(ctx, spec.Targets); err != nil {
-			return types.ScanSpec{}, store.ScanLink{}, err
-		}
-		// The scope guardrail covers hosts, not template sources. Validate the
-		// template selectors with the same rules as stored template sets so an
-		// ad-hoc spec can't steer `nuclei -templates` to an arbitrary path/ref.
-		spec.Templates.GitRef = strings.TrimSpace(spec.Templates.GitRef)
-		spec.Templates.Paths = trimAll(spec.Templates.Paths)
-		if err := validateTemplateSelector(spec.Templates.Paths, spec.Templates.GitRef); err != nil {
-			return types.ScanSpec{}, store.ScanLink{}, err
-		}
-		if spec.Options == (types.ScanOptions{}) {
-			spec.Options = defaultOptions()
-		}
-		return spec, store.ScanLink{}, nil
-
-	default:
-		return types.ScanSpec{}, store.ScanLink{}, errors.New("provide target_id (a stored target) or spec.targets")
-	}
+	return s.resolvePolicySpec(ctx, req.ScanPolicyID)
 }
 
-// enforceScope rejects a scan whose targets aren't all covered by an approved
-// target record — the scope guardrail (§6). It fails closed: with no approved
-// targets, every host is out of scope.
-func (s *Server) enforceScope(ctx context.Context, targets []string) error {
-	approved, err := s.store.AllTargetHosts(ctx)
+// resolvePolicySpec builds a scan spec + config link from a scan policy: it
+// resolves the policy's target (+ optional template set) exactly like a
+// config-driven scan, then overlays the policy's execution knobs. Shared by the
+// ad-hoc dispatch and the scheduler, so both dispatch identical scans from the
+// same policy. The scope guardrail (§6) holds by construction — the policy always
+// references a stored target, so a scan can't name an out-of-scope host.
+func (s *Server) resolvePolicySpec(ctx context.Context, policyID string) (types.ScanSpec, store.ScanLink, error) {
+	pol, err := s.store.GetScanPolicy(ctx, policyID)
 	if err != nil {
-		return fmt.Errorf("load approved scope: %w", err)
+		if errors.Is(err, store.ErrNotFound) {
+			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("unknown scan_policy_id %q", policyID)
+		}
+		return types.ScanSpec{}, store.ScanLink{}, err
 	}
-	if bad := outOfScopeHosts(approved, targets); len(bad) > 0 {
-		return fmt.Errorf("out of scope (not inside any approved target): %s", strings.Join(bad, ", "))
+	spec, link, err := s.resolveConfigSpec(ctx, pol.TargetID, pol.TemplateSetID)
+	if err != nil {
+		return types.ScanSpec{}, store.ScanLink{}, err
 	}
-	return nil
+	spec.Options = overlayScanPolicy(spec.Options, pol)
+	link.ScanPolicyID = pol.ID
+	return spec, link, nil
 }
 
 // resolveConfigSpec builds a scan spec + config link from a stored target and an
@@ -280,6 +248,27 @@ func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID 
 		link.TemplateSetID = ts.ID
 	}
 	return spec, link, nil
+}
+
+// overlayScanPolicy overlays a scan policy's execution knobs onto opts (a base
+// already carrying defaultOptions): each of the policy's non-nil knobs replaces
+// the corresponding base option, others pass through untouched — so a policy can
+// tune just one knob (e.g. raise max_host_error) and leave the rest. Pure, so the
+// override precedence is testable without a database round-trip.
+func overlayScanPolicy(opts types.ScanOptions, p store.ScanPolicy) types.ScanOptions {
+	if p.RateLimit != nil {
+		opts.RateLimit = *p.RateLimit
+	}
+	if p.Concurrency != nil {
+		opts.Concurrency = *p.Concurrency
+	}
+	if p.TimeoutSec != nil {
+		opts.TimeoutSec = *p.TimeoutSec
+	}
+	if p.MaxHostError != nil {
+		opts.MaxHostError = *p.MaxHostError
+	}
+	return opts
 }
 
 func (s *Server) handleListScans(w http.ResponseWriter, r *http.Request) {

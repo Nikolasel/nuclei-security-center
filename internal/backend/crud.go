@@ -141,6 +141,83 @@ func (s *Server) handleDeleteTemplateSet(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// --- scan policies ---
+
+func (s *Server) handleListScanPolicies(w http.ResponseWriter, r *http.Request) {
+	ps, err := s.store.ListScanPolicies(r.Context())
+	if err != nil {
+		s.writeStoreErr(w, err)
+		return
+	}
+	if ps == nil {
+		ps = []store.ScanPolicy{}
+	}
+	writeJSON(w, http.StatusOK, ps)
+}
+
+func (s *Server) handleCreateScanPolicy(w http.ResponseWriter, r *http.Request) {
+	var in store.ScanPolicy
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if err := validateScanPolicy(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	in.CreatedBy = identityFrom(r.Context()).Subject
+	p, err := s.store.CreateScanPolicy(r.Context(), in)
+	if err != nil {
+		s.writeScanPolicyErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, p)
+}
+
+func (s *Server) handleGetScanPolicy(w http.ResponseWriter, r *http.Request) {
+	p, err := s.store.GetScanPolicy(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+func (s *Server) handleUpdateScanPolicy(w http.ResponseWriter, r *http.Request) {
+	var in store.ScanPolicy
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if err := validateScanPolicy(&in); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	p, err := s.store.UpdateScanPolicy(r.Context(), r.PathValue("id"), in)
+	if err != nil {
+		s.writeScanPolicyErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+// writeScanPolicyErr maps store sentinels for scan-policy writes. A bad
+// target_id/template_set_id surfaces as ErrInvalidRef (an FK violation), reported
+// as a 400 distinct from a 404 on the policy itself; everything else falls through.
+func (s *Server) writeScanPolicyErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrInvalidRef) {
+		http.Error(w, "unknown target_id or template_set_id", http.StatusBadRequest)
+		return
+	}
+	s.writeStoreErr(w, err)
+}
+
+func (s *Server) handleDeleteScanPolicy(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.DeleteScanPolicy(r.Context(), r.PathValue("id")); err != nil {
+		s.writeStoreErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // --- shared helpers ---
 
 // decodeJSON reads a JSON body (capped) into v, writing a 400 on failure.

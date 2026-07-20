@@ -5,6 +5,7 @@ import { Button, Card, ErrorText, Spinner } from "./components/ui";
 import { FindingDetailPage } from "./pages/FindingDetailPage";
 import { FindingsPage } from "./pages/FindingsPage";
 import { NodesPage } from "./pages/NodesPage";
+import { ScanPoliciesPage } from "./pages/ScanPoliciesPage";
 import { ScansPage } from "./pages/ScansPage";
 import { ScanDetailPage } from "./pages/ScanDetailPage";
 import { SchedulesPage } from "./pages/SchedulesPage";
@@ -57,6 +58,7 @@ export default function App() {
         <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/targets" element={<TargetsPage />} />
         <Route path="/template-sets" element={<TemplateSetsPage />} />
+        <Route path="/scan-policies" element={<ScanPoliciesPage />} />
         <Route path="/nodes" element={<NodesPage />} />
         <Route path="/service-accounts" element={<ServiceAccountsPage />} />
         <Route path="/settings" element={<SettingsPage />} />

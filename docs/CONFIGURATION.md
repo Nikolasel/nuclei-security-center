@@ -19,6 +19,8 @@ deployment.
 | `SCANNER_TLS_CERT` / `SCANNER_TLS_KEY` | scanner | – (unset ⇒ plain HTTP) | node server certificate; setting both makes the node serve HTTPS. See [Service auth: TLS & mTLS](#service-auth-tls--mtls) |
 | `SCANNER_CLIENT_CA` | scanner | – | PEM CA bundle; when set the node **requires + verifies** a client cert (mTLS) |
 | `NUCLEI_PATH` | scanner | `nuclei` | path to the nuclei binary |
+| `NAABU_PATH` | scanner | `naabu` | path to the naabu binary, used for the optional port-discovery pre-pass (#86); only invoked when a scan policy enables discovery |
+| `NAABU_SCAN_TYPE` | scanner | `syn` | Node **default** naabu discovery mode when a scan policy leaves `discovery_scan_type` unset: `syn` (SYN scan + host discovery — fast, prunes dead hosts; needs `CAP_NET_RAW`, in Docker's default caps, + libpcap, bundled in the image) or `connect` (unprivileged TCP connect scan, no host discovery — for deployments that drop `NET_RAW`). A policy that sets `discovery_scan_type` overrides this per scan; requesting `syn` on a node without raw sockets fails the scan closed. |
 | `SCANNER_WORK_DIR` | scanner | – (unset ⇒ a private `0700` temp dir) | per-scan working dirs; leave unset for an auto-created process-exclusive dir, or point at a mounted private volume |
 | `OIDC_ISSUER` | backend | – (required unless `AUTH_DISABLED=true`) | OIDC issuer URL; setting it enables auth |
 | `AUTH_DISABLED` | backend | `false` | explicit opt-out to run **without** auth (dev only); required when `OIDC_ISSUER` is unset, else the backend refuses to start |

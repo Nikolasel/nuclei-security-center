@@ -268,6 +268,28 @@ func overlayScanPolicy(opts types.ScanOptions, p store.ScanPolicy) types.ScanOpt
 	if p.MaxHostError != nil {
 		opts.MaxHostError = *p.MaxHostError
 	}
+	// Discovery (#86): a nil DiscoveryEnabled means "use the default", which is ON
+	// — matching the column default, so a policy that predates discovery still
+	// gets it. The node treats the boolean literally; the default lives here + the
+	// DB, never on the (stateless) node.
+	enabled := true
+	if p.DiscoveryEnabled != nil {
+		enabled = *p.DiscoveryEnabled
+	}
+	d := types.DiscoveryOptions{Enabled: enabled, ScanType: p.DiscoveryScanType, Ports: p.DiscoveryPorts}
+	if p.DiscoveryTimeoutSec != nil {
+		d.TimeoutSec = *p.DiscoveryTimeoutSec
+	}
+	if p.DiscoveryRate != nil {
+		d.Rate = *p.DiscoveryRate
+	}
+	if p.DiscoveryProbeTimeoutMs != nil {
+		d.ProbeTimeoutMs = *p.DiscoveryProbeTimeoutMs
+	}
+	if p.DiscoveryRetries != nil {
+		d.Retries = *p.DiscoveryRetries
+	}
+	opts.Discovery = &d
 	return opts
 }
 
@@ -302,6 +324,11 @@ func (s *Server) handleGetScan(w http.ResponseWriter, r *http.Request) {
 	}
 	if row.State == string(types.ScanRunning) {
 		row.Progress = s.orch.Progress(row.ID)
+		// Discovered endpoints aren't persisted until completion; serve the live
+		// cache so the scanning phase can show them (#86).
+		if len(row.DiscoveredTargets) == 0 {
+			row.DiscoveredTargets = s.orch.Discovered(row.ID)
+		}
 	}
 	writeJSON(w, http.StatusOK, row)
 }

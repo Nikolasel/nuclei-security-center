@@ -42,6 +42,37 @@ type ScanOptions struct {
 	Concurrency  int `json:"concurrency,omitempty"`
 	TimeoutSec   int `json:"timeout_sec,omitempty"`
 	MaxHostError int `json:"max_host_error,omitempty"`
+	// Discovery, when non-nil and Enabled, runs a naabu port-scan pre-pass on the
+	// node before Nuclei, so Nuclei only probes live host:port pairs (#86). nil or
+	// Enabled=false ⇒ Nuclei scans every host unfiltered (the pre-policy behavior).
+	Discovery *DiscoveryOptions `json:"discovery,omitempty"`
+}
+
+// DiscoveryOptions configures the optional naabu port-discovery stage (#86). It
+// runs entirely on the scanner node before Nuclei — the node stays stateless and
+// credential-less; the backend only sets these knobs from the scan policy. The
+// stage FAILS CLOSED: any naabu error aborts the scan (rather than falling back
+// to an unfiltered run), so a misconfigured discovery is disabled deliberately on
+// the policy, never silently ignored.
+type DiscoveryOptions struct {
+	Enabled bool `json:"enabled"`
+	// ScanType picks naabu's scan mode: "syn" (SYN + host discovery, needs the
+	// node's CAP_NET_RAW + libpcap) or "connect" (unprivileged, no host discovery).
+	// Empty ⇒ the node's own NAABU_SCAN_TYPE default. Requesting "syn" on a node
+	// without raw-socket capability fails the scan closed (#86).
+	ScanType string `json:"scan_type,omitempty"`
+	// Ports is naabu's -port spec (e.g. "80,443,8000-9000", multiple ranges
+	// allowed). Empty ⇒ naabu's top-1000 ports (the nmap top-1000 set).
+	Ports string `json:"ports,omitempty"`
+	// TimeoutSec is discovery's OWN time budget, separate from the scan's
+	// Nuclei TimeoutSec. <= 0 ⇒ the node's built-in discovery default.
+	TimeoutSec int `json:"timeout_sec,omitempty"`
+	// naabu tuning knobs (all <= 0 ⇒ naabu's own default). These trade speed for
+	// completeness — lower per-probe timeout / retries finish faster on sparse or
+	// dense ranges but can miss slow-responding or (for SYN) lossy ports.
+	Rate           int `json:"rate,omitempty"`             // -rate: packets/sec (default 1000)
+	ProbeTimeoutMs int `json:"probe_timeout_ms,omitempty"` // -timeout: ms per probe (default 1000)
+	Retries        int `json:"retries,omitempty"`          // -retries: probe retries (default 3)
 }
 
 // ScanStatus is the response from GET /v1/scans/{id} on the scanner node.
@@ -53,7 +84,21 @@ type ScanStatus struct {
 	FindingCount    int           `json:"finding_count"`
 	Error           string        `json:"error,omitempty"`
 	Progress        *ScanProgress `json:"progress,omitempty"`
+	// DiscoveredTargets is the narrowed host:port list the naabu pre-pass (#86)
+	// produced and handed to Nuclei. Reported once discovery completes and kept for
+	// the scan's life on the node; the backend persists it so the UI can show which
+	// endpoints were actually scanned. Empty when discovery was disabled.
+	DiscoveredTargets []string `json:"discovered_targets,omitempty"`
 }
+
+// ScanPhase distinguishes the two execution stages the node reports live progress
+// for (#86). Empty means the single-stage (Nuclei-only) case.
+type ScanPhase string
+
+const (
+	PhaseDiscovering ScanPhase = "discovering" // naabu port pre-pass
+	PhaseScanning    ScanPhase = "scanning"    // Nuclei
+)
 
 // Capabilities is the response from GET /v1/capabilities on the scanner node —
 // the runtime facts only the node knows, polled by the backend to derive node
@@ -72,12 +117,23 @@ type Capabilities struct {
 // counts contextualize it. All fields are best-effort — an omitted stats field
 // stays zero.
 type ScanProgress struct {
-	Percent  float64 `json:"percent"`
-	Requests int64   `json:"requests,omitempty"`
-	Total    int64   `json:"total,omitempty"`
-	Hosts    int64   `json:"hosts,omitempty"`
-	RPS      int64   `json:"rps,omitempty"`
-	Matched  int64   `json:"matched,omitempty"`
+	// Phase is which stage this snapshot describes: "discovering" (naabu) or
+	// "scanning" (Nuclei). The Nuclei fields below are meaningful in the scanning
+	// phase; the Disc* fields in the discovering phase. Empty for legacy callers.
+	Phase    ScanPhase `json:"phase,omitempty"`
+	Percent  float64   `json:"percent"`
+	Requests int64     `json:"requests,omitempty"`
+	Total    int64     `json:"total,omitempty"`
+	Hosts    int64     `json:"hosts,omitempty"`
+	RPS      int64     `json:"rps,omitempty"`
+	Matched  int64     `json:"matched,omitempty"`
+	// DiscHosts/DiscPorts are the discovering-phase live tally: hosts found with at
+	// least one open port, and total open ports found so far. naabu exposes no
+	// usable live stats feed, so these are counted from its own "Found N ports on
+	// host X" log lines — a per-host signal, not a percentage (dead hosts emit no
+	// line), which is why the discovery bar is animated rather than proportional.
+	DiscHosts int `json:"disc_hosts,omitempty"`
+	DiscPorts int `json:"disc_ports,omitempty"`
 }
 
 // StartScanResponse is the 202 body from POST /v1/scans.

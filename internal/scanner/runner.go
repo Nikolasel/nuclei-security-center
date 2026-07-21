@@ -26,6 +26,8 @@ import (
 // memory only — the node is disposable; the backend is the system of record.
 type Runner struct {
 	nucleiPath string
+	naabuPath  string
+	scanType   string // naabu scan mode for discovery: "syn" (default) or "connect" (#86)
 	workRoot   string
 
 	mu    sync.Mutex
@@ -35,18 +37,25 @@ type Runner struct {
 type job struct {
 	mu          sync.Mutex
 	status      types.ScanStatus
+	phase       types.ScanPhase // current stage; stamped onto every progress snapshot (#86)
 	resultsPath string
 	logPath     string // Nuclei's stdout/stderr for this run (#94)
 	cancel      context.CancelFunc
 }
 
 // NewRunner prepares a Runner. workRoot is where per-scan temp dirs live.
-func NewRunner(nucleiPath, workRoot string) (*Runner, error) {
+// naabuPath is the naabu binary used for the optional port-discovery pre-pass
+// (#86); it is only invoked when a scan spec opts into discovery. scanType is the
+// naabu mode ("syn" or "connect"); it is normalized, so any unrecognized value
+// (including "") falls back to the SYN default.
+func NewRunner(nucleiPath, naabuPath, scanType, workRoot string) (*Runner, error) {
 	if err := os.MkdirAll(workRoot, 0o750); err != nil {
 		return nil, fmt.Errorf("create work root: %w", err)
 	}
 	return &Runner{
 		nucleiPath: nucleiPath,
+		naabuPath:  naabuPath,
+		scanType:   normalizeScanType(scanType),
 		workRoot:   workRoot,
 		scans:      make(map[string]*job),
 	}, nil
@@ -137,6 +146,55 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string) {
 	version := r.nucleiVersion()
 	j.setVersion(version)
 
+	// The execution-log archive (#94) captures both pipeline stages: the optional
+	// naabu discovery pass and Nuclei. Open it once here and share the handle —
+	// discovery runs to completion before Nuclei, so writes stay ordered. A log
+	// file we can't open just disables the archive for this run (best-effort); the
+	// scan itself is unaffected.
+	var logw io.Writer = io.Discard
+	if logFile, ferr := os.Create(j.logPath); ferr == nil {
+		defer logFile.Close()
+		logw = logFile
+	}
+
+	targetsFile := filepath.Join(dir, "targets.txt")
+	if err := os.WriteFile(targetsFile, []byte(strings.Join(spec.Targets, "\n")+"\n"), 0o640); err != nil {
+		j.fail(fmt.Errorf("write targets file: %w", err))
+		return
+	}
+
+	// Optional naabu port-discovery pre-pass (#86). Fails closed: if discovery
+	// errors, the scan fails rather than falling back to an unfiltered Nuclei run.
+	// A clean run with no open ports means there is nothing for Nuclei to do.
+	nucleiTargets := targetsFile
+	if d := spec.Options.Discovery; d != nil && d.Enabled {
+		j.setPhase(types.PhaseDiscovering)
+		j.setDiscoveryProgress(0, 0)
+		discTimeout := time.Duration(d.TimeoutSec) * time.Second
+		if discTimeout <= 0 {
+			discTimeout = defaultDiscoveryTimeout
+		}
+		dctx, dcancel := context.WithTimeout(context.Background(), discTimeout)
+		j.setCancel(dcancel)
+		live, err := r.discover(dctx, spec, targetsFile, dir, logw, j.setDiscoveryProgress)
+		dcancel()
+		if err != nil {
+			j.fail(fmt.Errorf("port discovery (naabu): %w", err))
+			return
+		}
+		j.setDiscoveredTargets(live)
+		if len(live) == 0 {
+			j.complete(0)
+			return
+		}
+		nucleiTargets = filepath.Join(dir, "nuclei-targets.txt")
+		if err := os.WriteFile(nucleiTargets, []byte(strings.Join(live, "\n")+"\n"), 0o640); err != nil {
+			j.fail(fmt.Errorf("write discovered targets file: %w", err))
+			return
+		}
+	}
+	j.setPhase(types.PhaseScanning)
+
 	timeout := time.Duration(spec.Options.TimeoutSec) * time.Second
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
@@ -145,13 +203,7 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string) {
 	j.setCancel(cancel)
 	defer cancel()
 
-	targetsFile := filepath.Join(dir, "targets.txt")
-	if err := os.WriteFile(targetsFile, []byte(strings.Join(spec.Targets, "\n")+"\n"), 0o640); err != nil {
-		j.fail(fmt.Errorf("write targets file: %w", err))
-		return
-	}
-
-	args := buildArgs(targetsFile, j.resultsPath, spec)
+	args := buildArgs(nucleiTargets, j.resultsPath, spec)
 	cmd := exec.CommandContext(ctx, r.nucleiPath, args...)
 	// Run in its own process group so Cancel/timeout kills nuclei and any child.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -173,23 +225,24 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string) {
 	// Best-effort: a log file we can't open just disables the archive for this
 	// run; the scan itself is unaffected.
 	var stderr bytes.Buffer
-	sw := &statsWriter{setProgress: j.setProgress, errOut: &stderr}
-	if logFile, ferr := os.Create(j.logPath); ferr == nil {
-		defer logFile.Close()
-		sw.rawOut = logFile
-	}
+	sw := &statsWriter{setProgress: j.setProgress, errOut: &stderr, rawOut: logw}
 	cmd.Stderr = sw
 	cmd.Stdout = io.Discard
 
 	err := cmd.Run()
 	sw.flush()
 	if err != nil {
-		// Nuclei exits 0 even when it finds nothing; a non-zero exit is a real
-		// failure (bad flags, killed, etc.).
-		msg := strings.TrimSpace(lastLines(stderr.String(), 5))
+		// A timeout is its own clean message: the OS reason (`signal: killed`) and
+		// the stderr tail (a batch of per-host "Skipped … unresponsive" diagnostics)
+		// only bury the cause. The full stderr is in the execution-log archive (#94).
 		if ctx.Err() == context.DeadlineExceeded {
-			msg = "scan timed out: " + msg
+			j.fail(fmt.Errorf("nuclei: scan timed out after %s (see execution log for details)", timeout))
+			return
 		}
+		// Nuclei exits 0 even when it finds nothing; a non-zero exit is a real
+		// failure (bad flags, killed, etc.). Summarize the stderr tail so a burst of
+		// repeated "Skipped … unresponsive" lines can't crowd out the real reason.
+		msg := strings.TrimSpace(summarizeStderr(stderr.String(), 20))
 		j.fail(fmt.Errorf("nuclei: %v: %s", err, msg))
 		return
 	}
@@ -285,12 +338,45 @@ func (j *job) setCancel(c context.CancelFunc) {
 	j.mu.Unlock()
 }
 
-// setProgress records the latest live progress snapshot (from -stats-json). A
-// copy is stored so the status snapshot returned to callers is independent.
+// setProgress records the latest live progress snapshot (from Nuclei's
+// -stats-json). A copy is stored so the status snapshot returned to callers is
+// independent. The current phase is stamped on so the UI knows these are Nuclei
+// (scanning) numbers, not discovery ones.
 func (j *job) setProgress(p types.ScanProgress) {
 	j.mu.Lock()
 	prog := p
+	prog.Phase = j.phase
 	j.status.Progress = &prog
+	j.mu.Unlock()
+}
+
+// setPhase records the current execution stage (#86). It is stamped onto every
+// subsequent progress snapshot so callers can tell discovery from scanning.
+func (j *job) setPhase(p types.ScanPhase) {
+	j.mu.Lock()
+	j.phase = p
+	j.mu.Unlock()
+}
+
+// setDiscoveryProgress publishes the discovering-phase live tally (naabu),
+// counted from naabu's "Found N ports on host" log lines. hosts is the number of
+// hosts seen with at least one open port; ports is the running total of open
+// ports found.
+func (j *job) setDiscoveryProgress(hosts, ports int) {
+	j.mu.Lock()
+	j.status.Progress = &types.ScanProgress{
+		Phase:     types.PhaseDiscovering,
+		DiscHosts: hosts,
+		DiscPorts: ports,
+	}
+	j.mu.Unlock()
+}
+
+// setDiscoveredTargets records the narrowed host:port list from the naabu
+// pre-pass, reported to the backend for the scan's life.
+func (j *job) setDiscoveredTargets(t []string) {
+	j.mu.Lock()
+	j.status.DiscoveredTargets = t
 	j.mu.Unlock()
 }
 
@@ -332,4 +418,43 @@ func lastLines(s string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// skippedUnresponsiveRe matches Nuclei's per-host "Skipped … unresponsive"
+// diagnostics (both the transient "found unresponsive N times" and the terminal
+// "unresponsive permanently: cause=…" forms). On a scan of many host:port pairs
+// these arrive as a long burst at the end.
+var skippedUnresponsiveRe = regexp.MustCompile(`Skipped .* unresponsive`)
+
+// summarizeStderr collapses runs of "Skipped … unresponsive" diagnostics into a
+// single count line and returns the last n lines of the result — so the error
+// string surfaced in the UI points at the actual cause instead of a wall of
+// repeated skip diagnostics. The verbatim stderr is still in the execution-log
+// archive (#94), so nothing is lost.
+func summarizeStderr(s string, n int) string {
+	var out []string
+	skipped := 0
+	flush := func() {
+		if skipped > 0 {
+			noun := "targets"
+			if skipped == 1 {
+				noun = "target"
+			}
+			out = append(out, fmt.Sprintf("[INF] Skipped %d %s as unresponsive", skipped, noun))
+			skipped = 0
+		}
+	}
+	for _, l := range strings.Split(strings.TrimRight(s, "\n"), "\n") {
+		if skippedUnresponsiveRe.MatchString(l) {
+			skipped++
+			continue
+		}
+		flush()
+		out = append(out, l)
+	}
+	flush()
+	if len(out) > n {
+		out = out[len(out)-n:]
+	}
+	return strings.Join(out, "\n")
 }

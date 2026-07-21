@@ -268,6 +268,18 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 	return err
 }
 
+// SetScanDiscovered persists the narrowed host:port list from the naabu pre-pass
+// (#86). No-op for an empty list (discovery disabled or found nothing), so the
+// column stays NULL rather than an empty array.
+func (s *Store) SetScanDiscovered(ctx context.Context, scanID string, targets []string) error {
+	if len(targets) == 0 {
+		return nil
+	}
+	_, err := s.pool.Exec(ctx,
+		`UPDATE scans SET discovered_targets = $1 WHERE id = $2`, targets, scanID)
+	return err
+}
+
 // SetScanRawObject records the bucket key of a scan's archived raw output. The
 // key is internal (a bucket path); the API exposes only ScanRow.HasRaw.
 func (s *Store) SetScanRawObject(ctx context.Context, scanID, key string) error {
@@ -341,6 +353,10 @@ type ScanRow struct {
 	HasLog          bool       `json:"has_log"`
 	CreatedAt       time.Time  `json:"created_at"`
 	FinishedAt      *time.Time `json:"finished_at,omitempty"`
+	// DiscoveredTargets is the narrowed host:port list the naabu pre-pass produced
+	// (#86), persisted at completion. For a still-running scan the API layer fills
+	// it from the orchestrator's live cache instead. Empty when discovery was off.
+	DiscoveredTargets []string `json:"discovered_targets,omitempty"`
 	// Progress is live scan progress (#66), attached by the API layer for running
 	// scans from the orchestrator's in-memory cache — never read from or written
 	// to the database.
@@ -355,7 +371,7 @@ type ScanRow struct {
 const scanSelect = `
 	SELECT s.id, s.state, s.target_id, t.name, t.hosts, s.scan_policy_id, sp.name, s.node_id, n.name,
 	       s.nuclei_version, s.templates_commit, s.error, s.raw_object_key, s.log_object_key,
-	       s.created_at, s.finished_at
+	       s.created_at, s.finished_at, s.discovered_targets
 	  FROM scans s
 	  LEFT JOIN targets t ON t.id = s.target_id
 	  LEFT JOIN scan_policies sp ON sp.id = s.scan_policy_id
@@ -369,7 +385,7 @@ func scanScan(row pgx.Row) (ScanRow, error) {
 	var targetID, targetName, scanPolicyID, scanPolicyName, nodeID, nodeName, nucleiVersion, templatesCommit, errStr, rawKey, logKey *string
 	var hosts []string
 	if err := row.Scan(&r.ID, &r.State, &targetID, &targetName, &hosts, &scanPolicyID, &scanPolicyName, &nodeID, &nodeName,
-		&nucleiVersion, &templatesCommit, &errStr, &rawKey, &logKey, &r.CreatedAt, &r.FinishedAt); err != nil {
+		&nucleiVersion, &templatesCommit, &errStr, &rawKey, &logKey, &r.CreatedAt, &r.FinishedAt, &r.DiscoveredTargets); err != nil {
 		return ScanRow{}, err
 	}
 	r.TargetID = deref(targetID)

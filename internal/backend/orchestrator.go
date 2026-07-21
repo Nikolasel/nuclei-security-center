@@ -35,6 +35,10 @@ type Orchestrator struct {
 	// any new Postgres storage. Entries are removed when a scan ends.
 	progressMu sync.Mutex
 	progress   map[string]*types.ScanProgress
+	// discovered caches the naabu-narrowed host:port list per running scan (#86),
+	// so the UI can show discovered endpoints during the scanning phase, before the
+	// list is persisted at completion. Also ephemeral; cleared when a scan ends.
+	discovered map[string][]string
 }
 
 // NewOrchestrator wires the store together with the archiver and health monitor.
@@ -50,6 +54,7 @@ func NewOrchestrator(st *store.Store, archiver ObjectStore, health *HealthMonito
 		pollInterval: 3 * time.Second,
 		maxPolls:     600, // ~30 min ceiling at 3s
 		progress:     make(map[string]*types.ScanProgress),
+		discovered:   make(map[string][]string),
 	}
 }
 
@@ -109,6 +114,24 @@ func (o *Orchestrator) setProgress(scanID string, p *types.ScanProgress) {
 func (o *Orchestrator) clearProgress(scanID string) {
 	o.progressMu.Lock()
 	delete(o.progress, scanID)
+	delete(o.discovered, scanID)
+	o.progressMu.Unlock()
+}
+
+// Discovered returns the cached naabu-narrowed host:port list for a running scan
+// (#86), or nil if none is known yet. Guarded by the same mutex as progress.
+func (o *Orchestrator) Discovered(scanID string) []string {
+	o.progressMu.Lock()
+	defer o.progressMu.Unlock()
+	return o.discovered[scanID]
+}
+
+func (o *Orchestrator) setDiscovered(scanID string, targets []string) {
+	if len(targets) == 0 {
+		return
+	}
+	o.progressMu.Lock()
+	o.discovered[scanID] = targets
 	o.progressMu.Unlock()
 }
 
@@ -237,6 +260,12 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 			log.Warn("record scan versions", "err", err)
 		}
 	}
+	// Persist the naabu-narrowed endpoint list (#86) unconditionally, like the
+	// version: discovery completes before Nuclei, so it's known even if the Nuclei
+	// run then failed/timed out, and the UI should show what was scanned either way.
+	if err := o.store.SetScanDiscovered(ctx, scanID, status.DiscoveredTargets); err != nil {
+		log.Warn("record discovered targets", "err", err)
+	}
 	// Archive the node's execution log regardless of outcome (it's most useful
 	// on failure). pollToDone only returns on a terminal node state, so the log
 	// is complete on the node by now. Best-effort, like the raw archive.
@@ -288,6 +317,7 @@ func (o *Orchestrator) pollToDone(ctx context.Context, client *ScannerClient, sc
 			continue
 		}
 		o.setProgress(scanID, st.Progress)
+		o.setDiscovered(scanID, st.DiscoveredTargets)
 		if st.State == types.ScanComplete || st.State == types.ScanFailed {
 			return st, nil
 		}

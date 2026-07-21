@@ -40,6 +40,39 @@ The scanner node needs no database, so it can be run and exercised on its own: b
 API (health → 200, missing token → 401, valid dispatch → 202, unknown id → 404). Installing
 `nuclei` locally (`brew install nuclei`) enables a real end-to-end run of the scanner half.
 
+## Discovery on Docker Desktop (macOS) reports every host as alive
+
+**Symptom:** during the `discovering` phase the scan detail shows `N hosts responding`
+where N equals the CIDR size of your target (`256` for a `/24`), and stays there. The
+"Discovered endpoints" list eventually reports the *real* count (e.g. `2 hosts · 15
+ports`) — so the per-host Nuclei line and the endpoints list are correct; only the live
+discovery tally is inflated.
+
+**Cause:** Docker Desktop on macOS does not bridge container networking onto the host's
+L2 segment — it runs Linux in a hidden VM and NATs traffic. naabu's `-with-host-discovery`
+(ICMP echo + TCP SYN/ACK to 80/443) against a non-routable address gets an answer from
+the VM's NAT gateway rather than a real host, so naabu counts the whole `/24` as alive.
+The same scan on a Linux host (`bridge`/`macvlan` networking) or against routable/internet
+targets returns the correct handful. This is a property of the toolchain's view of the
+network, not a scanner defect — the live host count is read from naabu's stderr and is only
+as accurate as naabu's L3 reachability.
+
+**What to do:**
+
+- Don't chase the tally — the authoritative answer is the persisted `discovered_targets`
+  (the post-scan endpoint list), parsed from naabu's JSON output, not the stderr tally.
+- For day-to-day dev, set `NAABU_SCAN_TYPE=connect` on the scanner service in
+  `docker-compose.yml`. Connect mode does no host discovery, so it can't false-alive; it
+  still narrows Nuclei to the open ports it finds, in seconds. (On sparse *routable* ranges
+  SYN is faster because it prunes dead hosts first — see [Architecture §4](ARCHITECTURE.md).)
+- For accurate SYN behavior, run the stack on a Linux host with `bridge` networking, or point
+  it at a routable/internet target. Treat the macOS dev path as a known-false-positive
+  environment, not a representative test of host discovery.
+
+**Verify you're in this case:** in the execution-log archive for the scan (download from the
+scan detail, or `mc cat local/scans/<id>/raw.jsonl` against local MinIO), the count of
+`Found alive host` lines equals the tally; if it equals the CIDR size, it's the NAT case.
+
 ## Continuous integration & releases
 
 CI/CD runs on GitHub Actions (`.github/workflows/`):

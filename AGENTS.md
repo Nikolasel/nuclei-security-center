@@ -80,11 +80,13 @@ columns (migration 0018): `discovery_enabled` (**default TRUE** — on unless di
 `discovery_ports` (naabu `-port` spec, NULL = top-1000), `discovery_timeout_sec`
 (discovery's **own** budget, separate from the Nuclei `timeout_sec`), plus naabu
 per-probe tuning `discovery_rate`/`discovery_probe_timeout_ms`/`discovery_retries`
-(migration 0020, each NULL = naabu's default; lower = faster but can miss slow/lossy ports). These flow into
+(migration 0020, each NULL = naabu's default; lower = faster but can miss slow/lossy ports), plus
+`discovery_scan_type` (migration 0021, `syn`|`connect`, CHECK-constrained, NULL = the node's
+`NAABU_SCAN_TYPE` default). These flow into
 `ScanSpec.Options.Discovery` via `overlayScanPolicy`. The stage lives **entirely on the
 node** (`internal/scanner/discover.go`): `Runner.run` writes `targets.txt`, runs naabu,
 parses the live `host:port`s, and feeds the narrowed list to Nuclei. **Scan mode
-(`NAABU_SCAN_TYPE`, default `syn`):** SYN scan + host discovery (`-with-host-discovery`,
+(policy `discovery_scan_type`, else node `NAABU_SCAN_TYPE`, default `syn`):** SYN scan + host discovery (`-with-host-discovery`,
 probing ICMP echo **and** TCP SYN/ACK to 80/443 so ICMP-blocked-but-web-open hosts are
 still found alive) — host discovery prunes dead hosts, the big speed win on sparse ranges.
 This needs raw sockets (`CAP_NET_RAW`, in Docker's default caps) + **libpcap** (the runtime

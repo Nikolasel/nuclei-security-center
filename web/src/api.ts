@@ -304,17 +304,35 @@ export interface Page<T> {
   offset: number;
 }
 
+// The structured findings filter grammar (#97): OR-of-AND groups — groups are
+// ORed, conditions within a group are ANDed. Compiles server-side to a
+// parameterized WHERE. An empty `groups` matches everything.
+export interface FindingCondition {
+  field: string;
+  op: string;
+  values?: string[];
+}
+export interface FindingGroup {
+  conditions: FindingCondition[];
+}
+export interface FindingQuery {
+  groups: FindingGroup[];
+}
+
+// FindingsQuery carries the structured filter plus pagination.
 export interface FindingsQuery {
-  targetId?: string;
-  q?: string;
-  severities?: string[];
-  host?: string;
-  cve?: string;
-  tag?: string;
-  disposition?: Disposition;
-  state?: EffectiveState;
+  filter?: FindingQuery;
   limit?: number;
   offset?: number;
+}
+
+/** findingsParams serializes the filter into the query params shared by the list
+ *  and export endpoints (so they stay in lockstep). The condition tree rides as
+ *  one JSON `filter` param. */
+function findingsParams(q: FindingsQuery): URLSearchParams {
+  const p = new URLSearchParams();
+  if (q.filter && q.filter.groups.length > 0) p.set("filter", JSON.stringify(q.filter));
+  return p;
 }
 
 export type ExportFormat = "json" | "csv" | "sarif" | "raw";
@@ -324,16 +342,8 @@ export type ExportFormat = "json" | "csv" | "sarif" | "raw";
  *  same-origin session cookie authenticates the request (it's a file download,
  *  not JSON, so it bypasses the fetch helper). */
 export function findingsExportUrl(format: ExportFormat, q: FindingsQuery = {}): string {
-  const p = new URLSearchParams();
+  const p = findingsParams(q);
   p.set("format", format);
-  if (q.targetId) p.set("target_id", q.targetId);
-  if (q.q) p.set("q", q.q);
-  if (q.severities?.length) p.set("severity", q.severities.join(","));
-  if (q.host) p.set("host", q.host);
-  if (q.cve) p.set("cve", q.cve);
-  if (q.tag) p.set("tag", q.tag);
-  if (q.disposition) p.set("disposition", q.disposition);
-  if (q.state) p.set("state", q.state);
   return `/api/findings/export?${p.toString()}`;
 }
 
@@ -485,15 +495,7 @@ export const api = {
   deleteScan: (id: string) => request<void>("DELETE", `/api/scans/${id}`),
 
   listFindings: (q: FindingsQuery = {}) => {
-    const p = new URLSearchParams();
-    if (q.targetId) p.set("target_id", q.targetId);
-    if (q.q) p.set("q", q.q);
-    if (q.severities?.length) p.set("severity", q.severities.join(","));
-    if (q.host) p.set("host", q.host);
-    if (q.cve) p.set("cve", q.cve);
-    if (q.tag) p.set("tag", q.tag);
-    if (q.disposition) p.set("disposition", q.disposition);
-    if (q.state) p.set("state", q.state);
+    const p = findingsParams(q);
     if (q.limit != null) p.set("limit", String(q.limit));
     if (q.offset != null) p.set("offset", String(q.offset));
     const qs = p.toString();

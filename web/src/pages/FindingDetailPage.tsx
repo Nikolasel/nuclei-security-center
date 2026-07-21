@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   api,
   DISPOSITION_LABELS,
@@ -214,6 +214,15 @@ function TriagePanel({ f }: { f: FindingDetail }) {
 
 export function FindingDetailPage() {
   const { id = "" } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  // Go back to the findings list preserving its filter: when we arrived here from
+  // within the app, pop history (which restores /findings?filter=… with its URL
+  // state). A direct visit (no in-app history) falls back to the bare list.
+  const backToFindings = () => {
+    if (location.key !== "default") navigate(-1);
+    else navigate("/findings");
+  };
   const q = useQuery({ queryKey: ["finding", id], queryFn: () => api.getFinding(id) });
 
   if (q.isLoading) return <Spinner />;
@@ -229,9 +238,13 @@ export function FindingDetailPage() {
   return (
     <div className="space-y-5">
       <div>
-        <Link to="/findings" className="text-sm text-indigo-600 hover:underline dark:text-indigo-400">
+        <button
+          type="button"
+          onClick={backToFindings}
+          className="text-sm text-indigo-600 hover:underline dark:text-indigo-400"
+        >
           ← Findings
-        </Link>
+        </button>
         <div className="mt-1 flex flex-wrap items-center gap-3">
           <SeverityBadge severity={f.effective_severity} recast={!!f.recast_severity} />
           <h1 className="text-xl font-semibold">{name}</h1>

@@ -40,7 +40,15 @@ func (s *Server) handleExportFindings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filter := lifecycleFilterFromQuery(q)
+	filter, err := findingQueryFromRequest(q)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := store.ValidateFindingQuery(filter); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	stamp := time.Now().UTC().Format("20060102-150405")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="findings-%s.%s"`, stamp, ext))
 

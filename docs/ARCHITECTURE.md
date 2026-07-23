@@ -85,8 +85,9 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
 - **template_sync_runs** — backend-owned upstream catalog refresh history, including pinned
   commit and added/updated/removed/skipped counts (a stray malformed file is skipped-and-counted,
   not fatal; the run fails closed only if nothing parses).
-- **template_sets** — curated explicit membership in `template_set_members`. Legacy filter rows
-  remain readable during the #85 transition but fail closed at dispatch until converted.
+- **template_sets** — curated explicit membership in `template_set_members`. The retired filter
+  columns are gone. Pre-existing POC rows retain a read-only JSON filter snapshot and fail closed
+  until an operator atomically converts the snapshot against the current active upstream catalog.
 - **scan_policies** — `id, name, target_id, template_set_id, rate_limit, concurrency,
   timeout_sec, max_host_error`. The **central, reusable scan configuration**: it bundles
   *everything* a scan needs — the target (required — the scope), an optional template set

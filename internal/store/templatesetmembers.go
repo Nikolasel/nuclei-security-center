@@ -20,6 +20,23 @@ func (s *Store) setExists(ctx context.Context, setID string) error {
 	return err
 }
 
+func (s *Store) explicitSetExists(ctx context.Context, setID string) error {
+	var legacy bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT legacy_filter FROM template_sets WHERE id = $1`, setID,
+	).Scan(&legacy)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if legacy {
+		return ErrTemplateSetLegacy
+	}
+	return nil
+}
+
 // ListTemplateSetMembers returns the catalog rows for a set's members, ordered
 // like the catalog list (yaml omitted). ErrNotFound if the set is unknown.
 func (s *Store) ListTemplateSetMembers(ctx context.Context, setID string) ([]Template, error) {
@@ -51,7 +68,7 @@ func (s *Store) ListTemplateSetMembers(ctx context.Context, setID string) ([]Tem
 // ids. An unknown template id is ErrInvalidRef (FK); an unknown set is
 // ErrNotFound. Returns the resulting member count.
 func (s *Store) ReplaceTemplateSetMembers(ctx context.Context, setID string, ids []string, addedBy string) (int, error) {
-	if err := s.setExists(ctx, setID); err != nil {
+	if err := s.explicitSetExists(ctx, setID); err != nil {
 		return 0, err
 	}
 	tx, err := s.pool.Begin(ctx)
@@ -89,7 +106,7 @@ func (s *Store) ReplaceTemplateSetMembers(ctx context.Context, setID string, ids
 // AddTemplateSetMembers adds ids to a set, ignoring ones already present
 // (idempotent). Unknown template id ⇒ ErrInvalidRef; unknown set ⇒ ErrNotFound.
 func (s *Store) AddTemplateSetMembers(ctx context.Context, setID string, ids []string, addedBy string) error {
-	if err := s.setExists(ctx, setID); err != nil {
+	if err := s.explicitSetExists(ctx, setID); err != nil {
 		return err
 	}
 	for _, id := range ids {
@@ -108,7 +125,7 @@ func (s *Store) AddTemplateSetMembers(ctx context.Context, setID string, ids []s
 // RemoveTemplateSetMember removes one template from a set. ErrNotFound if the
 // set is unknown or the template is not a member.
 func (s *Store) RemoveTemplateSetMember(ctx context.Context, setID, templateID string) error {
-	if err := s.setExists(ctx, setID); err != nil {
+	if err := s.explicitSetExists(ctx, setID); err != nil {
 		return err
 	}
 	tag, err := s.pool.Exec(ctx,

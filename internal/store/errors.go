@@ -29,3 +29,15 @@ var ErrNoNodeForTarget = errors.New("no scanner node serves the target")
 // Upstream rows are owned by the sync (#85) — only custom templates are
 // editable through the API, so editing/deleting an upstream one is refused.
 var ErrTemplateReadOnly = errors.New("upstream templates are read-only")
+
+// ErrTemplateSetNotLegacy is returned when conversion is requested for a set
+// that already uses explicit membership.
+var ErrTemplateSetNotLegacy = errors.New("template set is already explicit")
+
+// ErrNoTemplateMatches leaves a legacy set untouched when its retired filter
+// resolves to no active catalog templates.
+var ErrNoTemplateMatches = errors.New("legacy filter matches no active templates")
+
+// ErrTemplateSetLegacy keeps membership edits read-only until the filter is
+// atomically converted, avoiding partially materialized legacy sets.
+var ErrTemplateSetLegacy = errors.New("legacy filter set must be converted first")

@@ -72,6 +72,17 @@ their not-yet-run executors. CRUD at `GET/POST /api/scan-policies`,
 `config_changed`, action `scan_policy.*`). `internal/backend/crud.go` +
 `internal/store/scanpolicies.go`.
 
+**Template catalog (#85):** Postgres owns the lossless YAML catalog (`templates`) and explicit
+set membership (`template_set_members`). `template_sets` no longer carries the POC
+`git_ref`/severity/tag/path filter columns; pre-existing rows retain only a
+`legacy_filter_snapshot` JSON value and remain read-only/fail-closed until
+`POST /api/template-sets/{id}/convert` atomically materializes the snapshot against the current
+active upstream catalog. Scans carry concrete `template_ids` plus the full-catalog `templates_commit`.
+The backend pushes that full catalog to nodes; nodes select IDs from their verified active bundle
+and reject missing IDs or digest drift. `internal/backend/template_syncer.go`,
+`internal/backend/distributor.go`, `internal/store/templates*.go`, and
+`internal/scanner/bundle.go`.
+
 **Port discovery (#86 — naabu pre-pass):** a scan policy can drive an optional
 **naabu** port scan on the scanner node *before* Nuclei, so Nuclei only probes live
 `host:port` pairs instead of every address in a CIDR-scoped target (the motivating

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,10 @@ import (
 
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
+
+// ErrScannerBusy marks an operation the node refused because a scan currently
+// holds its active template tree. Pre-dispatch top-up waits and retries it.
+var ErrScannerBusy = errors.New("scanner node busy")
 
 // ScannerClient talks to one scanner node's /v1 API using a bearer service token.
 // When tlsCfg is set (per-node mTLS, #26) it is applied to every request the
@@ -144,6 +149,9 @@ func (c *ScannerClient) PushBundle(ctx context.Context, bundle []byte) (types.Te
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusConflict {
+			return types.TemplateBundleStatus{}, fmt.Errorf("%w: %s", ErrScannerBusy, statusErr(resp))
+		}
 		return types.TemplateBundleStatus{}, fmt.Errorf("push bundle: %s", statusErr(resp))
 	}
 	var st types.TemplateBundleStatus

@@ -312,6 +312,26 @@ func (s *Store) ActiveTemplateBundleEntries(ctx context.Context) ([]types.Templa
 	return out, rows.Err()
 }
 
+// TemplatesUpdatedAfter reports whether any selected active template changed
+// after ts. The orchestrator combines this DB-driven signal with the node's
+// reported bundle digest before dispatch, so a set changed since the last push
+// is topped up even if a health snapshot is stale.
+func (s *Store) TemplatesUpdatedAfter(ctx context.Context, ids []string, ts time.Time) (bool, error) {
+	if len(ids) == 0 {
+		return false, nil
+	}
+	var updated bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT EXISTS(
+			SELECT 1 FROM templates
+			 WHERE availability = 'active' AND id = ANY($1) AND updated_at > $2
+		)`, ids, ts).Scan(&updated)
+	if err != nil {
+		return false, fmt.Errorf("check selected template freshness: %w", err)
+	}
+	return updated, nil
+}
+
 // ListActiveTemplateBodies returns every active template with its verbatim YAML,
 // for building the full catalog bundle pushed to a node (#85).
 func (s *Store) ListActiveTemplateBodies(ctx context.Context) ([]Template, error) {

@@ -19,7 +19,7 @@ deployment.
 | `TEMPLATE_SYNC_REPO` | backend | `https://github.com/projectdiscovery/nuclei-templates.git` | Git repository mirrored into the local template catalog. **Set empty to disable sync entirely** (mirrors the `S3_ENDPOINT`/`OIDC_ISSUER` unset-⇒-off pattern) — useful in a slim dev stack where a ~1 GB clone isn't wanted |
 | `TEMPLATE_SYNC_REF` | backend | `latest` | upstream revision to mirror; `latest` selects the highest stable semantic-version Git tag. **Only tags and commit SHAs are pinned reliably**; a branch name (e.g. `main`) tracks `origin/<branch>` and advances each fetch |
 | `TEMPLATE_SYNC_DIR` | backend | `/tmp/nsc-template-sync` | backend-local clone cache; PostgreSQL remains authoritative after each successful sync. Point at a persisted volume (compose does) so restarts fetch deltas instead of re-cloning |
-| `TEMPLATE_DISTRIBUTE_INTERVAL` | backend | `1h` | cadence for pushing the full template catalog to scanner nodes (#85, Go duration). Each pass pushes only to nodes that are **stale** (reported bundle digest ≠ current catalog digest) **and idle** (no running scan). Disabled together with the syncer when `TEMPLATE_SYNC_REPO` is empty |
+| `TEMPLATE_DISTRIBUTE_INTERVAL` | backend | `1h` | cadence for pushing the full template catalog to scanner nodes (#85, Go duration). Each pass pushes only to nodes that are **stale** (reported bundle digest ≠ current catalog digest) **and idle** (no running scan). Distribution remains enabled when upstream sync is off so custom-only catalogs and pre-dispatch top-ups work |
 | `SCANNER_ADDR` | scanner | `:8081` | listen address |
 | `SCANNER_TLS_CERT` / `SCANNER_TLS_KEY` | scanner | – (unset ⇒ plain HTTP) | node server certificate; setting both makes the node serve HTTPS. See [Service auth: TLS & mTLS](#service-auth-tls--mtls) |
 | `SCANNER_CLIENT_CA` | scanner | – | PEM CA bundle; when set the node **requires + verifies** a client cert (mTLS) |
@@ -226,26 +226,27 @@ emulation.
 
 UBI 10 Micro ships **no CA trust store** at all, so **both** images copy a CA bundle to
 `/etc/ssl/certs/ca-certificates.crt` for outbound TLS. The **backend** needs it for Postgres / OIDC
-IdP / S3 (and runs as a non-root user); the **scanner** needs it for nuclei's outbound TLS (OOB /
-interactsh interactions, honest template refresh).
+IdP / S3 (and runs as a non-root user); the **scanner** needs it for Nuclei's target/OOB/interactsh
+TLS.
 
-The **scanner image is also fully self-contained** — it bakes in both a pinned `nuclei` binary and
-the community templates, so a node can still scan even with no network or unreachable TLS at runtime:
+The **scanner image** bakes in the pinned execution binaries but no community template cache:
+the backend-owned active catalog bundle is the only template source a scan may use.
 
 - **Pinned, checksum-verified `nuclei`** — a build stage downloads the release asset and **verifies
   its SHA-256 against the release checksums file** before copying just the `nuclei` binary onto the
   runtime (on `PATH`, so `NUCLEI_PATH=nuclei` still works). This removes the trust dependency on a
   mutable upstream image tag.
-- **Templates baked at build time** — the same stage runs `nuclei -update-templates` (templates are
-  arch-independent YAML) and copies the result into the image. The node's best-effort pre-scan
-  refresh then simply no-ops when offline, using the baked set.
+- **Bundle-only templates** — before dispatch, the backend pushes the full active catalog when the
+  node is stale. Each scan carries concrete ids + the bundle digest; the node resolves every id
+  from `manifest.json`, rejects missing ids/drift, and holds a shared lock on the active tree until
+  Nuclei exits. There is no `nuclei -update-templates` path.
 
 | Build arg | Image | Default | Purpose |
 | --- | --- | --- | --- |
 | `NUCLEI_VERSION` | scanner | **pinned in `deploy/Dockerfile.scanner`** | nuclei release baked into the image. This `ARG` is the **single source of truth** — CI does not override it. Bumping nuclei = bump this (per architecture invariant #3, nuclei is a binary, not a linked SDK). |
 
-To upgrade nuclei, change the `ARG NUCLEI_VERSION` default in `deploy/Dockerfile.scanner` (that also
-re-bakes the current templates on the next build), or override per-build:
+To upgrade nuclei, change the `ARG NUCLEI_VERSION` default in `deploy/Dockerfile.scanner`, or
+override per-build:
 
 ```sh
 docker buildx build -f deploy/Dockerfile.scanner \

@@ -10,7 +10,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
@@ -187,6 +189,105 @@ func TestBundleApplyRejects(t *testing.T) {
 	t.Run("not gzip", func(t *testing.T) {
 		assertInvalid(t, []byte("this is not a gzip stream"))
 	})
+}
+
+func TestBundleLockTemplatesResolvesIDsAndRejectsDrift(t *testing.T) {
+	b := newTestBundleStore(t)
+	files := []bundleFile{
+		{"http/a.yaml", "id: a\n"},
+		{"custom/b.yaml", "id: b\n"},
+	}
+	entries := []types.TemplateBundleEntry{
+		{ID: "a", Path: files[0].name, SHA256: contentHash(files[0].content)},
+		{ID: "b", Path: files[1].name, SHA256: contentHash(files[1].content)},
+	}
+	manifest := &types.TemplateBundleManifest{Digest: types.BundleDigest(entries), Templates: entries}
+	if _, err := b.apply(bytes.NewReader(makeBundle(t, files, manifest, nil))); err != nil {
+		t.Fatal(err)
+	}
+
+	paths, unlock, err := b.lockTemplates([]string{"b", "a"}, manifest.Digest)
+	if err != nil {
+		t.Fatalf("lockTemplates: %v", err)
+	}
+	unlock()
+	if len(paths) != 2 ||
+		paths[0] != filepath.Join(b.activePath(), "custom/b.yaml") ||
+		paths[1] != filepath.Join(b.activePath(), "http/a.yaml") {
+		t.Errorf("resolved paths = %v", paths)
+	}
+
+	if _, _, err := b.lockTemplates([]string{"missing-b", "missing-a"}, manifest.Digest); !errors.Is(err, ErrMissingTemplates) ||
+		!strings.Contains(err.Error(), "missing-a, missing-b") {
+		t.Errorf("missing-template error = %v", err)
+	}
+	if _, _, err := b.lockTemplates([]string{"a"}, "old-digest"); err == nil ||
+		!strings.Contains(err.Error(), "commit mismatch") {
+		t.Errorf("commit mismatch error = %v", err)
+	}
+}
+
+func TestBundleActivationRefusedWhileScanHoldsTree(t *testing.T) {
+	b := newTestBundleStore(t)
+	first := makeBundle(t, []bundleFile{{"http/a.yaml", "id: a\n"}}, nil, nil)
+	status, err := b.apply(bytes.NewReader(first))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, unlock, err := b.lockTemplates([]string{"http/a.yaml"}, status.TemplatesCommit)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second := makeBundle(t, []bundleFile{{"http/b.yaml", "id: b\n"}}, nil, nil)
+	if _, err := b.apply(bytes.NewReader(second)); !errors.Is(err, ErrBundleBusy) {
+		t.Fatalf("apply while tree is locked = %v, want ErrBundleBusy", err)
+	}
+	unlock()
+	if b.activeDigest() != status.TemplatesCommit {
+		t.Errorf("busy apply changed active digest")
+	}
+}
+
+func TestScanStartingDuringActivationQueues(t *testing.T) {
+	b := newTestBundleStore(t)
+	data := makeBundle(t, []bundleFile{{"http/a.yaml", "id: a\n"}}, nil, nil)
+	status, err := b.apply(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Hold the activation lock directly to make the otherwise tiny rename window
+	// deterministic. lockTemplates must wait, not fail or observe partial state.
+	b.mu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		_, unlock, err := b.lockTemplates([]string{"http/a.yaml"}, status.TemplatesCommit)
+		if err == nil {
+			unlock()
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		b.mu.Unlock()
+		t.Fatalf("scan did not queue during activation: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	b.mu.Unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("queued scan failed after activation: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued scan did not resume")
+	}
+}
+
+func contentHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 // assertInvalid asserts apply fails with ErrInvalidBundle and leaves no active

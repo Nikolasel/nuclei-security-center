@@ -31,10 +31,12 @@ type Server struct {
 	log         *slog.Logger
 }
 
-// SetTemplateDistributor wires the on-demand catalog push used by the admin
-// "sync now" action (#85). Left nil when template distribution is disabled, in
-// which case the endpoint reports 503.
-func (s *Server) SetTemplateDistributor(d *TemplateDistributor) { s.distributor = d }
+// SetTemplateDistributor wires both the admin "sync now" action and the
+// orchestrator's pre-dispatch top-up (#85).
+func (s *Server) SetTemplateDistributor(d *TemplateDistributor) {
+	s.distributor = d
+	s.orch.SetTemplateDistributor(d)
+}
 
 // NewServer builds the backend HTTP server. auth may be nil to disable auth; spa
 // is the handler for the embedded frontend (served for all non-/api routes). The
@@ -144,8 +146,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/template-sets/{id}", s.mutation(eventConfigChanged, "template_set.delete", "template_set", RoleAdmin, s.handleDeleteTemplateSet))
 
 	// Explicit membership (#85): a set curated as a list of catalog templates.
-	// Reads → viewer; membership edits → operator, audited as config changes. Not
-	// yet wired into dispatch (the scan-contract cutover slice does that).
+	// Reads → viewer; membership edits → operator, audited as config changes.
 	mux.HandleFunc("GET /api/template-sets/{id}/members", s.requireRole(RoleViewer, s.handleListTemplateSetMembers))
 	mux.HandleFunc("PUT /api/template-sets/{id}/members", s.mutation(eventConfigChanged, "template_set.members_replace", "template_set", RoleOperator, s.handleReplaceTemplateSetMembers))
 	mux.HandleFunc("POST /api/template-sets/{id}/members", s.mutation(eventConfigChanged, "template_set.members_add", "template_set", RoleOperator, s.handleAddTemplateSetMembers))
@@ -253,8 +254,9 @@ func (s *Server) resolvePolicySpec(ctx context.Context, policyID string) (types.
 }
 
 // resolveConfigSpec builds a scan spec + config link from a stored target and an
-// optional template set. Shared by ad-hoc "run from config" and the scheduler,
-// so both dispatch identical scans from the same stored config.
+// optional explicit template set. The scan carries concrete ids plus the digest
+// of the full active catalog bundle already distributed to the node. A nil set
+// means every active catalog template; legacy/empty sets fail closed.
 func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID string) (types.ScanSpec, store.ScanLink, error) {
 	target, err := s.store.GetTarget(ctx, targetID)
 	if err != nil {
@@ -265,6 +267,8 @@ func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID 
 	}
 	spec := types.ScanSpec{Targets: target.Hosts, Options: defaultOptions()}
 	link := store.ScanLink{TargetID: target.ID}
+
+	var selectedIDs []string
 	if templateSetID != "" {
 		ts, err := s.store.GetTemplateSet(ctx, templateSetID)
 		if err != nil {
@@ -273,9 +277,71 @@ func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID 
 			}
 			return types.ScanSpec{}, store.ScanLink{}, err
 		}
-		spec.Templates = ts.Selector()
+		if ts.LegacyFilter || ts.MemberCount == 0 {
+			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf(
+				"template set %q is a legacy filter set — convert to an explicit selection first",
+				ts.Name,
+			)
+		}
+		members, err := s.store.ListTemplateSetMembers(ctx, ts.ID)
+		if err != nil {
+			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("list template set members: %w", err)
+		}
+		if len(members) == 0 {
+			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf(
+				"template set %q is a legacy filter set — convert to an explicit selection first",
+				ts.Name,
+			)
+		}
+		var unavailable []string
+		for _, member := range members {
+			if member.Availability != "active" {
+				unavailable = append(unavailable, member.ID)
+				continue
+			}
+			selectedIDs = append(selectedIDs, member.ID)
+		}
+		if len(unavailable) > 0 {
+			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf(
+				"template set %q contains unavailable templates: %s — update its explicit selection first",
+				ts.Name, strings.Join(unavailable, ", "),
+			)
+		}
 		link.TemplateSetID = ts.ID
 	}
+
+	entries, err := s.store.ActiveTemplateBundleEntries(ctx)
+	if err != nil {
+		return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("read active template catalog: %w", err)
+	}
+	if len(entries) == 0 {
+		return types.ScanSpec{}, store.ScanLink{}, errors.New("active template catalog is empty")
+	}
+	if templateSetID == "" {
+		selectedIDs = make([]string, 0, len(entries))
+		for _, entry := range entries {
+			selectedIDs = append(selectedIDs, entry.ID)
+		}
+	} else {
+		active := make(map[string]struct{}, len(entries))
+		for _, entry := range entries {
+			active[entry.ID] = struct{}{}
+		}
+		var unavailable []string
+		for _, id := range selectedIDs {
+			if _, ok := active[id]; !ok {
+				unavailable = append(unavailable, id)
+			}
+		}
+		if len(unavailable) > 0 {
+			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf(
+				"template set contains unavailable templates: %s — update its explicit selection first",
+				strings.Join(unavailable, ", "),
+			)
+		}
+	}
+	spec.Templates.TemplateIDs = selectedIDs
+	spec.Templates.TemplatesCommit = types.BundleDigest(entries)
 	return spec, link, nil
 }
 

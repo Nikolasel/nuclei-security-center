@@ -14,10 +14,11 @@ func TestBuildArgs(t *testing.T) {
 		Templates: types.TemplateSelector{
 			Severities: []string{"critical", "high"},
 			Tags:       []string{"cve"},
+			Paths:      []string{"legacy/path.yaml"},
 		},
 		Options: types.ScanOptions{RateLimit: 150, Concurrency: 25, MaxHostError: 50},
 	}
-	args := buildArgs("/t/targets.txt", "/t/out.jsonl", spec)
+	args := buildArgs("/t/targets.txt", "/t/out.jsonl", []string{"/bundle/a.yaml", "/bundle/b.yaml"}, spec)
 
 	mustHavePair := func(flag, val string) {
 		for i := 0; i+1 < len(args); i++ {
@@ -29,9 +30,8 @@ func TestBuildArgs(t *testing.T) {
 	}
 	mustHavePair("-list", "/t/targets.txt")
 	mustHavePair("-output", "/t/out.jsonl")
-	mustHavePair("-severity", "critical")
-	mustHavePair("-severity", "high")
-	mustHavePair("-tags", "cve")
+	mustHavePair("-templates", "/bundle/a.yaml")
+	mustHavePair("-templates", "/bundle/b.yaml")
 	mustHavePair("-rate-limit", "150")
 	mustHavePair("-concurrency", "25")
 	mustHavePair("-max-host-error", "50")
@@ -50,11 +50,16 @@ func TestBuildArgs(t *testing.T) {
 	if !slices.Contains(args, "-stats-json") {
 		t.Errorf("expected -stats-json in args: %v", args)
 	}
+	for _, legacy := range []string{"-severity", "-tags", "legacy/path.yaml"} {
+		if slices.Contains(args, legacy) {
+			t.Errorf("legacy selector %q must not reach nuclei: %v", legacy, args)
+		}
+	}
 }
 
 func TestBuildArgsMinimal(t *testing.T) {
 	// No filters/options => no severity/tags/rate flags, but core flags present.
-	args := buildArgs("/t/targets.txt", "/t/out.jsonl", types.ScanSpec{Targets: []string{"x"}})
+	args := buildArgs("/t/targets.txt", "/t/out.jsonl", nil, types.ScanSpec{Targets: []string{"x"}})
 	if slices.Contains(args, "-rate-limit") || slices.Contains(args, "-severity") ||
 		slices.Contains(args, "-max-host-error") {
 		t.Errorf("unexpected optional flags in minimal args: %v", args)

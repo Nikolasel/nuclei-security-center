@@ -14,8 +14,8 @@ import (
 // TemplateSet selects which Nuclei templates a scan runs. Two models coexist
 // during the #85 transition: legacy "filter over the community repo" (git ref +
 // severity/tag/path filters, LegacyFilter=true) and explicit membership (a
-// curated list in template_set_members, MemberCount>0). Dispatch still uses the
-// filter fields today; the scan-contract cutover slice switches it to members.
+// curated list in template_set_members, MemberCount>0). Dispatch accepts only
+// explicit membership; the legacy fields remain until the cleanup slice.
 type TemplateSet struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`
@@ -30,7 +30,8 @@ type TemplateSet struct {
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
-// Selector converts a stored TemplateSet into the wire selector sent to the node.
+// Selector is the legacy filter projection retained until the cleanup slice.
+// Dispatch must not use it; scanner nodes now consume explicit template ids.
 func (t TemplateSet) Selector() types.TemplateSelector {
 	return types.TemplateSelector{
 		GitRef:     t.GitRef,

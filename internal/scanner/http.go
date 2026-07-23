@@ -52,6 +52,10 @@ func (s *Server) handleApplyBundle(w http.ResponseWriter, r *http.Request) {
 	body := http.MaxBytesReader(w, r.Body, maxBundleUpload)
 	status, err := s.runner.ApplyBundle(body)
 	if err != nil {
+		if errors.Is(err, ErrBundleBusy) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		if errors.Is(err, ErrInvalidBundle) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

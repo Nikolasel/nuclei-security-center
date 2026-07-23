@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,10 +22,11 @@ import (
 // by the target's CIDR; a single-node deployment routes every scan to the one
 // catch-all node.
 type Orchestrator struct {
-	store    *store.Store
-	archiver ObjectStore    // nil when object storage is not configured
-	health   *HealthMonitor // nil disables health-aware dispatch
-	log      *slog.Logger
+	store       *store.Store
+	archiver    ObjectStore          // nil when object storage is not configured
+	health      *HealthMonitor       // nil disables health-aware dispatch
+	distributor *TemplateDistributor // pre-dispatch catalog top-up (#85)
+	log         *slog.Logger
 
 	pollInterval time.Duration
 
@@ -55,6 +57,10 @@ func NewOrchestrator(st *store.Store, archiver ObjectStore, health *HealthMonito
 		discovered:   make(map[string][]string),
 	}
 }
+
+// SetTemplateDistributor enables pre-dispatch catalog top-up. It is wired once
+// during backend startup before the HTTP server begins accepting scans.
+func (o *Orchestrator) SetTemplateDistributor(d *TemplateDistributor) { o.distributor = d }
 
 // Health exposes the node health monitor (nil when health polling is disabled).
 func (o *Orchestrator) Health() *HealthMonitor { return o.health }
@@ -214,7 +220,7 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 	// poll budget must exceed the node's own max runtime so the node's specific
 	// timeout error (e.g. "discovery timed out") wins over the generic give-up.
 	pollWait := nodeRuntimeBudget(spec) + nodeOverhead
-	ctx, cancel := context.WithTimeout(context.Background(), pollWait+ingestTail)
+	ctx, cancel := context.WithTimeout(context.Background(), templateTopUpQueueBudget+pollWait+ingestTail)
 	defer cancel()
 	// Live progress is only meaningful while the scan runs; drop it at the end.
 	defer o.clearProgress(scanID)
@@ -233,6 +239,11 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 	// is visible for triage even if the dispatch/run then fails.
 	if err := o.store.SetScanNode(ctx, scanID, node.ID); err != nil {
 		log.Warn("record scan node", "err", err)
+	}
+
+	if err := o.ensureTemplateBundle(ctx, client, node, spec); err != nil {
+		o.failScan(ctx, scanID, "template top-up: "+err.Error(), "", spec.Templates.TemplatesCommit)
+		return
 	}
 
 	nodeScanID, err := client.StartScan(ctx, spec)
@@ -304,13 +315,95 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 	log.Info("scan complete", "findings", status.FindingCount)
 }
 
+// ensureTemplateBundle tops up a stale node before scan dispatch. Staleness is
+// deliberately belt-and-suspenders: selected-template timestamps catch catalog
+// edits since the last successful push, while a fresh capabilities call catches
+// reality drift (for example a wiped node volume). A busy node is waited out;
+// its activation endpoint also returns 409 on the race between the DB idle check
+// and the push.
+func (o *Orchestrator) ensureTemplateBundle(
+	ctx context.Context,
+	client *ScannerClient,
+	node store.ScannerNode,
+	spec types.ScanSpec,
+) error {
+	if len(spec.Templates.TemplateIDs) == 0 || spec.Templates.TemplatesCommit == "" {
+		return errors.New("scan spec has no explicit template selection")
+	}
+
+	staleByTime := node.TemplatesSyncedAt == nil
+	if node.TemplatesSyncedAt != nil {
+		var err error
+		staleByTime, err = o.store.TemplatesUpdatedAfter(
+			ctx,
+			spec.Templates.TemplateIDs,
+			*node.TemplatesSyncedAt,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	caps, err := client.Capabilities(ctx)
+	if err != nil {
+		return fmt.Errorf("read node capabilities: %w", err)
+	}
+	if !staleByTime && caps.TemplatesCommit == spec.Templates.TemplatesCommit {
+		return nil
+	}
+	if o.distributor == nil {
+		return errors.New("template distributor is unavailable")
+	}
+
+	for {
+		busy, err := o.store.NodeHasActiveScan(ctx, node.ID)
+		if err != nil {
+			return fmt.Errorf("check node busy: %w", err)
+		}
+		if busy {
+			if err := waitForTemplateTopUp(ctx); err != nil {
+				return err
+			}
+			continue
+		}
+		status, err := o.distributor.SyncNode(ctx, node.ID)
+		if errors.Is(err, ErrScannerBusy) {
+			if err := waitForTemplateTopUp(ctx); err != nil {
+				return err
+			}
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("push catalog: %w", err)
+		}
+		if status.TemplatesCommit != spec.Templates.TemplatesCommit {
+			return fmt.Errorf(
+				"catalog changed during dispatch: scan resolved %q, node activated %q; retry the scan",
+				spec.Templates.TemplatesCommit, status.TemplatesCommit,
+			)
+		}
+		return nil
+	}
+}
+
+func waitForTemplateTopUp(ctx context.Context) error {
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("wait for scanner node to become idle: %w", ctx.Err())
+	case <-timer.C:
+		return nil
+	}
+}
+
 // Wall-clock a scan spends outside its discovery/Nuclei timeouts. nodeOverhead is
-// on the node before the timed work (the pre-scan template sync is capped at 5m in
-// runner.go) plus dispatch and poll-interval slack; ingestTail is backend-side
+// on the node before the timed work plus catalog top-up, dispatch, and
+// poll-interval slack; ingestTail is backend-side
 // headroom to stream and persist results after the node reports complete.
 const (
-	nodeOverhead = 8 * time.Minute
-	ingestTail   = 5 * time.Minute
+	templateTopUpQueueBudget = 45 * time.Minute
+	nodeOverhead             = 8 * time.Minute
+	ingestTail               = 5 * time.Minute
 )
 
 // nodeRuntimeBudget is the longest the node may legitimately spend on a scan: the

@@ -18,6 +18,7 @@ import { useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import type { Identity } from "../api";
 import { hasRole } from "../auth";
+import { Brand } from "./Brand";
 import { cn } from "./ui";
 
 // Nav data model. Categories are an IA hint; routes are unchanged. The `role`
@@ -134,13 +135,13 @@ export function Layout({
 
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
-      <header className="border-b border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+      <header className="border-b border-cyan-300/20 bg-slate-950 text-white shadow-[0_1px_28px_rgba(34,211,238,0.12)] dark:bg-slate-950">
         <div className="mx-auto flex max-w-[96rem] items-center gap-6 px-4">
-          <span className="py-3 font-semibold">Nuclei Security Center</span>
+          <Brand className="py-2" />
           <div className="ml-auto">
             <DropdownMenu.Root>
-              <DropdownMenu.Trigger className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800">
-                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-indigo-600 text-xs font-semibold text-white">
+              <DropdownMenu.Trigger className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-100 hover:bg-white/10">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-cyan-300 to-violet-500 text-xs font-bold text-slate-950 shadow-[0_0_14px_rgba(103,232,249,0.42)]">
                   {who.slice(0, 2).toUpperCase()}
                 </span>
                 <span className="hidden sm:inline">{who}</span>

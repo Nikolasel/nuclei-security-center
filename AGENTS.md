@@ -249,6 +249,7 @@ dev mode used in headless `curl` testing.
 ## Conventions
 
 - Structured logging via `log/slog` (JSON handler).
+- Agent-created branches use `feature/<name>` for feature work and `fix/<name>` for bug fixes; do not use the `codex/` prefix in this repository.
 - Config via environment variables (see the table in `docs/CONFIGURATION.md`); required vars fail fast.
 - Errors wrapped with `%w` and context; HTTP handlers return plain-text errors + status.
 - New schema changes go in a new numbered file under `internal/store/migrations/`; the

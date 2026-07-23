@@ -290,6 +290,48 @@ func (s *Store) ListTemplateSyncRuns(ctx context.Context, limit int) ([]Template
 	return out, rows.Err()
 }
 
+// ActiveTemplateBundleEntries returns the id/path/sha256 of every active template
+// (no YAML) — enough to compute the catalog's canonical bundle digest cheaply, so
+// the distributor can decide whether a node is already current before building
+// the (heavier) full bundle. Ordered by id for a stable manifest.
+func (s *Store) ActiveTemplateBundleEntries(ctx context.Context) ([]types.TemplateBundleEntry, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, path, content_sha256 FROM templates WHERE availability = 'active' ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("list template bundle entries: %w", err)
+	}
+	defer rows.Close()
+	var out []types.TemplateBundleEntry
+	for rows.Next() {
+		var e types.TemplateBundleEntry
+		if err := rows.Scan(&e.ID, &e.Path, &e.SHA256); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// ListActiveTemplateBodies returns every active template with its verbatim YAML,
+// for building the full catalog bundle pushed to a node (#85).
+func (s *Store) ListActiveTemplateBodies(ctx context.Context) ([]Template, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, path, yaml, content_sha256 FROM templates WHERE availability = 'active' ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("list active template bodies: %w", err)
+	}
+	defer rows.Close()
+	var out []Template
+	for rows.Next() {
+		var t Template
+		if err := rows.Scan(&t.ID, &t.Path, &t.YAML, &t.ContentSHA256); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 // StartTemplateSync records a sync attempt before network work begins, so a
 // failed clone/fetch is visible just like a failed database update.
 func (s *Store) StartTemplateSync(ctx context.Context) (TemplateSyncRun, error) {

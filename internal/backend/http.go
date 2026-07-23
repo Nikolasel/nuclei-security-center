@@ -21,14 +21,20 @@ import (
 // OIDC/BFF auth (§6); when auth is nil (OIDC unconfigured) the guards fall back
 // to a dev identity with all roles, so local smoke tests still work.
 type Server struct {
-	store    *store.Store
-	orch     *Orchestrator
-	auth     *Authenticator
-	archive  ObjectStore      // nil when object storage is not configured
-	searcher FindingsSearcher // reads the findings list; defaults to Postgres
-	spa      http.Handler
-	log      *slog.Logger
+	store       *store.Store
+	orch        *Orchestrator
+	auth        *Authenticator
+	archive     ObjectStore          // nil when object storage is not configured
+	searcher    FindingsSearcher     // reads the findings list; defaults to Postgres
+	distributor *TemplateDistributor // nil when template sync is disabled (#85)
+	spa         http.Handler
+	log         *slog.Logger
 }
+
+// SetTemplateDistributor wires the on-demand catalog push used by the admin
+// "sync now" action (#85). Left nil when template distribution is disabled, in
+// which case the endpoint reports 503.
+func (s *Server) SetTemplateDistributor(d *TemplateDistributor) { s.distributor = d }
 
 // NewServer builds the backend HTTP server. auth may be nil to disable auth; spa
 // is the handler for the embedded frontend (served for all non-/api routes). The
@@ -96,6 +102,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/nodes/{id}", s.requireRole(RoleViewer, s.handleGetNode))
 	mux.HandleFunc("PUT /api/nodes/{id}", s.mutation(eventConfigChanged, "scanner_node.update", "scanner_node", RoleAdmin, s.handleUpdateNode))
 	mux.HandleFunc("DELETE /api/nodes/{id}", s.mutation(eventConfigChanged, "scanner_node.delete", "scanner_node", RoleAdmin, s.handleDeleteNode))
+	// Admin "sync now" (#85): push the current full template catalog to one node.
+	mux.HandleFunc("POST /api/nodes/{id}/templates/sync", s.mutation(eventConfigChanged, "scanner_node.templates_sync", "scanner_node", RoleAdmin, s.handleSyncNodeTemplates))
 
 	// Schedules (config) — cron-driven scans. Reads → viewer; create/edit/run →
 	// operator; delete → admin (matches targets/template-sets). Run is a dispatch.

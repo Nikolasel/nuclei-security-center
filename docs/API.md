@@ -413,6 +413,19 @@ curl -sb jar.txt -X POST localhost:8080/api/nodes \
   Config (`SCANNER_URL`/`SCAN_ZONES`) seeds this registry on first boot only —
   see [CONFIGURATION.md](CONFIGURATION.md#scanner-node-registry).
 
+A node's read view also carries `templates_synced_at` — when the backend last pushed the full
+template catalog to it (#85). The backend does this automatically on a cadence
+(`TEMPLATE_DISTRIBUTE_INTERVAL`, stale + idle nodes only), and an admin can force it:
+
+```sh
+# push the current full catalog to one node now (admin) → { templates_commit, template_count }
+curl -sb jar.txt -X POST localhost:8080/api/nodes/<node_id>/templates/sync
+```
+
+`503` if template distribution is disabled (`TEMPLATE_SYNC_REPO` empty), `404` for an unknown
+node, `502` if the node rejects the bundle or is unreachable. Audited `config_changed`
+(`scanner_node.templates_sync`).
+
 ## Scope guardrail
 
 A scan may only target hosts that fall inside an **approved target record**. This is the most

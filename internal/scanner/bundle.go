@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -29,6 +30,15 @@ const maxBundleBytes = 512 << 20 // 512 MiB
 // hash mismatch, or a digest that doesn't match the manifest. It maps to a 4xx —
 // the bundle is the caller's fault, not a node fault.
 var ErrInvalidBundle = errors.New("invalid template bundle")
+
+// ErrBundleBusy means a verified bundle could not be activated because one or
+// more scans hold the active tree's shared read lock. The HTTP layer maps it to
+// 409 so the backend can retry rather than treating it as a bad bundle.
+var ErrBundleBusy = errors.New("template bundle busy")
+
+// ErrMissingTemplates marks a scan contract that names ids absent from the
+// active manifest. The node rejects it before launching Nuclei, fail closed.
+var ErrMissingTemplates = errors.New("active template bundle is missing requested templates")
 
 // bundleStore owns the node's active template tree. The backend pushes an
 // immutable, verified bundle (backend→node only, invariant #2); the node extracts
@@ -88,7 +98,12 @@ func (b *bundleStore) apply(r io.Reader) (types.TemplateBundleStatus, error) {
 		return types.TemplateBundleStatus{}, err
 	}
 
-	b.mu.Lock()
+	// Fail fast instead of waiting behind a long scan. A waiting writer would
+	// make sync.RWMutex block new readers and starve newly queued scans; TryLock
+	// preserves the chosen "running scans win, bundle push retries" policy.
+	if !b.mu.TryLock() {
+		return types.TemplateBundleStatus{}, fmt.Errorf("%w: scans are running", ErrBundleBusy)
+	}
 	defer b.mu.Unlock()
 	if err := b.activate(staging, manifest.Digest); err != nil {
 		return types.TemplateBundleStatus{}, err
@@ -97,9 +112,9 @@ func (b *bundleStore) apply(r io.Reader) (types.TemplateBundleStatus, error) {
 }
 
 // activate swaps the verified staging dir in as the active tree and records the
-// digest. The swap (remove old, rename new) is not a single atomic syscall, but
-// the window is tiny and the node isn't scanning against the tree yet in this
-// slice; the digest marker is written last so a crash mid-swap is detectable.
+// digest. The caller holds mu exclusively, so no scan can observe the
+// remove/rename window. The digest marker is written last so a crash mid-swap is
+// detectable.
 func (b *bundleStore) activate(staging, digest string) error {
 	active := b.activePath()
 	if err := os.RemoveAll(active); err != nil {
@@ -113,6 +128,88 @@ func (b *bundleStore) activate(staging, digest string) error {
 	}
 	b.digest = digest
 	return nil
+}
+
+// lockTemplates takes the active tree's shared lock, validates the requested
+// bundle digest, resolves every template id through manifest.json, and returns
+// absolute paths plus an unlock function. The caller must hold the lock for the
+// scan's entire lifetime so activation can never swap files under Nuclei.
+//
+// RLock intentionally blocks if an activation already holds the exclusive lock:
+// a scan starting mid-activation queues briefly, then sees the fully swapped
+// tree. Conversely, activation uses TryLock and is refused while any scan runs.
+func (b *bundleStore) lockTemplates(templateIDs []string, templatesCommit string) ([]string, func(), error) {
+	b.mu.RLock()
+	unlock := b.mu.RUnlock
+
+	if len(templateIDs) == 0 {
+		unlock()
+		return nil, nil, fmt.Errorf("%w: scan spec has no template_ids", ErrMissingTemplates)
+	}
+	if templatesCommit == "" {
+		unlock()
+		return nil, nil, errors.New("scan spec has no templates_commit")
+	}
+	manifest, err := readManifest(b.activePath())
+	if err != nil {
+		unlock()
+		return nil, nil, fmt.Errorf(
+			"%w: %s (active manifest unavailable: %v)",
+			ErrMissingTemplates, strings.Join(uniqueSorted(templateIDs), ", "), err,
+		)
+	}
+
+	byID := make(map[string]string, len(manifest.Templates))
+	for _, entry := range manifest.Templates {
+		byID[entry.ID] = entry.Path
+	}
+	seen := make(map[string]struct{}, len(templateIDs))
+	paths := make([]string, 0, len(templateIDs))
+	var missing []string
+	for _, id := range templateIDs {
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		rel, ok := byID[id]
+		if !ok {
+			missing = append(missing, id)
+			continue
+		}
+		path, err := safeJoin(b.activePath(), rel)
+		if err != nil {
+			unlock()
+			return nil, nil, fmt.Errorf("resolve active template %q: %w", id, err)
+		}
+		paths = append(paths, path)
+	}
+	if len(missing) > 0 {
+		unlock()
+		sort.Strings(missing)
+		return nil, nil, fmt.Errorf("%w: %s", ErrMissingTemplates, strings.Join(missing, ", "))
+	}
+	if manifest.Digest != b.digest || templatesCommit != manifest.Digest {
+		unlock()
+		return nil, nil, fmt.Errorf(
+			"template bundle commit mismatch: scan requested %q, active bundle is %q",
+			templatesCommit, manifest.Digest,
+		)
+	}
+	return paths, unlock, nil
+}
+
+func uniqueSorted(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // extractTarGz unpacks a gzipped tar into dest, refusing anything that isn't a

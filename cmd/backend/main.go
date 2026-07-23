@@ -104,13 +104,14 @@ func main() {
 		templateSyncer.Start(ctx)
 		log.Info("template syncer started", "repo", cfg.Repo, "ref", cfg.Ref, "dir", cfg.Dir)
 
-		// Template distribution (#85): push the catalog to scanner nodes on a
-		// cadence (idle nodes only) + on-demand via the admin "sync now" action.
-		distributor := backend.NewTemplateDistributor(st, health, templateDistributeInterval(), log)
-		distributor.Start(ctx)
-		apiSrv.SetTemplateDistributor(distributor)
-		log.Info("template distributor started")
 	}
+	// Template distribution (#85) also serves custom-only catalogs when upstream
+	// sync is disabled: hourly idle pushes, admin "sync now", and the mandatory
+	// pre-dispatch top-up all use the same distributor.
+	distributor := backend.NewTemplateDistributor(st, health, templateDistributeInterval(), log)
+	distributor.Start(ctx)
+	apiSrv.SetTemplateDistributor(distributor)
+	log.Info("template distributor started")
 
 	// The scheduler ticker dispatches cron schedules; the DB is its source of
 	// truth so it resumes cleanly across restarts.

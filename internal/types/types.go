@@ -23,21 +23,27 @@ const (
 	ScanCancelled ScanState = "cancelled" // operator stopped it before completion
 )
 
-// ScanSpec is the request body for POST /v1/scans on the scanner node. It is
-// self-contained: the node needs nothing else to run a scan.
+// ScanSpec is the request body for POST /v1/scans on the scanner node. Runtime
+// inputs are explicit; template ids resolve against TemplatesCommit in the
+// node's already-active full-catalog bundle.
 type ScanSpec struct {
 	Targets   []string         `json:"targets"`
 	Templates TemplateSelector `json:"templates"`
 	Options   ScanOptions      `json:"options"`
 }
 
-// TemplateSelector picks which templates run. GitRef pins the template repo
-// commit for reproducibility; the filters map to Nuclei's -severity/-tags flags.
+// TemplateSelector picks which templates run. TemplateIDs select entries from
+// the full catalog bundle already active on the scanner node; TemplatesCommit is
+// that bundle's canonical digest, making a scan reproducible as (ids, commit).
+// The legacy filter fields remain on the wire during the #85 transition but are
+// no longer used by dispatch or the scanner.
 type TemplateSelector struct {
-	GitRef     string   `json:"git_ref,omitempty"`
-	Severities []string `json:"severities,omitempty"`
-	Tags       []string `json:"tags,omitempty"`
-	Paths      []string `json:"paths,omitempty"`
+	TemplateIDs     []string `json:"template_ids,omitempty"`
+	TemplatesCommit string   `json:"templates_commit,omitempty"`
+	GitRef          string   `json:"git_ref,omitempty"`
+	Severities      []string `json:"severities,omitempty"`
+	Tags            []string `json:"tags,omitempty"`
+	Paths           []string `json:"paths,omitempty"`
 }
 
 // ScanOptions maps to Nuclei's rate/concurrency/timeout knobs. MaxHostError is

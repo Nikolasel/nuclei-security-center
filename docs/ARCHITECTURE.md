@@ -52,10 +52,10 @@ returns results.
    │  findings lifecycle/dedup │  poll  │  API-token auth, NO DB creds       │
    │  scheduler + dispatch     │ ◀──────│  sync tmpl ─▶ naabu ─▶ nuclei ─▶   │
    │  RBAC + audit log         │ results│  serve JSONL results (pull-only)   │
-   └────────────┬──────────────┘        └───────────────────┬────────────────┘
-                ▼                                            ▼
-        Postgres + S3-compatible store          private git template repo
-        (system of record + raw output)         (pinned ref per template set)
+   └────────────┬──────────────┘        └────────────────────────────────────┘
+                ▼
+        Postgres + S3-compatible store
+        (system of record, template catalog + raw output)
 ```
 
 Scanner nodes deploy **1..N**, optionally one per network zone — a `target` record
@@ -68,7 +68,7 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
 | Scanner node | Go, standalone HTTP service | Pure execution engine; holds no DB creds; scale/segment independently |
 | DB | Postgres | Data + schedule + backend-side dispatch queue in one service |
 | Object store | S3-compatible behind one interface | MinIO locally → S3/GCS/Azure Blob in cloud, no code change |
-| Templates | Private git repo, pinned ref | Scanner `git pull` before runs; version recorded per scan for reproducibility |
+| Templates | Lossless Postgres catalog → pushed node bundle | Backend owns upstream/custom content; scans select ids from a content-addressed full-catalog bundle |
 | User auth | OIDC via BFF (Cognito / Entra / Keycloak) | SSO everywhere; tokens stay server-side, SPA gets only a session cookie |
 | Service auth | API bearer token (TLS); mTLS as upgrade | Backend → scanner-node calls, no user identity involved |
 
@@ -85,8 +85,8 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
 - **template_sync_runs** — backend-owned upstream catalog refresh history, including pinned
   commit and added/updated/removed/skipped counts (a stray malformed file is skipped-and-counted,
   not fatal; the run fails closed only if nothing parses).
-- **template_sets** — currently the alpha filter model; #85 migrates this to explicit catalog
-  membership in the next implementation slice.
+- **template_sets** — curated explicit membership in `template_set_members`. Legacy filter rows
+  remain readable during the #85 transition but fail closed at dispatch until converted.
 - **scan_policies** — `id, name, target_id, template_set_id, rate_limit, concurrency,
   timeout_sec, max_host_error`. The **central, reusable scan configuration**: it bundles
   *everything* a scan needs — the target (required — the scope), an optional template set
@@ -162,12 +162,18 @@ so scans survive a busy or briefly-unreachable node.
 
 1. **Trigger** — a schedule's cron fires (backend ticker) *or* a user clicks "Run now."
    A `scans` row is inserted with status `queued`.
-2. **Dispatch** — the backend picks a scanner node for the target's zone and calls
-   `POST /v1/scans` with the spec (targets, template ref + filters, rate/concurrency/
-   timeout). On `202` it records the node's `scan_id` and marks the scan `dispatched`.
-   If no node is reachable, it stays `queued` and retries with backoff.
-3. **Prepare (on node)** — the node `git pull`s templates to the set's pinned ref and
-   reports back `nuclei_version` + `templates_commit` (reproducibility + audit).
+2. **Resolve + top up** — the backend resolves the policy's template set to concrete
+   catalog ids (or every active id when the policy has no set), computes the full active
+   catalog's canonical `templates_commit`, and records both in the scan spec. Before
+   dispatch it picks the target's node and pushes the full catalog if any selected
+   template changed since `templates_synced_at` **or** the node's freshly reported
+   `templates_commit` differs (self-heals a wiped node).
+3. **Dispatch** — the backend calls `POST /v1/scans` with targets, `template_ids`,
+   `templates_commit`, and execution options. The node resolves every id through the
+   active bundle's manifest and rejects the request if any id is missing or the commit
+   differs. A running scan holds a shared lock on the active tree for its whole life;
+   activation uses a fail-fast exclusive lock and returns `409` while a scan runs.
+   On `202` the backend records the node's `scan_id` and marks the scan `running`.
 3a. **Discover (on node, optional — #86)** — when the scan spec's `options.discovery`
    is enabled (default on, set per scan policy), the node first runs **naabu** as a
    port-scan pre-pass over the target hosts and narrows Nuclei's input to the live
@@ -223,11 +229,11 @@ schedules, or the database — only how to run one scan and hand back results.
 
 | Method & path | Purpose |
 |---|---|
-| `POST /v1/scans` | Start a scan. Body: `{ targets[], templates:{git_ref, filters}, options:{rate_limit, concurrency, timeout, discovery:{enabled, scan_type, ports, timeout_sec}} }` → `202 { scan_id }`, runs async. `options.discovery` drives the optional naabu port-discovery pre-pass (#86) |
+| `POST /v1/scans` | Start a scan. Body: `{ targets[], templates:{template_ids[], templates_commit}, options:{rate_limit, concurrency, timeout, discovery:{enabled, scan_type, ports, timeout_sec}} }` → `202 { scan_id }`, runs async. The node resolves ids from the active manifest and rejects missing ids/commit drift before launch. `options.discovery` drives the optional naabu port-discovery pre-pass (#86) |
 | `GET /v1/scans/{id}` | Status + progress + stats (`running`/`complete`/`failed`) |
 | `GET /v1/scans/{id}/results` | Stream NDJSON results (backend pulls on completion) |
 | `POST /v1/scans/{id}/cancel` | Cancel a running scan |
-| `POST /v1/templates/bundle` | Receive the **full-catalog** template bundle the backend pushes (#85): a gzipped tar of every active template's YAML + a `manifest.json`. The node holds the whole catalog (a scan later selects by id); the backend pushes it on an hourly idle cadence + a pre-dispatch top-up when the node is stale. The node extracts to a staging dir, verifies every file's sha256 and the canonical `manifest.digest` (`types.BundleDigest`), then atomically activates it — refusing (`400`) a bad archive, a path escape (zip-slip), or any hash/digest mismatch, fail-closed. → `{ templates_commit, template_count }`. Strictly backend→node (invariant #2); the node never pulls. Replaces the old `nuclei -update-templates` model. |
+| `POST /v1/templates/bundle` | Receive the **full-catalog** template bundle the backend pushes (#85): a gzipped tar of every active template's YAML + a `manifest.json`. The node holds the whole catalog (a scan selects by id); the backend pushes it on an hourly idle cadence + a pre-dispatch top-up when stale. The node extracts to staging, verifies every file sha256 and canonical `manifest.digest` (`types.BundleDigest`), then activates under an exclusive `TryLock` — refusing (`400`) a bad archive/path/hash/digest and (`409`) a push while any scan holds the active tree. → `{ templates_commit, template_count }`. Strictly backend→node (invariant #2); the node never pulls. |
 | `GET /v1/capabilities` | `{ nuclei_version, templates_commit }` — polled by the backend for node liveness (#98); `templates_commit` is the digest of the active bundle (empty until one is pushed), used to detect drift before dispatch |
 | `GET /healthz` | Liveness / readiness |
 

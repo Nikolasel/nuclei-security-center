@@ -160,10 +160,10 @@ func (s *Store) CreateScan(ctx context.Context, spec types.ScanSpec, link ScanLi
 		source = "adhoc"
 	}
 	_, err = s.pool.Exec(ctx,
-		`INSERT INTO scans (id, state, spec, target_id, template_set_id, scan_policy_id, source, schedule_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		`INSERT INTO scans (id, state, spec, target_id, template_set_id, scan_policy_id, source, schedule_id, templates_commit)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		id, types.ScanQueued, specJSON, nullStr(link.TargetID), nullStr(link.TemplateSetID),
-		nullStr(link.ScanPolicyID), source, nullStr(link.ScheduleID),
+		nullStr(link.ScanPolicyID), source, nullStr(link.ScheduleID), nullStr(spec.Templates.TemplatesCommit),
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert scan: %w", err)

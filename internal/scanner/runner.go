@@ -82,14 +82,26 @@ func (r *Runner) Start(spec types.ScanSpec) (string, error) {
 	if len(spec.Targets) == 0 {
 		return "", fmt.Errorf("scan spec has no targets")
 	}
+	templatePaths, unlockTemplates, err := r.bundle.lockTemplates(
+		spec.Templates.TemplateIDs,
+		spec.Templates.TemplatesCommit,
+	)
+	if err != nil {
+		return "", err
+	}
 	id := types.NewID()
 	dir := filepath.Join(r.workRoot, id)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
+		unlockTemplates()
 		return "", fmt.Errorf("create scan dir: %w", err)
 	}
 
 	j := &job{
-		status:      types.ScanStatus{ID: id, State: types.ScanRunning},
+		status: types.ScanStatus{
+			ID:              id,
+			State:           types.ScanRunning,
+			TemplatesCommit: spec.Templates.TemplatesCommit,
+		},
 		resultsPath: filepath.Join(dir, "results.jsonl"),
 		logPath:     filepath.Join(dir, "scan.log"),
 	}
@@ -97,7 +109,7 @@ func (r *Runner) Start(spec types.ScanSpec) (string, error) {
 	r.scans[id] = j
 	r.mu.Unlock()
 
-	go r.run(j, spec, dir)
+	go r.run(j, spec, dir, templatePaths, unlockTemplates)
 	return id, nil
 }
 
@@ -154,10 +166,14 @@ func (r *Runner) Cancel(id string) bool {
 	return true
 }
 
-func (r *Runner) run(j *job, spec types.ScanSpec, dir string) {
-	// Best-effort template sync + version capture before the scan, so the
-	// backend can record exactly what ran (reproducibility / audit).
-	r.syncTemplates()
+func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templatePaths []string, unlockTemplates func()) {
+	// Start acquired the active bundle's shared lock after validating the
+	// manifest. Hold it across discovery and Nuclei so no bundle activation can
+	// swap the selected files under this scan.
+	defer unlockTemplates()
+
+	// Capture the engine version before the scan so the backend can record
+	// exactly what ran alongside the bundle digest.
 	version := r.nucleiVersion()
 	j.setVersion(version)
 
@@ -218,7 +234,7 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string) {
 	j.setCancel(cancel)
 	defer cancel()
 
-	args := buildArgs(nucleiTargets, j.resultsPath, spec)
+	args := buildArgs(nucleiTargets, j.resultsPath, templatePaths, spec)
 	cmd := exec.CommandContext(ctx, r.nucleiPath, args...)
 	// Run in its own process group so Cancel/timeout kills nuclei and any child.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -267,7 +283,7 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string) {
 }
 
 // buildArgs assembles the Nuclei command line from the spec.
-func buildArgs(targetsFile, out string, spec types.ScanSpec) []string {
+func buildArgs(targetsFile, out string, templatePaths []string, spec types.ScanSpec) []string {
 	args := []string{
 		"-list", targetsFile,
 		"-jsonl",
@@ -285,13 +301,7 @@ func buildArgs(targetsFile, out string, spec types.ScanSpec) []string {
 		"-stats-json",
 		"-stats-interval", "3",
 	}
-	for _, s := range spec.Templates.Severities {
-		args = append(args, "-severity", s)
-	}
-	for _, t := range spec.Templates.Tags {
-		args = append(args, "-tags", t)
-	}
-	for _, p := range spec.Templates.Paths {
+	for _, p := range templatePaths {
 		args = append(args, "-templates", p)
 	}
 	if spec.Options.RateLimit > 0 {
@@ -307,18 +317,6 @@ func buildArgs(targetsFile, out string, spec types.ScanSpec) []string {
 		args = append(args, "-max-host-error", strconv.Itoa(spec.Options.MaxHostError))
 	}
 	return args
-}
-
-// syncTemplates installs/updates the community template set before a scan.
-// NOTE: we must NOT pass -disable-update-check here — that flag suppresses the
-// template install itself, so on a fresh node templates never land and the scan
-// aborts with "no templates provided for scan". Best-effort otherwise: once
-// templates exist, a failed refresh (e.g. offline) should not block scanning.
-func (r *Runner) syncTemplates() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, r.nucleiPath, "-update-templates")
-	_ = cmd.Run()
 }
 
 var versionRe = regexp.MustCompile(`v?\d+\.\d+\.\d+`)

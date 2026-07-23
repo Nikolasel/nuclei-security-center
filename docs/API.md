@@ -34,7 +34,9 @@ absent once the target or policy has been deleted — scan history survives eith
 queued/running scan is identifiable before any findings appear. `target_host_count` (and a
 target's own `host_count` from [Config](#config-targets--template-sets)) is the real
 address-range size, expanding any CIDR entry rather than counting it as one array element — a
-target scoped to `10.0.0.0/24` reports 256, not 1.
+target scoped to `10.0.0.0/24` reports 256, not 1. `templates_commit` is recorded when the scan
+is queued: together with the concrete `template_ids` in its stored spec, it identifies exactly
+which content-addressed catalog bundle the node ran.
 
 While a scan is **running**, `GET /api/scans` and `GET /api/scans/{id}` include a live
 `progress` object — `{percent, requests, total, hosts, rps, matched}` — parsed from Nuclei's
@@ -253,14 +255,14 @@ of this on the **Schedules** page (cron presets, enable/disable toggle, run-now)
 
 ## Config: targets & template sets
 
-Reusable **targets** (a named host allowlist) and **template sets** (severity/tag/path filters +
-optional pinned git ref) to launch scans from:
+Reusable **targets** (a named host allowlist) and **template sets** (explicit selections from the
+template catalog) to launch scans from:
 
 ```sh
 # create a target (the hosts list is the scope allowlist)
 curl -sb jar.txt -X POST localhost:8080/api/targets -d '{"name":"prod-web","hosts":["scanme.sh"],"tags":["prod"]}'
-# create a template set
-curl -sb jar.txt -X POST localhost:8080/api/template-sets -d '{"name":"info","severities":["info","low"]}'
+# create a template set, then select its members (see below)
+curl -sb jar.txt -X POST localhost:8080/api/template-sets -d '{"name":"critical-web"}'
 # ...then bundle them into a scan policy (see Config: scan policies below)
 ```
 
@@ -275,10 +277,8 @@ by a scan policy can't be deleted out from under it — the policy references it
 
 ### Template-set membership
 
-Under #85, a template set is becoming an **explicit list of individual catalog templates** rather
-than a filter over the community repo. This membership sub-resource is live now (the older
-severity/tag/path filter fields still exist and still drive dispatch until the scan-contract
-cutover slice):
+A template set is an **explicit list of individual catalog templates**, not a runtime filter over
+Nuclei's community repository:
 
 ```sh
 # set a set's membership to exactly these catalog template ids (the editor's "save")
@@ -294,9 +294,9 @@ curl -sb jar.txt localhost:8080/api/template-sets/<set_id>/members
 A template set now reports `legacy_filter` (true for the pre-existing POC filter-style sets) and a
 live `member_count`. Reads are `viewer`; membership edits are `operator`, audited as
 `config_changed` (`template_set.members_replace` / `_add` / `_remove`). An unknown `template_id`
-is a `400`; an unknown set is a `404`. **Not yet wired into dispatch** — scans still resolve the
-legacy filter fields; switching dispatch to members (plus the node bundle transfer + drift check)
-is the next slice.
+is a `400`; an unknown set is a `404`. Dispatch resolves members to concrete `template_ids`.
+Legacy-filter sets and zero-member sets fail closed with “convert to an explicit selection first”;
+a set containing a tombstoned/unavailable template also fails until its selection is updated.
 
 ## Template catalog
 
@@ -405,7 +405,8 @@ curl -sb jar.txt -X POST localhost:8080/api/nodes \
   create the client cert + key must be supplied together; bad PEM / a mismatched pair is a `400`.
   See [CONFIGURATION.md](CONFIGURATION.md#service-auth-tls--mtls).
 - Endpoints: `GET|POST /api/nodes`, `GET|PUT|DELETE /api/nodes/{id}`.
-- **Health (#98):** the backend polls each node's `GET /v1/capabilities` (`nuclei_version`) every
+- **Health (#98):** the backend polls each node's `GET /v1/capabilities`
+  (`nuclei_version`, `templates_commit`) every
   `NODE_HEALTH_INTERVAL` to derive liveness; `healthy` is `null` until the first poll. When a node
   is unhealthy, `health_error` carries the last poll failure (e.g. `capabilities: 401 Unauthorized`
   for a wrong token vs. a connection error for an unreachable node), so the cause is visible without
@@ -415,15 +416,17 @@ curl -sb jar.txt -X POST localhost:8080/api/nodes \
 
 A node's read view also carries `templates_synced_at` — when the backend last pushed the full
 template catalog to it (#85). The backend does this automatically on a cadence
-(`TEMPLATE_DISTRIBUTE_INTERVAL`, stale + idle nodes only), and an admin can force it:
+(`TEMPLATE_DISTRIBUTE_INTERVAL`, stale + idle nodes only), before a scan when selected templates
+are newer or the reported digest differs, and on admin request:
 
 ```sh
 # push the current full catalog to one node now (admin) → { templates_commit, template_count }
 curl -sb jar.txt -X POST localhost:8080/api/nodes/<node_id>/templates/sync
 ```
 
-`503` if template distribution is disabled (`TEMPLATE_SYNC_REPO` empty), `404` for an unknown
-node, `502` if the node rejects the bundle or is unreachable. Audited `config_changed`
+`404` for an unknown node; `502` if the node rejects the bundle or is unreachable. A node returns
+`409` when a scan is holding the active tree; automatic pre-dispatch top-up waits and retries,
+while a later cadence retries a skipped periodic push. Audited `config_changed`
 (`scanner_node.templates_sync`).
 
 ## Scope guardrail

@@ -45,6 +45,7 @@ type TemplateSyncRun struct {
 	Added      int        `json:"added"`
 	Removed    int        `json:"removed"`
 	Updated    int        `json:"updated"`
+	Skipped    int        `json:"skipped"`
 	Error      string     `json:"error,omitempty"`
 }
 
@@ -53,6 +54,7 @@ type TemplateSyncStats struct {
 	Added   int
 	Removed int
 	Updated int
+	Skipped int
 }
 
 // StartTemplateSync records a sync attempt before network work begins, so a
@@ -78,7 +80,7 @@ func (s *Store) StartTemplateSync(ctx context.Context) (TemplateSyncRun, error) 
 // transaction. Templates absent from a successful source snapshot are retained
 // as unavailable instead of deleted, so a curated set can never silently lose a
 // member when upstream removes a file.
-func (s *Store) ApplyUpstreamTemplates(ctx context.Context, runID, ref string, in []Template) (TemplateSyncStats, error) {
+func (s *Store) ApplyUpstreamTemplates(ctx context.Context, runID, ref string, in []Template, skipped int) (TemplateSyncStats, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return TemplateSyncStats{}, err
@@ -125,7 +127,7 @@ func (s *Store) ApplyUpstreamTemplates(ctx context.Context, runID, ref string, i
 
 	ids := make([]string, 0, len(in))
 	seen := make(map[string]struct{}, len(in))
-	stats := TemplateSyncStats{}
+	stats := TemplateSyncStats{Skipped: skipped}
 	for _, t := range in {
 		if _, ok := seen[t.ID]; ok {
 			return TemplateSyncStats{}, fmt.Errorf("duplicate template id %q in upstream catalog", t.ID)
@@ -138,6 +140,11 @@ func (s *Store) ApplyUpstreamTemplates(ctx context.Context, runID, ref string, i
 		} else if old.hash != t.ContentSHA256 || old.availability != "active" {
 			stats.Updated++
 		}
+		// The WHERE guard re-asserts the custom/upstream shadow check at write
+		// time: if a custom row with this id were inserted after the pre-check
+		// above (a tiny race), the DO UPDATE matches zero rows and this upstream
+		// template is silently skipped rather than overwriting the custom one —
+		// the safe direction, but a silent no-op worth calling out.
 		_, err := tx.Exec(ctx,
 			`INSERT INTO templates (id, source, path, yaml, content_sha256, name, author, severity, description, tags, upstream_ref, availability)
 			 VALUES ($1, 'upstream', $2, $3, $4, $5, $6, $7, $8, $9, $10, 'active')
@@ -153,10 +160,18 @@ func (s *Store) ApplyUpstreamTemplates(ctx context.Context, runID, ref string, i
 		}
 	}
 
-	// An empty catalog is a valid snapshot only when the source was genuinely
-	// empty; the caller fails parse/walk errors before it reaches this point.
+	// Tombstone (retain, don't delete) templates upstream removed, AND free their
+	// path. UNIQUE (source, path) would otherwise be poisoned forever: nuclei
+	// renames files and reassigns ids regularly, so a later, different id landing
+	// on a removed template's path would collide with the tombstone and fail every
+	// subsequent sync. Reparking the path under a per-id 'tombstone:' sentinel
+	// keeps it unique (id is unique per source) while leaving the real path open;
+	// if the id ever returns upstream the ON CONFLICT (id) upsert restores it. The
+	// deferred constraint (migration 0018) lets these renames overlap within the
+	// transaction. An empty catalog is a valid snapshot only when the source was
+	// genuinely empty; the caller fails parse/walk errors before reaching here.
 	removed, err := tx.Exec(ctx,
-		`UPDATE templates SET availability = 'unavailable', updated_at = now()
+		`UPDATE templates SET availability = 'unavailable', path = 'tombstone:' || id, updated_at = now()
 		 WHERE source = 'upstream' AND availability = 'active' AND NOT (id = ANY($1))`, ids)
 	if err != nil {
 		return TemplateSyncStats{}, fmt.Errorf("tombstone removed upstream templates: %w", err)
@@ -164,14 +179,30 @@ func (s *Store) ApplyUpstreamTemplates(ctx context.Context, runID, ref string, i
 	stats.Removed = int(removed.RowsAffected())
 	if _, err := tx.Exec(ctx,
 		`UPDATE template_sync_runs SET finished_at = now(), status = 'success', ref_after = $2,
-		 added = $3, removed = $4, updated = $5, error = NULL WHERE id = $1`,
-		runID, ref, stats.Added, stats.Removed, stats.Updated); err != nil {
+		 added = $3, removed = $4, updated = $5, skipped = $6, error = NULL WHERE id = $1`,
+		runID, ref, stats.Added, stats.Removed, stats.Updated, stats.Skipped); err != nil {
 		return TemplateSyncStats{}, fmt.Errorf("complete template sync: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return TemplateSyncStats{}, err
 	}
 	return stats, nil
+}
+
+// ReapStaleTemplateSyncRuns marks 'running' rows that have outlived the sync
+// timeout as failed. A backend crash mid-sync would otherwise leave a row stuck
+// at 'running' forever; this is called before each tick so the runs history
+// reflects reality. It uses started_at (finished_at is NULL while running).
+func (s *Store) ReapStaleTemplateSyncRuns(ctx context.Context, olderThan time.Duration) (int64, error) {
+	cutoff := time.Now().UTC().Add(-olderThan)
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE template_sync_runs SET finished_at = now(), status = 'failed',
+		 error = 'reaped: backend restarted or timed out mid-sync'
+		 WHERE status = 'running' AND started_at < $1`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("reap stale template sync runs: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 // FailTemplateSync finishes an attempt that failed before its catalog changes

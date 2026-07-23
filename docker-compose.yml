@@ -92,6 +92,12 @@ services:
       S3_ACCESS_KEY_ID: "minio"
       S3_SECRET_ACCESS_KEY: "minio12345"
       S3_USE_SSL: "false"
+      # Persist the nuclei-templates clone cache on a named volume so a restart
+      # re-fetches deltas instead of re-cloning ~1 GB of .git every `up`. Set
+      # TEMPLATE_SYNC_REPO="" to disable the sync entirely in a slim dev stack.
+      TEMPLATE_SYNC_DIR: "/var/lib/nsc/template-sync"
+    volumes:
+      - templatecache:/var/lib/nsc
     depends_on:
       postgres:
         condition: service_healthy
@@ -107,3 +113,4 @@ services:
 volumes:
   pgdata:
   miniodata:
+  templatecache:

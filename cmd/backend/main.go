@@ -90,13 +90,20 @@ func main() {
 	}
 
 	apiSrv := backend.NewServer(st, orch, auth, archive, web.Handler(), log)
-	templateSyncer, err := backend.NewTemplateSyncer(st, templateSyncConfig(), log)
-	if err != nil {
-		log.Error("configure template sync", "err", err)
-		os.Exit(1)
+	// Template catalog sync (#85) mirrors nuclei-templates into Postgres. Like
+	// S3_ENDPOINT / OIDC_ISSUER, an empty TEMPLATE_SYNC_REPO disables the feature
+	// (a full clone is ~1 GB of .git and pointless in a headless dev stack).
+	if cfg := templateSyncConfig(); cfg.Repo == "" {
+		log.Warn("TEMPLATE_SYNC_REPO empty — upstream template catalog sync is DISABLED")
+	} else {
+		templateSyncer, err := backend.NewTemplateSyncer(st, cfg, log)
+		if err != nil {
+			log.Error("configure template sync", "err", err)
+			os.Exit(1)
+		}
+		templateSyncer.Start(ctx)
+		log.Info("template syncer started", "repo", cfg.Repo, "ref", cfg.Ref, "dir", cfg.Dir)
 	}
-	templateSyncer.Start(ctx)
-	log.Info("template syncer started")
 
 	// The scheduler ticker dispatches cron schedules; the DB is its source of
 	// truth so it resumes cleanly across restarts.
@@ -309,6 +316,9 @@ func retentionSweepInterval() time.Duration {
 // templateSyncConfig is deliberately backend-only: scanner nodes receive a
 // resolved, immutable bundle in a later #85 slice and never clone upstream
 // repositories themselves. "latest" resolves to the highest stable semver tag.
+// The repo defaults to the community catalog (zero-config alpha), but an
+// explicitly empty TEMPLATE_SYNC_REPO disables sync — hence LookupEnv, so an
+// empty value is honored rather than falling back to the default.
 func templateSyncConfig() backend.TemplateSyncerConfig {
 	interval := 6 * time.Hour
 	if v := os.Getenv("TEMPLATE_SYNC_INTERVAL"); v != "" {
@@ -316,9 +326,13 @@ func templateSyncConfig() backend.TemplateSyncerConfig {
 			interval = d
 		}
 	}
+	repo := "https://github.com/projectdiscovery/nuclei-templates.git"
+	if v, ok := os.LookupEnv("TEMPLATE_SYNC_REPO"); ok {
+		repo = v
+	}
 	return backend.TemplateSyncerConfig{
 		Interval: interval,
-		Repo:     envOr("TEMPLATE_SYNC_REPO", "https://github.com/projectdiscovery/nuclei-templates.git"),
+		Repo:     repo,
 		Ref:      envOr("TEMPLATE_SYNC_REF", "latest"),
 		Dir:      envOr("TEMPLATE_SYNC_DIR", "/tmp/nsc-template-sync"),
 	}

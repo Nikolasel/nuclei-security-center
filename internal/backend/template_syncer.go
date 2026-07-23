@@ -22,6 +22,11 @@ import (
 	"github.com/Nikolasel/nuclei-security-center/internal/templates"
 )
 
+// syncTimeout bounds one refresh (clone/fetch + apply). It also defines
+// "stale": a template_sync_runs row still 'running' after this long belongs to a
+// crashed process and is reaped on the next tick.
+const syncTimeout = 30 * time.Minute
+
 // TemplateSyncerConfig controls the backend-owned mirror of the community
 // template catalog. The working directory is a cache only: PostgreSQL holds the
 // authoritative YAML after a successful run.
@@ -80,14 +85,22 @@ func (s *TemplateSyncer) Start(ctx context.Context) {
 }
 
 func (s *TemplateSyncer) sync(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, syncTimeout)
 	defer cancel()
+	// A crash mid-sync leaves a template_sync_runs row stuck at 'running'
+	// forever; reap any run older than our own timeout before starting a new one
+	// so the runs view reflects reality.
+	if n, err := s.store.ReapStaleTemplateSyncRuns(ctx, syncTimeout); err != nil {
+		s.log.Warn("reap stale template sync runs", "err", err)
+	} else if n > 0 {
+		s.log.Warn("reaped stale template sync runs", "count", n)
+	}
 	run, err := s.store.StartTemplateSync(ctx)
 	if err != nil {
 		s.log.Error("start template sync", "err", err)
 		return
 	}
-	ref, entries, err := syncTemplateRepository(ctx, s.config)
+	ref, entries, skipped, err := syncTemplateRepository(ctx, s.config, s.log)
 	if err != nil {
 		if ferr := s.store.FailTemplateSync(ctx, run.ID, err); ferr != nil {
 			s.log.Error("record failed template sync", "sync_err", err, "record_err", ferr)
@@ -96,7 +109,7 @@ func (s *TemplateSyncer) sync(ctx context.Context) {
 		s.log.Error("template sync failed", "err", err)
 		return
 	}
-	stats, err := s.store.ApplyUpstreamTemplates(ctx, run.ID, ref, entries)
+	stats, err := s.store.ApplyUpstreamTemplates(ctx, run.ID, ref, entries, skipped)
 	if err != nil {
 		if ferr := s.store.FailTemplateSync(ctx, run.ID, err); ferr != nil {
 			s.log.Error("record failed template sync", "sync_err", err, "record_err", ferr)
@@ -105,25 +118,28 @@ func (s *TemplateSyncer) sync(ctx context.Context) {
 		s.log.Error("apply template catalog", "err", err)
 		return
 	}
+	// actor_type=system keeps this in the same event=audit shape every other
+	// mutation emits (see logSystemAudit) — a headless job, not a user.
 	s.log.Info("template sync complete", "event", "audit", "event_id", eventConfigChanged,
-		"action", "templates.sync", "object_type", "template_sync", "ref", ref,
-		"added", stats.Added, "updated", stats.Updated, "removed", stats.Removed)
+		"action", "templates.sync", "object_type", "template_sync", "object_id", run.ID,
+		"actor_subject", "system", "actor_type", "system", "ref", ref,
+		"added", stats.Added, "updated", stats.Updated, "removed", stats.Removed, "skipped", stats.Skipped)
 }
 
-func syncTemplateRepository(ctx context.Context, cfg TemplateSyncerConfig) (string, []store.Template, error) {
+func syncTemplateRepository(ctx context.Context, cfg TemplateSyncerConfig, log *slog.Logger) (string, []store.Template, int, error) {
 	repo, err := openOrCloneTemplateRepo(ctx, cfg.Dir, cfg.Repo)
 	if err != nil {
-		return "", nil, err
+		return "", nil, 0, err
 	}
 	commit, err := checkoutTemplateRef(repo, cfg.Ref)
 	if err != nil {
-		return "", nil, err
+		return "", nil, 0, err
 	}
-	entries, err := readTemplateCatalog(cfg.Dir)
+	entries, skipped, err := readTemplateCatalog(cfg.Dir, log)
 	if err != nil {
-		return "", nil, err
+		return "", nil, 0, err
 	}
-	return commit.String(), entries, nil
+	return commit.String(), entries, skipped, nil
 }
 
 func openOrCloneTemplateRepo(ctx context.Context, dir, remote string) (*git.Repository, error) {
@@ -196,10 +212,16 @@ func checkoutTemplateRef(repo *git.Repository, ref string) (plumbing.Hash, error
 }
 
 func resolveTemplateRef(repo *git.Repository, ref string) (plumbing.Hash, error) {
+	// refs/remotes/origin/<ref> MUST come before the bare ref. ResolveRevision
+	// expands a bare name via RefRevParseRules, where refs/heads/<ref> matches
+	// before refs/remotes/<ref>; since FetchContext only advances
+	// refs/remotes/origin/*, the clone-time local branch is never updated, so a
+	// bare "main" would silently pin the catalog to the first clone forever.
+	// Trying the remote-tracking ref first makes branch refs track upstream.
 	for _, candidate := range []plumbing.Revision{
-		plumbing.Revision(ref),
-		plumbing.Revision("refs/tags/" + ref),
 		plumbing.Revision("refs/remotes/origin/" + ref),
+		plumbing.Revision("refs/tags/" + ref),
+		plumbing.Revision(ref),
 	} {
 		hash, err := repo.ResolveRevision(candidate)
 		if err == nil {
@@ -266,8 +288,17 @@ func latestReleaseCommit(repo *git.Repository) (plumbing.Hash, error) {
 	return releases[0].hash, nil
 }
 
-func readTemplateCatalog(root string) ([]store.Template, error) {
+// readTemplateCatalog walks the checked-out tree and extracts every Nuclei
+// template. A single malformed template (bad YAML, multi-doc, a duplicate id)
+// is skipped and logged rather than failing the whole refresh — nuclei itself
+// skips-and-warns, and one stray file in the ~10k-file community tree must not
+// pin the catalog stale. The returned count of skipped files is recorded on the
+// sync run. Fail-closed still applies to the snapshot as a whole: if nothing
+// parses, the caller aborts rather than tombstoning the entire catalog.
+func readTemplateCatalog(root string, log *slog.Logger) ([]store.Template, int, error) {
 	var entries []store.Template
+	skipped := 0
+	seen := make(map[string]string) // id -> first path that claimed it
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -290,13 +321,22 @@ func readTemplateCatalog(root string) ([]store.Template, error) {
 		if err != nil {
 			return err
 		}
+		rel = filepath.ToSlash(rel)
 		meta, err := templates.Parse(rel, body)
 		if errors.Is(err, templates.ErrNotTemplate) {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("parse %s: %w", filepath.ToSlash(rel), err)
+			skipped++
+			log.Warn("skipping malformed template", "path", rel, "err", err)
+			return nil
 		}
+		if first, dup := seen[meta.ID]; dup {
+			skipped++
+			log.Warn("skipping duplicate template id", "id", meta.ID, "path", rel, "kept", first)
+			return nil
+		}
+		seen[meta.ID] = rel
 		entries = append(entries, store.Template{
 			ID: meta.ID, Path: meta.Path, YAML: meta.YAML, ContentSHA256: meta.ContentSHA256,
 			Name: meta.Name, Author: meta.Author, Severity: meta.Severity,
@@ -305,10 +345,10 @@ func readTemplateCatalog(root string) ([]store.Template, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if len(entries) == 0 {
-		return nil, errors.New("template repository contained no Nuclei templates")
+		return nil, 0, errors.New("template repository contained no Nuclei templates")
 	}
-	return entries, nil
+	return entries, skipped, nil
 }

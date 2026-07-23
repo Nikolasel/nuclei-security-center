@@ -83,7 +83,8 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   severity, description, tags, content_sha256`). The raw YAML is the sole complete
   representation; metadata is extracted only for catalog filtering.
 - **template_sync_runs** — backend-owned upstream catalog refresh history, including pinned
-  commit and added/updated/removed counts.
+  commit and added/updated/removed/skipped counts (a stray malformed file is skipped-and-counted,
+  not fatal; the run fails closed only if nothing parses).
 - **template_sets** — currently the alpha filter model; #85 migrates this to explicit catalog
   membership in the next implementation slice.
 - **scan_policies** — `id, name, target_id, template_set_id, rate_limit, concurrency,

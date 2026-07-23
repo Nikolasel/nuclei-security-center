@@ -19,7 +19,12 @@ CREATE TABLE IF NOT EXISTS templates (
     created_by     TEXT,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (source, path)
+    -- DEFERRABLE so one sync transaction can rename paths freely: upstream file
+    -- renames (and rename swaps, A->P2 while B->P1) transiently collide on
+    -- (source, path) mid-loop; checking only at COMMIT lets the final state be
+    -- consistent. Tombstoning also frees a path (see internal/store/templates.go),
+    -- so a later, different id can reclaim a removed template's path.
+    UNIQUE (source, path) DEFERRABLE INITIALLY DEFERRED
 );
 
 CREATE INDEX IF NOT EXISTS templates_source_idx ON templates (source);
@@ -37,6 +42,7 @@ CREATE TABLE IF NOT EXISTS template_sync_runs (
     added       INTEGER NOT NULL DEFAULT 0,
     removed     INTEGER NOT NULL DEFAULT 0,
     updated     INTEGER NOT NULL DEFAULT 0,
+    skipped     INTEGER NOT NULL DEFAULT 0,
     error       TEXT
 );
 

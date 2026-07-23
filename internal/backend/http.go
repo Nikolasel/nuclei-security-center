@@ -135,6 +135,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/template-sets/{id}", s.mutation(eventConfigChanged, "template_set.update", "template_set", RoleOperator, s.handleUpdateTemplateSet))
 	mux.HandleFunc("DELETE /api/template-sets/{id}", s.mutation(eventConfigChanged, "template_set.delete", "template_set", RoleAdmin, s.handleDeleteTemplateSet))
 
+	// Explicit membership (#85): a set curated as a list of catalog templates.
+	// Reads → viewer; membership edits → operator, audited as config changes. Not
+	// yet wired into dispatch (the scan-contract cutover slice does that).
+	mux.HandleFunc("GET /api/template-sets/{id}/members", s.requireRole(RoleViewer, s.handleListTemplateSetMembers))
+	mux.HandleFunc("PUT /api/template-sets/{id}/members", s.mutation(eventConfigChanged, "template_set.members_replace", "template_set", RoleOperator, s.handleReplaceTemplateSetMembers))
+	mux.HandleFunc("POST /api/template-sets/{id}/members", s.mutation(eventConfigChanged, "template_set.members_add", "template_set", RoleOperator, s.handleAddTemplateSetMembers))
+	mux.HandleFunc("DELETE /api/template-sets/{id}/members/{templateId}", s.mutation(eventConfigChanged, "template_set.members_remove", "template_set", RoleOperator, s.handleRemoveTemplateSetMember))
+
 	// Service accounts (#70) — NSC-local API-token identities for headless
 	// automation. Managing these credentials is admin-only; create/rotate/revoke
 	// are audited under a dedicated security event id. The token itself is only

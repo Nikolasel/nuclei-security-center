@@ -11,18 +11,23 @@ import (
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
-// TemplateSet selects which Nuclei templates a scan runs: an optional pinned
-// git ref plus severity/tag/path filters. It maps to types.TemplateSelector.
+// TemplateSet selects which Nuclei templates a scan runs. Two models coexist
+// during the #85 transition: legacy "filter over the community repo" (git ref +
+// severity/tag/path filters, LegacyFilter=true) and explicit membership (a
+// curated list in template_set_members, MemberCount>0). Dispatch still uses the
+// filter fields today; the scan-contract cutover slice switches it to members.
 type TemplateSet struct {
-	ID         string    `json:"id"`
-	Name       string    `json:"name"`
-	GitRef     string    `json:"git_ref,omitempty"`
-	Severities []string  `json:"severities"`
-	Tags       []string  `json:"tags"`
-	Paths      []string  `json:"paths"`
-	CreatedBy  string    `json:"created_by,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	GitRef       string    `json:"git_ref,omitempty"`
+	Severities   []string  `json:"severities"`
+	Tags         []string  `json:"tags"`
+	Paths        []string  `json:"paths"`
+	LegacyFilter bool      `json:"legacy_filter"`
+	MemberCount  int       `json:"member_count"`
+	CreatedBy    string    `json:"created_by,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // Selector converts a stored TemplateSet into the wire selector sent to the node.
@@ -34,6 +39,12 @@ func (t TemplateSet) Selector() types.TemplateSelector {
 		Paths:      t.Paths,
 	}
 }
+
+// tmplSetCols is the read projection shared by Get/List/Update. member_count is
+// a correlated subquery so a set's size is always live even as members change.
+const tmplSetCols = `id, name, git_ref, severities, tags, paths, legacy_filter,
+	(SELECT count(*) FROM template_set_members m WHERE m.template_set_id = template_sets.id),
+	created_by, created_at, updated_at`
 
 // CreateTemplateSet inserts a template set and returns it populated.
 func (s *Store) CreateTemplateSet(ctx context.Context, in TemplateSet) (TemplateSet, error) {
@@ -57,15 +68,13 @@ func (s *Store) CreateTemplateSet(ctx context.Context, in TemplateSet) (Template
 // GetTemplateSet returns one template set by id, or ErrNotFound.
 func (s *Store) GetTemplateSet(ctx context.Context, id string) (TemplateSet, error) {
 	return scanTemplateSet(s.pool.QueryRow(ctx,
-		`SELECT id, name, git_ref, severities, tags, paths, created_by, created_at, updated_at
-		 FROM template_sets WHERE id = $1`, id))
+		`SELECT `+tmplSetCols+` FROM template_sets WHERE id = $1`, id))
 }
 
 // ListTemplateSets returns all template sets ordered by name.
 func (s *Store) ListTemplateSets(ctx context.Context) ([]TemplateSet, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, name, git_ref, severities, tags, paths, created_by, created_at, updated_at
-		 FROM template_sets ORDER BY lower(name)`)
+		`SELECT `+tmplSetCols+` FROM template_sets ORDER BY lower(name)`)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +98,7 @@ func (s *Store) UpdateTemplateSet(ctx context.Context, id string, in TemplateSet
 		`UPDATE template_sets
 		 SET name = $2, git_ref = $3, severities = $4, tags = $5, paths = $6, updated_at = now()
 		 WHERE id = $1
-		 RETURNING id, name, git_ref, severities, tags, paths, created_by, created_at, updated_at`,
+		 RETURNING `+tmplSetCols,
 		id, in.Name, nullStr(in.GitRef), in.Severities, in.Tags, in.Paths))
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -112,12 +121,12 @@ func (s *Store) DeleteTemplateSet(ctx context.Context, id string) error {
 	return nil
 }
 
-// scanTemplateSet reads one row from a Query or QueryRow into a TemplateSet.
+// scanTemplateSet reads one row (projected with tmplSetCols) into a TemplateSet.
 func scanTemplateSet(row pgx.Row) (TemplateSet, error) {
 	var t TemplateSet
 	var gitRef, createdBy *string
 	err := row.Scan(&t.ID, &t.Name, &gitRef, &t.Severities, &t.Tags, &t.Paths,
-		&createdBy, &t.CreatedAt, &t.UpdatedAt)
+		&t.LegacyFilter, &t.MemberCount, &createdBy, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return TemplateSet{}, ErrNotFound

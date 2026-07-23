@@ -6,6 +6,12 @@
 # workflow, per invariant #3 (nuclei is a binary, not a linked SDK).
 ARG NUCLEI_VERSION=3.11.0
 
+# Pinned naabu release for the port-discovery pre-pass (#86). Same "binary, not a
+# linked SDK" model as nuclei — bump the ARG to upgrade. naabu dlopen's libpcap
+# only for SYN scans, so in the connect-scan mode the node always uses it needs
+# no libpcap at runtime and runs fine on the shared-lib-less UBI Micro base.
+ARG NAABU_VERSION=2.6.1
+
 # ---- build the scanner binary (cross-compiled for the target arch) ----
 # Pinned to the native build platform so the Go toolchain never runs under
 # emulation; GOOS/GOARCH come from buildx and produce a static binary for the
@@ -27,6 +33,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/s
 # (replaces the implicit trust in the old mutable upstream nuclei image tag).
 FROM --platform=$BUILDPLATFORM alpine:3.21 AS nuclei
 ARG NUCLEI_VERSION
+ARG NAABU_VERSION
 ARG TARGETARCH
 ARG BUILDARCH
 RUN apk add --no-cache curl unzip ca-certificates
@@ -42,29 +49,61 @@ RUN set -eux; \
     unzip -o "nuclei_${NUCLEI_VERSION}_linux_${TARGETARCH}.zip" nuclei -d /out; \
     unzip -o "nuclei_${NUCLEI_VERSION}_linux_${BUILDARCH}.zip" nuclei -d /gen; \
     chmod 0755 /out/nuclei /gen/nuclei
+# naabu for the target arch only (it never runs at build time — unlike nuclei,
+# which we also run natively to bake templates). Checksum-verified against the
+# release's own checksums file (note: naabu names it naabu-checksums.txt, without
+# the version, unlike nuclei's per-version name).
+RUN set -eux; \
+    base="https://github.com/projectdiscovery/naabu/releases/download/v${NAABU_VERSION}"; \
+    curl -fsSLO "${base}/naabu-checksums.txt"; \
+    zip="naabu_${NAABU_VERSION}_linux_${TARGETARCH}.zip"; \
+    curl -fsSLO "${base}/${zip}"; \
+    grep " ${zip}\$" naabu-checksums.txt | sha256sum -c -; \
+    unzip -o "${zip}" naabu -d /out; \
+    chmod 0755 /out/naabu
 # Download the current community templates at build time (needs the alpine CA
 # store, which is why it's installed above). This bakes them into the image so
 # the node needs no network/CA at runtime to fetch templates; HOME=/root matches
 # the runtime user so nuclei's stored template paths line up.
 RUN HOME=/root /gen/nuclei -update-templates
 
+# ---- stage libpcap's shared-lib closure for the micro runtime ----
+# naabu's SYN scan + host discovery (#86) dlopen libpcap, whose dependency chain
+# (libibverbs, libnl, libgcc_s) is awkward to assemble by hand. Install it on a
+# base that has a package manager, then stage the full closure (libpcap + those
+# deps, minus libc which the micro base already ships — `ldd` flattens the whole
+# transitive tree) so the package-manager-less micro image can carry it verbatim.
+FROM redhat/ubi10-minimal AS libpcap
+RUN microdnf install -y libpcap && microdnf clean all
+RUN mkdir -p /libs && cp -aL /usr/lib64/libpcap.so.1 /libs/ && \
+    ldd /usr/lib64/libpcap.so.1 | awk '/=> \// {print $3}' | grep -v 'libc\.so' \
+      | while read -r l; do cp -aL "$l" /libs/; done
+
 # ---- runtime: minimal, security-hardened Red Hat UBI 10 Micro ----
-# Ships no package manager / shell / updater / trust store — just the scanner,
-# the pinned nuclei binary, and the pre-baked templates. UBI Micro is glibc-based
-# like the previous Debian base, so the Runner's subprocess handling is unaffected.
-# UBI Micro ships no CA store, so copy one in for nuclei's outbound TLS (OOB /
-# interactsh, honest template refresh); templates are already baked so scanning
-# works even when that TLS is unavailable.
+# Ships no package manager / updater / trust store — just the scanner, the pinned
+# nuclei + naabu binaries, and the pre-baked templates (no microdnf, so nothing
+# can be installed into a running node). UBI Micro is
+# glibc-based, so the Runner's subprocess handling is unaffected. Two things Micro
+# lacks get copied in: a CA store (for nuclei's outbound TLS — OOB / interactsh /
+# honest template refresh; templates are already baked so scanning works even when
+# that TLS is unavailable) and libpcap + its closure (for naabu's SYN scan + host
+# discovery). The node holds no DB credentials; it additionally needs CAP_NET_RAW
+# (in Docker's default capability set) to open raw sockets — or set
+# NAABU_SCAN_TYPE=connect to fall back to an unprivileged connect scan (no host
+# discovery, no libpcap needed).
 FROM redhat/ubi10-micro
 COPY --from=nuclei /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=libpcap /libs/ /usr/lib64/
 COPY --from=build /out/scanner /usr/local/bin/scanner
 COPY --from=nuclei /out/nuclei /usr/local/bin/nuclei
+COPY --from=nuclei /out/naabu /usr/local/bin/naabu
 COPY --from=nuclei /root/nuclei-templates /root/nuclei-templates
 COPY --from=nuclei /root/.config/nuclei /root/.config/nuclei
 # SCANNER_WORK_DIR is intentionally left unset: the node then creates a private,
 # process-exclusive work dir (0700, unguessable name) under the system temp dir.
 # Set it explicitly only to point at a mounted private volume.
 ENV NUCLEI_PATH=nuclei \
+    NAABU_PATH=naabu \
     HOME=/root
 EXPOSE 8081
 ENTRYPOINT ["/usr/local/bin/scanner"]

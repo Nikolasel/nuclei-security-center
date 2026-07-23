@@ -27,7 +27,6 @@ type Orchestrator struct {
 	log      *slog.Logger
 
 	pollInterval time.Duration
-	maxPolls     int
 
 	// progress caches the latest live progress per running scan (#66), refreshed
 	// each poll. It is ephemeral by design — never persisted (invariant #4) — so
@@ -35,6 +34,10 @@ type Orchestrator struct {
 	// any new Postgres storage. Entries are removed when a scan ends.
 	progressMu sync.Mutex
 	progress   map[string]*types.ScanProgress
+	// discovered caches the naabu-narrowed host:port list per running scan (#86),
+	// so the UI can show discovered endpoints during the scanning phase, before the
+	// list is persisted at completion. Also ephemeral; cleared when a scan ends.
+	discovered map[string][]string
 }
 
 // NewOrchestrator wires the store together with the archiver and health monitor.
@@ -48,8 +51,8 @@ func NewOrchestrator(st *store.Store, archiver ObjectStore, health *HealthMonito
 		health:       health,
 		log:          log,
 		pollInterval: 3 * time.Second,
-		maxPolls:     600, // ~30 min ceiling at 3s
 		progress:     make(map[string]*types.ScanProgress),
+		discovered:   make(map[string][]string),
 	}
 }
 
@@ -109,6 +112,24 @@ func (o *Orchestrator) setProgress(scanID string, p *types.ScanProgress) {
 func (o *Orchestrator) clearProgress(scanID string) {
 	o.progressMu.Lock()
 	delete(o.progress, scanID)
+	delete(o.discovered, scanID)
+	o.progressMu.Unlock()
+}
+
+// Discovered returns the cached naabu-narrowed host:port list for a running scan
+// (#86), or nil if none is known yet. Guarded by the same mutex as progress.
+func (o *Orchestrator) Discovered(scanID string) []string {
+	o.progressMu.Lock()
+	defer o.progressMu.Unlock()
+	return o.discovered[scanID]
+}
+
+func (o *Orchestrator) setDiscovered(scanID string, targets []string) {
+	if len(targets) == 0 {
+		return
+	}
+	o.progressMu.Lock()
+	o.discovered[scanID] = targets
 	o.progressMu.Unlock()
 }
 
@@ -186,8 +207,14 @@ func (o *Orchestrator) Submit(ctx context.Context, spec types.ScanSpec, link sto
 }
 
 func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
-	// Detached from the request context; give the whole run a generous ceiling.
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+	// Detached from the request context. The ceiling is derived from THIS scan's
+	// timeouts (discovery + Nuclei run sequentially on the node), not a fixed value:
+	// #86's discovery pre-pass adds its own budget on top of the Nuclei timeout, so a
+	// fixed ceiling would abandon a scan the node is still legitimately running. The
+	// poll budget must exceed the node's own max runtime so the node's specific
+	// timeout error (e.g. "discovery timed out") wins over the generic give-up.
+	pollWait := nodeRuntimeBudget(spec) + nodeOverhead
+	ctx, cancel := context.WithTimeout(context.Background(), pollWait+ingestTail)
 	defer cancel()
 	// Live progress is only meaningful while the scan runs; drop it at the end.
 	defer o.clearProgress(scanID)
@@ -219,7 +246,7 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 	}
 	log.Info("scan dispatched", "node_scan_id", nodeScanID)
 
-	status, err := o.pollToDone(ctx, client, scanID, nodeScanID)
+	status, err := o.pollToDone(ctx, client, scanID, nodeScanID, pollWait)
 	if err != nil {
 		// pollToDone returns a zero-value status on error, so there's genuinely
 		// nothing to record here either.
@@ -236,6 +263,12 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 		if err := o.store.SetScanVersions(ctx, scanID, status.NucleiVersion, status.TemplatesCommit); err != nil {
 			log.Warn("record scan versions", "err", err)
 		}
+	}
+	// Persist the naabu-narrowed endpoint list (#86) unconditionally, like the
+	// version: discovery completes before Nuclei, so it's known even if the Nuclei
+	// run then failed/timed out, and the UI should show what was scanned either way.
+	if err := o.store.SetScanDiscovered(ctx, scanID, status.DiscoveredTargets); err != nil {
+		log.Warn("record discovered targets", "err", err)
 	}
 	// Archive the node's execution log regardless of outcome (it's most useful
 	// on failure). pollToDone only returns on a terminal node state, so the log
@@ -271,11 +304,43 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 	log.Info("scan complete", "findings", status.FindingCount)
 }
 
-// pollToDone polls the given node until the scan reaches a terminal state,
-// caching the live progress from each poll under scanID so the API can render a
-// progress bar.
-func (o *Orchestrator) pollToDone(ctx context.Context, client *ScannerClient, scanID, nodeScanID string) (types.ScanStatus, error) {
-	for i := 0; i < o.maxPolls; i++ {
+// Wall-clock a scan spends outside its discovery/Nuclei timeouts. nodeOverhead is
+// on the node before the timed work (the pre-scan template sync is capped at 5m in
+// runner.go) plus dispatch and poll-interval slack; ingestTail is backend-side
+// headroom to stream and persist results after the node reports complete.
+const (
+	nodeOverhead = 8 * time.Minute
+	ingestTail   = 5 * time.Minute
+)
+
+// nodeRuntimeBudget is the longest the node may legitimately spend on a scan: the
+// discovery pre-pass (#86) and the Nuclei run execute sequentially, each capped by
+// its own timeout. It mirrors the node's built-in defaults (runner.go / discover.go)
+// when the spec leaves a timeout at 0 ("use the default"), so the backend's poll
+// budget always covers what the node could actually take.
+func nodeRuntimeBudget(spec types.ScanSpec) time.Duration {
+	nuclei := time.Duration(spec.Options.TimeoutSec) * time.Second
+	if nuclei <= 0 {
+		nuclei = 30 * time.Minute // runner.go's fallback
+	}
+	var discovery time.Duration
+	if d := spec.Options.Discovery; d != nil && d.Enabled {
+		discovery = time.Duration(d.TimeoutSec) * time.Second
+		if discovery <= 0 {
+			discovery = 5 * time.Minute // discover.go's defaultDiscoveryTimeout
+		}
+	}
+	return nuclei + discovery
+}
+
+// pollToDone polls the given node until the scan reaches a terminal state or the
+// budget elapses, caching the live progress from each poll under scanID so the API
+// can render a progress bar. budget is this scan's derived ceiling (see
+// nodeRuntimeBudget); it is intentionally larger than the node's own timeouts so a
+// scan that overruns fails with the node's specific error, not this generic one.
+func (o *Orchestrator) pollToDone(ctx context.Context, client *ScannerClient, scanID, nodeScanID string, budget time.Duration) (types.ScanStatus, error) {
+	maxPolls := int(budget / o.pollInterval)
+	for i := 0; i < maxPolls; i++ {
 		select {
 		case <-ctx.Done():
 			return types.ScanStatus{}, ctx.Err()
@@ -288,11 +353,12 @@ func (o *Orchestrator) pollToDone(ctx context.Context, client *ScannerClient, sc
 			continue
 		}
 		o.setProgress(scanID, st.Progress)
+		o.setDiscovered(scanID, st.DiscoveredTargets)
 		if st.State == types.ScanComplete || st.State == types.ScanFailed {
 			return st, nil
 		}
 	}
-	return types.ScanStatus{}, fmt.Errorf("scan did not finish within poll budget")
+	return types.ScanStatus{}, fmt.Errorf("scan did not finish within poll budget (%s)", budget.Round(time.Minute))
 }
 
 // ingest streams the node's JSONL results and writes each finding to Postgres.

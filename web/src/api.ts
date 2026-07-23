@@ -92,6 +92,23 @@ export interface ScanPolicy {
   concurrency?: number | null;
   timeout_sec?: number | null;
   max_host_error?: number | null;
+  // Discovery (#86): the optional naabu port-scan pre-pass. Runs before Nuclei so
+  // it only probes live host:port pairs — the win for CIDR-scoped targets.
+  // ON by default; it fails closed on the node, so disable it here when naabu is
+  // unavailable. discovery_ports empty = naabu's top-1000 (nmap top-1000);
+  // discovery_timeout_sec is discovery's own budget, separate from timeout_sec.
+  discovery_enabled?: boolean | null;
+  // Scan mode: "syn" (SYN + host discovery, needs the node's CAP_NET_RAW +
+  // libpcap) or "connect" (unprivileged, no host discovery). Empty = the node's
+  // NAABU_SCAN_TYPE default; "syn" on a node without raw sockets fails closed.
+  discovery_scan_type?: string;
+  discovery_ports?: string;
+  discovery_timeout_sec?: number | null;
+  // naabu tuning (null = naabu's default): -rate (pkts/s), -timeout (ms/probe),
+  // -retries. Lower values are faster but can miss slow/lossy ports.
+  discovery_rate?: number | null;
+  discovery_probe_timeout_ms?: number | null;
+  discovery_retries?: number | null;
   created_by?: string;
   created_at: string;
   updated_at: string;
@@ -147,15 +164,21 @@ export const DEFAULT_TOKEN_TTL_DAYS = 90;
 
 export type ScanState = "queued" | "running" | "complete" | "failed" | "cancelled";
 
-// ScanProgress is live progress for a running scan (#66), parsed from Nuclei's
-// -stats-json on the scanner node. Present only while a scan is running.
+// ScanProgress is live progress for a running scan, present only while running.
+// `phase` says which stage it describes: "discovering" (naabu, #86) or "scanning"
+// (Nuclei, #66). The Nuclei fields apply in the scanning phase; disc_hosts/
+// disc_ports are the naabu live per-host tally in the discovering phase.
 export interface ScanProgress {
+  phase?: "discovering" | "scanning";
   percent: number;
   requests?: number;
   total?: number;
   hosts?: number;
   rps?: number;
   matched?: number;
+  /** discovering phase: hosts found with ≥1 open port, and open ports so far. */
+  disc_hosts?: number;
+  disc_ports?: number;
 }
 
 export interface Scan {
@@ -182,6 +205,10 @@ export interface Scan {
   has_log?: boolean;
   /** live progress; present only for running scans. */
   progress?: ScanProgress;
+  /** host:port endpoints the naabu pre-pass narrowed the target to (#86);
+   *  persisted at completion, served live during the scanning phase. Empty when
+   *  discovery was disabled. */
+  discovered_targets?: string[];
   created_at: string;
   finished_at?: string;
 }

@@ -112,3 +112,52 @@ func TestRetryWriteStopsOnContextCancel(t *testing.T) {
 		t.Errorf("calls = %d, want 1 (cancel should stop further retries)", calls)
 	}
 }
+
+func TestNodeRuntimeBudget(t *testing.T) {
+	min := time.Minute
+	ptrDisc := func(enabled bool, sec int) *types.DiscoveryOptions {
+		return &types.DiscoveryOptions{Enabled: enabled, TimeoutSec: sec}
+	}
+	cases := []struct {
+		name string
+		spec types.ScanSpec
+		want time.Duration
+	}{
+		{
+			// The scan that hit the old fixed 30m budget: Nuclei 600s + discovery 1200s.
+			// The node can run 30m here, so the budget must be at least that.
+			name: "discovery plus nuclei sum",
+			spec: types.ScanSpec{Options: types.ScanOptions{TimeoutSec: 600, Discovery: ptrDisc(true, 1200)}},
+			want: 30 * min,
+		},
+		{
+			name: "discovery disabled => nuclei only",
+			spec: types.ScanSpec{Options: types.ScanOptions{TimeoutSec: 600, Discovery: ptrDisc(false, 1200)}},
+			want: 10 * min,
+		},
+		{
+			name: "no discovery block => nuclei only",
+			spec: types.ScanSpec{Options: types.ScanOptions{TimeoutSec: 600}},
+			want: 10 * min,
+		},
+		{
+			// Zero timeouts fall back to the node's own defaults (30m + 5m).
+			name: "zero timeouts use node defaults",
+			spec: types.ScanSpec{Options: types.ScanOptions{Discovery: ptrDisc(true, 0)}},
+			want: 35 * min,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := nodeRuntimeBudget(tc.spec); got != tc.want {
+				t.Errorf("nodeRuntimeBudget = %s, want %s", got, tc.want)
+			}
+		})
+	}
+	// The full poll budget must exceed the node's own runtime so the node's specific
+	// timeout error wins over the generic poll-budget give-up.
+	spec := types.ScanSpec{Options: types.ScanOptions{TimeoutSec: 600, Discovery: ptrDisc(true, 1200)}}
+	if pollWait := nodeRuntimeBudget(spec) + nodeOverhead; pollWait <= nodeRuntimeBudget(spec) {
+		t.Errorf("poll budget %s must exceed node runtime %s", pollWait, nodeRuntimeBudget(spec))
+	}
+}

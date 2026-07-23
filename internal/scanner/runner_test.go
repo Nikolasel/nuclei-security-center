@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
@@ -60,5 +61,35 @@ func TestBuildArgsMinimal(t *testing.T) {
 	}
 	if !slices.Contains(args, "-jsonl") {
 		t.Errorf("expected -jsonl in args: %v", args)
+	}
+}
+
+func TestSummarizeStderr(t *testing.T) {
+	// A burst of per-host "Skipped … unresponsive" diagnostics (both the transient
+	// and permanent forms) collapses to a single count line, so the real cause isn't
+	// crowded out of the tail.
+	in := strings.Join([]string{
+		"[INF] Using Interactsh Server: oast.site",
+		`[INF] Skipped 192.168.178.1:21 from target list as found unresponsive 32 times`,
+		`[INF] Skipped 192.168.178.1:5060 from target list as found unresponsive permanently: cause="i/o timeout"`,
+		`[INF] Skipped 192.168.178.33:5432 from target list as found unresponsive permanently: cause="i/o timeout"`,
+		"[FTL] could not run nuclei: something fatal",
+	}, "\n")
+	got := summarizeStderr(in, 20)
+	if strings.Count(got, "Skipped") != 1 {
+		t.Errorf("expected the skip burst collapsed to one line, got:\n%s", got)
+	}
+	if !strings.Contains(got, "Skipped 3 targets as unresponsive") {
+		t.Errorf("expected a 3-target summary, got:\n%s", got)
+	}
+	// The non-skip lines survive, including the actual fatal reason.
+	for _, want := range []string{"Interactsh Server", "something fatal"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("expected %q retained, got:\n%s", want, got)
+		}
+	}
+	// Tail limit still applies after collapsing.
+	if got := summarizeStderr("a\nb\nc\nd\ne", 2); got != "d\ne" {
+		t.Errorf("last-n after summarize = %q, want %q", got, "d\ne")
 	}
 }

@@ -50,7 +50,7 @@ returns results.
    │       server-side session │        ┌────────────────────────────────────┐
    │  system of record (PG)    │        │  Scanner node(s) (Go)              │
    │  findings lifecycle/dedup │  poll  │  API-token auth, NO DB creds       │
-   │  scheduler + dispatch     │ ◀──────│  sync templates ─▶ run nuclei ─▶   │
+   │  scheduler + dispatch     │ ◀──────│  sync tmpl ─▶ naabu ─▶ nuclei ─▶   │
    │  RBAC + audit log         │ results│  serve JSONL results (pull-only)   │
    └────────────┬──────────────┘        └───────────────────┬────────────────┘
                 ▼                                            ▼
@@ -161,8 +161,40 @@ so scans survive a busy or briefly-unreachable node.
    If no node is reachable, it stays `queued` and retries with backoff.
 3. **Prepare (on node)** — the node `git pull`s templates to the set's pinned ref and
    reports back `nuclei_version` + `templates_commit` (reproducibility + audit).
+3a. **Discover (on node, optional — #86)** — when the scan spec's `options.discovery`
+   is enabled (default on, set per scan policy), the node first runs **naabu** as a
+   port-scan pre-pass over the target hosts and narrows Nuclei's input to the live
+   `host:port` pairs it finds. This is the win for CIDR-scoped targets: instead of
+   Nuclei probing all 256 addresses of a `/24` for every template, it only touches
+   what's actually listening. By default naabu runs a **SYN scan preceded by host
+   discovery** (`-scan-type syn -with-host-discovery`, probing ICMP echo *and* TCP
+   SYN/ACK to 80/443 so a host that blocks ping but serves the web is still found
+   alive): host discovery prunes dead hosts before port-scanning, the big win on sparse
+   ranges. This needs raw sockets (`CAP_NET_RAW`, in Docker's default capability set) and
+   **libpcap** (the hardened `ubi10-micro` runtime image copies in libpcap + its shared-lib
+   closure, staged from a `ubi10-minimal` builder — see `deploy/Dockerfile.scanner`).
+   A scan policy can pick the mode per-scan (`discovery_scan_type` = `syn`|`connect`);
+   unset, it uses the node's `NAABU_SCAN_TYPE` default. Connect is an unprivileged TCP
+   connect scan with no host discovery — no capabilities or libpcap, but slower (it scans
+   every host) — for deployments that drop `NET_RAW`; requesting `syn` on such a node fails
+   the scan closed. Note connect still narrows Nuclei to the open ports it finds; it only
+   loses the dead-host pruning, so it is faster than disabling discovery outright. Discovery has
+   its **own timeout budget**
+   (separate from the Nuclei `timeout_sec`) and scans naabu's top-1000 ports by default
+   (a policy can set an explicit port spec, including multiple ranges). It **fails
+   closed**: a naabu error/timeout fails the scan rather than silently falling back to
+   an unfiltered run, so a broken discovery is disabled deliberately on the policy. A
+   clean run that finds no open ports simply completes with no findings — there is
+   nothing for Nuclei to probe. naabu stays a **binary we drive**, like Nuclei (bump
+   the image to upgrade). Its stderr is captured into the same execution-log archive
+   (#94) as Nuclei's. The discovering-phase host count is read from naabu's stderr, so
+   it is only as accurate as naabu's view of the network — on Docker Desktop (macOS) the
+   NAT layer makes every address in a private range appear alive, so the live tally is
+   not a verification of network aliveness in dev (the authoritative narrowed set is the
+   persisted `discovered_targets`; see [Development](DEVELOPMENT.md#discovery-on-docker-desktop-macos-reports-every-host-as-alive)).
 4. **Run (on node)** — `nuclei -l targets.txt -t <paths> -jsonl -o out.jsonl` plus the
-   rate-limit / concurrency / timeout flags from the spec.
+   rate-limit / concurrency / timeout flags from the spec. When discovery ran,
+   `targets.txt` is the narrowed `host:port` list from step 3a.
 5. **Poll for results** — the backend polls `GET /v1/scans/{id}` for status/progress,
    then pulls `GET /v1/scans/{id}/results` (NDJSON stream) once the node reports
    `complete`. Pull-only: the flow is strictly backend → node, and in-flight scans resume
@@ -184,7 +216,7 @@ schedules, or the database — only how to run one scan and hand back results.
 
 | Method & path | Purpose |
 |---|---|
-| `POST /v1/scans` | Start a scan. Body: `{ targets[], templates:{git_ref, filters}, options:{rate_limit, concurrency, timeout} }` → `202 { scan_id }`, runs async |
+| `POST /v1/scans` | Start a scan. Body: `{ targets[], templates:{git_ref, filters}, options:{rate_limit, concurrency, timeout, discovery:{enabled, scan_type, ports, timeout_sec}} }` → `202 { scan_id }`, runs async. `options.discovery` drives the optional naabu port-discovery pre-pass (#86) |
 | `GET /v1/scans/{id}` | Status + progress + stats (`running`/`complete`/`failed`) |
 | `GET /v1/scans/{id}/results` | Stream NDJSON results (backend pulls on completion) |
 | `POST /v1/scans/{id}/cancel` | Cancel a running scan |

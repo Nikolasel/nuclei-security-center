@@ -27,10 +27,24 @@ func TestValidateScanPolicy(t *testing.T) {
 		{Name: "p", TargetID: "t1", Concurrency: ptr(-5)},
 		{Name: "p", TargetID: "t1", TimeoutSec: ptr(0)},
 		{Name: "p", TargetID: "t1", MaxHostError: ptr(-1)},
+		{Name: "p", TargetID: "t1", DiscoveryTimeoutSec: ptr(0)},
+		{Name: "p", TargetID: "t1", DiscoveryPorts: "80,notaport"},
+		{Name: "p", TargetID: "t1", DiscoveryPorts: "0"},
+		{Name: "p", TargetID: "t1", DiscoveryPorts: "70000"},
+		{Name: "p", TargetID: "t1", DiscoveryPorts: "9000-8000"}, // inverted range
+		{Name: "p", TargetID: "t1", DiscoveryPorts: "80,,443"},   // empty entry
 	} {
 		if err := validateScanPolicy(p); err == nil {
-			t.Errorf("non-positive knob accepted: %+v", p)
+			t.Errorf("invalid field accepted: %+v", p)
 		}
+	}
+	// Valid discovery config (single ports + multiple ranges) is accepted + trimmed.
+	dp := &store.ScanPolicy{Name: "disc", TargetID: "t1", DiscoveryPorts: " 80, 443, 8000-9000 ", DiscoveryTimeoutSec: ptr(120)}
+	if err := validateScanPolicy(dp); err != nil {
+		t.Errorf("valid discovery policy rejected: %v", err)
+	}
+	if dp.DiscoveryPorts != "80, 443, 8000-9000" {
+		t.Errorf("discovery_ports not trimmed: %q", dp.DiscoveryPorts)
 	}
 	// Valid, trims name/target/template-set in place.
 	ok := &store.ScanPolicy{Name: "  fragile  ", TargetID: " t1 ", TemplateSetID: " ts1 ", RateLimit: ptr(20), MaxHostError: ptr(100)}

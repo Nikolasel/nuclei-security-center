@@ -29,13 +29,17 @@ func main() {
 		os.Exit(1)
 	}
 	nucleiPath := envOr("NUCLEI_PATH", "nuclei")
+	naabuPath := envOr("NAABU_PATH", "naabu")
+	// NAABU_SCAN_TYPE selects naabu's discovery mode: "syn" (default — fast, host
+	// discovery, needs CAP_NET_RAW + libpcap) or "connect" (unprivileged fallback).
+	naabuScanType := os.Getenv("NAABU_SCAN_TYPE")
 	workRoot, err := resolveWorkDir(os.Getenv("SCANNER_WORK_DIR"))
 	if err != nil {
 		log.Error("prepare work dir", "err", err)
 		os.Exit(1)
 	}
 
-	runner, err := scanner.NewRunner(nucleiPath, workRoot)
+	runner, err := scanner.NewRunner(nucleiPath, naabuPath, naabuScanType, workRoot)
 	if err != nil {
 		log.Error("init runner", "err", err)
 		os.Exit(1)

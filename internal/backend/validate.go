@@ -129,9 +129,69 @@ func validateScanPolicy(p *store.ScanPolicy) error {
 		{"concurrency", p.Concurrency},
 		{"timeout_sec", p.TimeoutSec},
 		{"max_host_error", p.MaxHostError},
+		{"discovery_timeout_sec", p.DiscoveryTimeoutSec},
+		{"discovery_rate", p.DiscoveryRate},
+		{"discovery_probe_timeout_ms", p.DiscoveryProbeTimeoutMs},
+		{"discovery_retries", p.DiscoveryRetries},
 	} {
 		if f.val != nil && *f.val <= 0 {
 			return fmt.Errorf("%s must be positive when set", f.name)
+		}
+	}
+	// Discovery scan type (#86) — "syn" or "connect", or empty for the node's
+	// NAABU_SCAN_TYPE default. Lower-cased so the UI/API can be lenient; the DB
+	// CHECK constraint is the backstop.
+	p.DiscoveryScanType = strings.ToLower(strings.TrimSpace(p.DiscoveryScanType))
+	switch p.DiscoveryScanType {
+	case "", "syn", "connect":
+	default:
+		return fmt.Errorf("discovery_scan_type must be \"syn\" or \"connect\"")
+	}
+	// Discovery ports (#86) — validate the naabu -port spec at save time so a
+	// typo fails here (friendly) rather than at scan time (discovery fails closed,
+	// which would abort the whole scan). Empty = naabu's top-1000 default.
+	p.DiscoveryPorts = strings.TrimSpace(p.DiscoveryPorts)
+	if err := validatePortSpec(p.DiscoveryPorts); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validatePortSpec checks a naabu-style port spec: comma-separated tokens, each a
+// single port (N) or an inclusive range (N-M), all within 1-65535. Empty is valid
+// (means "use the default port set"). Kept intentionally strict — naabu accepts a
+// few exotic forms we don't expose, and rejecting them here is friendlier than a
+// failed-closed scan.
+func validatePortSpec(spec string) error {
+	if spec == "" {
+		return nil
+	}
+	parsePort := func(s string) (int, error) {
+		n, err := strconv.Atoi(strings.TrimSpace(s))
+		if err != nil || n < 1 || n > 65535 {
+			return 0, fmt.Errorf("discovery_ports: %q is not a valid port (1-65535)", s)
+		}
+		return n, nil
+	}
+	for _, tok := range strings.Split(spec, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			return errors.New("discovery_ports: empty port entry")
+		}
+		lo, hi, isRange := strings.Cut(tok, "-")
+		start, err := parsePort(lo)
+		if err != nil {
+			return err
+		}
+		if !isRange {
+			continue
+		}
+		end, err := parsePort(hi)
+		if err != nil {
+			return err
+		}
+		if end < start {
+			return fmt.Errorf("discovery_ports: range %q is inverted", tok)
 		}
 	}
 	return nil

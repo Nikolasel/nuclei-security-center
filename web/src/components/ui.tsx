@@ -5,6 +5,7 @@ import type {
   InputHTMLAttributes,
   ReactNode,
   SelectHTMLAttributes,
+  TextareaHTMLAttributes,
 } from "react";
 import { STATE_LABELS, type EffectiveState } from "../api";
 
@@ -96,19 +97,38 @@ export function StateBadge({ state }: { state: string }) {
 }
 
 /** ProgressBar renders a 0–100% determinate bar. `label` is shown to the right. */
-export function ProgressBar({ percent, label }: { percent: number; label?: string }) {
+// ProgressBar shows a determinate bar by percent, or — when `indeterminate` is
+// set (e.g. the naabu discovery phase, which has no clean percentage, #86) — an
+// animated sliding bar. The label still carries whatever live tally the caller has.
+export function ProgressBar({
+  percent,
+  label,
+  indeterminate,
+}: {
+  percent: number;
+  label?: string;
+  indeterminate?: boolean;
+}) {
   const pct = Math.max(0, Math.min(100, percent));
   return (
     <div className="flex items-center gap-2">
       <div className="h-2 flex-1 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
-        <div
-          className="h-full rounded-full bg-indigo-500 transition-[width] duration-500"
-          style={{ width: `${pct}%` }}
-          role="progressbar"
-          aria-valuenow={Math.round(pct)}
-          aria-valuemin={0}
-          aria-valuemax={100}
-        />
+        {indeterminate ? (
+          <div
+            className="h-full w-1/3 animate-[indeterminate_1.4s_ease-in-out_infinite] rounded-full bg-indigo-500"
+            role="progressbar"
+            aria-label="working"
+          />
+        ) : (
+          <div
+            className="h-full rounded-full bg-indigo-500 transition-[width] duration-500"
+            style={{ width: `${pct}%` }}
+            role="progressbar"
+            aria-valuenow={Math.round(pct)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          />
+        )}
       </div>
       <span className="w-24 shrink-0 text-right text-xs tabular-nums text-neutral-500">
         {label ?? `${pct.toFixed(0)}%`}
@@ -199,12 +219,27 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
   );
 }
 
+// Textarea matches Input's styling but grows vertically and is user-resizable —
+// for longer free-text values (e.g. a port list) that a single line cramps.
+export function Textarea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  return (
+    <textarea
+      className={cn(
+        "w-full rounded-md border border-neutral-300 bg-white px-3 py-2 font-mono text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-neutral-700 dark:bg-neutral-800",
+        className,
+      )}
+      {...props}
+    />
+  );
+}
+
 export function Modal({
   open,
   onOpenChange,
   title,
   children,
   dismissible = true,
+  size = "default",
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -214,7 +249,11 @@ export function Modal({
    *  it can only be dismissed through its own controls. For content that is
    *  destroyed by closing and cannot be recovered — a secret shown exactly once. */
   dismissible?: boolean;
+  /** "wide" roughly doubles the max width — for forms with long free-text fields
+   *  (e.g. a port list) that need room to stretch. */
+  size?: "default" | "wide";
 }) {
+  const widthClass = size === "wide" ? "w-[min(94vw,48rem)]" : "w-[min(92vw,32rem)]";
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -223,7 +262,7 @@ export function Modal({
           onPointerDownOutside={dismissible ? undefined : (e) => e.preventDefault()}
           onEscapeKeyDown={dismissible ? undefined : (e) => e.preventDefault()}
           onInteractOutside={dismissible ? undefined : (e) => e.preventDefault()}
-          className="fixed left-1/2 top-1/2 max-h-[90dvh] w-[min(92vw,32rem)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-neutral-200 bg-white p-5 shadow-xl focus:outline-none dark:border-neutral-800 dark:bg-neutral-900"
+          className={`fixed left-1/2 top-1/2 max-h-[90dvh] ${widthClass} -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-neutral-200 bg-white p-5 shadow-xl focus:outline-none dark:border-neutral-800 dark:bg-neutral-900`}
         >
           <Dialog.Title className="mb-3 text-base font-semibold">{title}</Dialog.Title>
           {children}

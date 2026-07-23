@@ -273,6 +273,31 @@ Both resources support the full REST set: `GET|POST /api/targets`,
 template set nulls the link on past scans but never deletes scan history. A target still in use
 by a scan policy can't be deleted out from under it — the policy references it (see below).
 
+### Template-set membership
+
+Under #85, a template set is becoming an **explicit list of individual catalog templates** rather
+than a filter over the community repo. This membership sub-resource is live now (the older
+severity/tag/path filter fields still exist and still drive dispatch until the scan-contract
+cutover slice):
+
+```sh
+# set a set's membership to exactly these catalog template ids (the editor's "save")
+curl -sb jar.txt -X PUT localhost:8080/api/template-sets/<set_id>/members \
+  -H 'content-type: application/json' -d '{"template_ids":["CVE-2021-44228","my-custom-check"]}'
+# add ids (idempotent); remove one
+curl -sb jar.txt -X POST   localhost:8080/api/template-sets/<set_id>/members -d '{"template_ids":["tech-detect"]}'
+curl -sb jar.txt -X DELETE localhost:8080/api/template-sets/<set_id>/members/tech-detect
+# list a set's member templates (catalog rows, yaml omitted)
+curl -sb jar.txt localhost:8080/api/template-sets/<set_id>/members
+```
+
+A template set now reports `legacy_filter` (true for the pre-existing POC filter-style sets) and a
+live `member_count`. Reads are `viewer`; membership edits are `operator`, audited as
+`config_changed` (`template_set.members_replace` / `_add` / `_remove`). An unknown `template_id`
+is a `400`; an unknown set is a `404`. **Not yet wired into dispatch** — scans still resolve the
+legacy filter fields; switching dispatch to members (plus the node bundle transfer + drift check)
+is the next slice.
+
 ## Template catalog
 
 The backend mirrors the upstream Nuclei template catalog into Postgres (managed by the

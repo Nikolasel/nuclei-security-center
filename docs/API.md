@@ -307,6 +307,15 @@ custom `id` that collides with an existing template (custom or upstream) is a `4
 custom template is prevented from shadowing an upstream one. Reads are `viewer`; writes are audited
 as `config_changed` (`template.create` / `template.update` / `template.delete`).
 
+Custom uploads are sanity-checked at write time (all `400` on failure): the body must be a single
+YAML document with a top-level `id`, a non-empty `info.name`, a severity in Nuclei's set
+(`info`/`low`/`medium`/`high`/`critical`/`unknown`), and at least one executable section (a protocol
+block — `http`, `dns`, `network`, `ssl`, … — or `workflows`). The `id` must be a URL-safe slug (no
+slashes), and on edit the `id` inside the body must equal the `{id}` in the URL. These checks are the
+cheap first line of defense; the upstream sync is intentionally *not* held to them (the community
+tree is authoritative). An authoritative `nuclei -validate` check on the scanner node is planned for
+a later slice.
+
 ## Config: scan policies
 
 A **scan policy** is the central, reusable **scan configuration** — it bundles *everything* a

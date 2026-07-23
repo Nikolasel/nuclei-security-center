@@ -158,7 +158,9 @@ func readTemplateBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 func (s *Server) parseCustomTemplate(w http.ResponseWriter, body []byte) (store.Template, bool) {
 	// The path passed to Parse is only used for metadata; the authoritative
 	// custom path is derived from the parsed id below, so a placeholder is fine.
-	meta, err := templates.Parse("custom/placeholder.yaml", body)
+	// ParseCustom (not Parse) applies the stricter upload checks — known
+	// severity + an executable section — that the upstream sync doesn't.
+	meta, err := templates.ParseCustom("custom/placeholder.yaml", body)
 	if errors.Is(err, templates.ErrNotTemplate) {
 		http.Error(w, "not a Nuclei template: missing top-level id", http.StatusBadRequest)
 		return store.Template{}, false

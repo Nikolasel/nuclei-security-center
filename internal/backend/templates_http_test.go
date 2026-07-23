@@ -6,7 +6,21 @@ import (
 	"testing"
 )
 
-const validCustomYAML = "id: my-custom-check\ninfo:\n  name: My Custom Check\n  author: sec-team\n  severity: high\n  tags: internal,rce\n"
+const validCustomYAML = `id: my-custom-check
+info:
+  name: My Custom Check
+  author: sec-team
+  severity: high
+  tags: internal,rce
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/health"
+    matchers:
+      - type: status
+        status:
+          - 200
+`
 
 func TestParseCustomTemplate(t *testing.T) {
 	s := &Server{}
@@ -38,6 +52,8 @@ func TestParseCustomTemplateRejects(t *testing.T) {
 		{"id with slash", "id: http/cves/x\ninfo:\n  name: X\n  severity: low\n"},
 		{"missing info name", "id: ok\ninfo:\n  severity: low\n"},
 		{"not yaml", "::: not : valid : yaml :::"},
+		{"no executable section", "id: inert\ninfo:\n  name: X\n  severity: low\n"},
+		{"bad severity", "id: typo\ninfo:\n  name: X\n  severity: hihg\nhttp:\n  - method: GET\n    path: [\"{{BaseURL}}\"]\n"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

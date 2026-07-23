@@ -15,6 +15,10 @@ deployment.
 | `SCAN_ZONES` | backend | – (unset ⇒ only the default node) | JSON array of CIDR-mapped scanner nodes; **seeds** the registry on first boot only (the DB is the system of record thereafter) |
 | `SCANNER_TOKEN` | both | – (required, **min 32 chars**) | bearer token for backend → node calls; the node refuses to start below the floor. Mint from a CSPRNG, e.g. `openssl rand -base64 24` |
 | `NODE_HEALTH_INTERVAL` | backend | `30s` | how often the backend polls each node's `/v1/capabilities` for liveness (Go duration); a node stays healthy for 3× this after its last successful poll. See [Scanner node registry](#scanner-node-registry) |
+| `TEMPLATE_SYNC_INTERVAL` | backend | `6h` | cadence for the backend-owned upstream template catalog refresh (Go duration) |
+| `TEMPLATE_SYNC_REPO` | backend | `https://github.com/projectdiscovery/nuclei-templates.git` | Git repository mirrored into the local template catalog. **Set empty to disable sync entirely** (mirrors the `S3_ENDPOINT`/`OIDC_ISSUER` unset-⇒-off pattern) — useful in a slim dev stack where a ~1 GB clone isn't wanted |
+| `TEMPLATE_SYNC_REF` | backend | `latest` | upstream revision to mirror; `latest` selects the highest stable semantic-version Git tag. **Only tags and commit SHAs are pinned reliably**; a branch name (e.g. `main`) tracks `origin/<branch>` and advances each fetch |
+| `TEMPLATE_SYNC_DIR` | backend | `/tmp/nsc-template-sync` | backend-local clone cache; PostgreSQL remains authoritative after each successful sync. Point at a persisted volume (compose does) so restarts fetch deltas instead of re-cloning |
 | `SCANNER_ADDR` | scanner | `:8081` | listen address |
 | `SCANNER_TLS_CERT` / `SCANNER_TLS_KEY` | scanner | – (unset ⇒ plain HTTP) | node server certificate; setting both makes the node serve HTTPS. See [Service auth: TLS & mTLS](#service-auth-tls--mtls) |
 | `SCANNER_CLIENT_CA` | scanner | – | PEM CA bundle; when set the node **requires + verifies** a client cert (mTLS) |

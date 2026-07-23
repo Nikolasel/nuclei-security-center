@@ -2,6 +2,7 @@ package backend
 
 import (
 	"crypto/tls"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
@@ -179,6 +180,28 @@ func validateNodeTLS(in *store.ScannerNode, isCreate bool) error {
 		}
 	}
 	return nil
+}
+
+// handleSyncNodeTemplates pushes the current full catalog to one node on demand
+// (#85, admin "sync now"). Full replace. 503 when distribution is disabled
+// (no template sync configured), 404 for an unknown node, 502 when the node
+// rejects or is unreachable.
+func (s *Server) handleSyncNodeTemplates(w http.ResponseWriter, r *http.Request) {
+	if s.distributor == nil {
+		http.Error(w, "template distribution is disabled", http.StatusServiceUnavailable)
+		return
+	}
+	status, err := s.distributor.SyncNode(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		s.log.Error("sync node templates", "node", r.PathValue("id"), "err", err)
+		http.Error(w, "failed to sync templates to node: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 // errBadRequest is a plain error whose text is safe to return to the client.

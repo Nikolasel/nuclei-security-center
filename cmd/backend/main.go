@@ -103,6 +103,13 @@ func main() {
 		}
 		templateSyncer.Start(ctx)
 		log.Info("template syncer started", "repo", cfg.Repo, "ref", cfg.Ref, "dir", cfg.Dir)
+
+		// Template distribution (#85): push the catalog to scanner nodes on a
+		// cadence (idle nodes only) + on-demand via the admin "sync now" action.
+		distributor := backend.NewTemplateDistributor(st, health, templateDistributeInterval(), log)
+		distributor.Start(ctx)
+		apiSrv.SetTemplateDistributor(distributor)
+		log.Info("template distributor started")
 	}
 
 	// The scheduler ticker dispatches cron schedules; the DB is its source of
@@ -316,6 +323,18 @@ func retentionSweepInterval() time.Duration {
 // defaultTemplateRepo is the community nuclei-templates catalog mirrored when
 // TEMPLATE_SYNC_REPO is unset (zero-config alpha).
 const defaultTemplateRepo = "https://github.com/projectdiscovery/nuclei-templates.git"
+
+// templateDistributeInterval is how often the backend pushes the template
+// catalog to scanner nodes (#85). Defaults to hourly; only stale, idle nodes are
+// pushed to, so a quiet tick is cheap.
+func templateDistributeInterval() time.Duration {
+	if v := os.Getenv("TEMPLATE_DISTRIBUTE_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return time.Hour
+}
 
 // templateSyncConfig is deliberately backend-only: scanner nodes receive a
 // resolved, immutable bundle in a later #85 slice and never clone upstream

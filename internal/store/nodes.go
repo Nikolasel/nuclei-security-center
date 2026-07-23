@@ -38,13 +38,17 @@ type ScannerNode struct {
 	CreatedBy     string    `json:"created_by,omitempty"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+	// TemplatesSyncedAt is when the backend last pushed the full template catalog
+	// to this node (#85); nil = never. Read-only (set by the distributor, not the
+	// node CRUD API).
+	TemplatesSyncedAt *time.Time `json:"templates_synced_at,omitempty"`
 }
 
 // nodeColumns is the full column list for scanner_nodes reads, in the order
 // scanNode expects.
 const nodeColumns = `id, name, endpoint, token, cidrs, tags,
 	tls_server_ca, tls_client_cert, tls_client_key,
-	created_by, created_at, updated_at`
+	created_by, created_at, updated_at, templates_synced_at`
 
 // ListScannerNodes returns all nodes ordered by name.
 func (s *Store) ListScannerNodes(ctx context.Context) ([]ScannerNode, error) {
@@ -349,11 +353,34 @@ func scanNode(row rowScanner) (ScannerNode, error) {
 	var createdBy *string
 	if err := row.Scan(&n.ID, &n.Name, &n.Endpoint, &n.Token, &n.CIDRs, &n.Tags,
 		&n.TLSServerCA, &n.TLSClientCert, &n.TLSClientKey,
-		&createdBy, &n.CreatedAt, &n.UpdatedAt); err != nil {
+		&createdBy, &n.CreatedAt, &n.UpdatedAt, &n.TemplatesSyncedAt); err != nil {
 		return ScannerNode{}, err
 	}
 	n.CreatedBy = deref(createdBy)
 	return n, nil
+}
+
+// NodeHasActiveScan reports whether a scan is currently running on the node — the
+// distributor skips a busy node so a template push never swaps the tree under a
+// running nuclei (#85).
+func (s *Store) NodeHasActiveScan(ctx context.Context, nodeID string) (bool, error) {
+	var n int
+	err := s.pool.QueryRow(ctx,
+		`SELECT count(*) FROM scans WHERE node_id = $1 AND state = 'running'`, nodeID).Scan(&n)
+	if err != nil {
+		return false, fmt.Errorf("check node active scans: %w", err)
+	}
+	return n > 0, nil
+}
+
+// SetNodeTemplatesSyncedAt records a successful catalog push to a node (#85).
+func (s *Store) SetNodeTemplatesSyncedAt(ctx context.Context, nodeID string, ts time.Time) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE scanner_nodes SET templates_synced_at = $2 WHERE id = $1`, nodeID, ts)
+	if err != nil {
+		return fmt.Errorf("set node templates_synced_at: %w", err)
+	}
+	return nil
 }
 
 func scanNodeRows(rows pgx.Rows) ([]ScannerNode, error) {

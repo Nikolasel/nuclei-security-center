@@ -125,6 +125,34 @@ func (c *ScannerClient) Capabilities(ctx context.Context) (types.Capabilities, e
 	return caps, nil
 }
 
+// pushBundleTimeout bounds a full-catalog bundle upload + the node's verify/
+// activate. Generous: the catalog is a few MB and the node hashes every file.
+const pushBundleTimeout = 5 * time.Minute
+
+// PushBundle uploads a full-catalog template bundle to the node and returns the
+// activated status (#85). The node verifies and atomically activates it; a bad
+// bundle or a busy node is a non-200 surfaced as an error.
+func (c *ScannerClient) PushBundle(ctx context.Context, bundle []byte) (types.TemplateBundleStatus, error) {
+	req, err := c.newReq(ctx, http.MethodPost, "/v1/templates/bundle", bytes.NewReader(bundle))
+	if err != nil {
+		return types.TemplateBundleStatus{}, err
+	}
+	req.Header.Set("Content-Type", "application/gzip")
+	resp, err := c.newHTTPClient(pushBundleTimeout).Do(req)
+	if err != nil {
+		return types.TemplateBundleStatus{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return types.TemplateBundleStatus{}, fmt.Errorf("push bundle: %s", statusErr(resp))
+	}
+	var st types.TemplateBundleStatus
+	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+		return types.TemplateBundleStatus{}, err
+	}
+	return st, nil
+}
+
 // Cancel asks the node to abort a running scan (it kills the nuclei process
 // group). A node that no longer knows the scan (404 — already finished or the
 // node restarted) is not an error: the backend has already recorded the terminal

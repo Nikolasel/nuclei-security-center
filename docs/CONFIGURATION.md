@@ -19,6 +19,7 @@ deployment.
 | `TEMPLATE_SYNC_REPO` | backend | `https://github.com/projectdiscovery/nuclei-templates.git` | Git repository mirrored into the local template catalog. **Set empty to disable sync entirely** (mirrors the `S3_ENDPOINT`/`OIDC_ISSUER` unset-⇒-off pattern) — useful in a slim dev stack where a ~1 GB clone isn't wanted |
 | `TEMPLATE_SYNC_REF` | backend | `latest` | upstream revision to mirror; `latest` selects the highest stable semantic-version Git tag. **Only tags and commit SHAs are pinned reliably**; a branch name (e.g. `main`) tracks `origin/<branch>` and advances each fetch |
 | `TEMPLATE_SYNC_DIR` | backend | `/tmp/nsc-template-sync` | backend-local clone cache; PostgreSQL remains authoritative after each successful sync. Point at a persisted volume (compose does) so restarts fetch deltas instead of re-cloning |
+| `TEMPLATE_DISTRIBUTE_INTERVAL` | backend | `1h` | cadence for pushing the full template catalog to scanner nodes (#85, Go duration). Each pass pushes only to nodes that are **stale** (reported bundle digest ≠ current catalog digest) **and idle** (no running scan). Disabled together with the syncer when `TEMPLATE_SYNC_REPO` is empty |
 | `SCANNER_ADDR` | scanner | `:8081` | listen address |
 | `SCANNER_TLS_CERT` / `SCANNER_TLS_KEY` | scanner | – (unset ⇒ plain HTTP) | node server certificate; setting both makes the node serve HTTPS. See [Service auth: TLS & mTLS](#service-auth-tls--mtls) |
 | `SCANNER_CLIENT_CA` | scanner | – | PEM CA bundle; when set the node **requires + verifies** a client cert (mTLS) |

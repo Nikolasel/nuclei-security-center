@@ -127,8 +127,11 @@ type TemplateBundleEntry struct {
 }
 
 // TemplateBundleManifest is manifest.json at the root of a bundle tarball. The
-// backend builds it from a resolved template set; the node verifies every listed
-// file is present with the right hash and that Digest matches BundleDigest.
+// backend builds it from the full active catalog (upstream + custom) — a node
+// holds the whole catalog and a scan later selects by id, rather than the backend
+// re-streaming a per-scan subset. The node verifies every listed file is present
+// with the right hash and that Digest matches BundleDigest; the manifest also
+// gives the node its id→path index for per-scan template selection.
 type TemplateBundleManifest struct {
 	Digest    string                `json:"digest"` // canonical digest, == BundleDigest(Templates)
 	Templates []TemplateBundleEntry `json:"templates"`

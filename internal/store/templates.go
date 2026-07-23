@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -55,6 +56,238 @@ type TemplateSyncStats struct {
 	Removed int
 	Updated int
 	Skipped int
+}
+
+// TemplateFilter narrows a catalog listing. Every field is optional; an empty
+// field does not constrain. It compiles to a fully parameterized WHERE clause —
+// user values never touch the SQL text.
+type TemplateFilter struct {
+	Source             string   // "upstream" | "custom" | "" (any)
+	Severities         []string // any-of, case-insensitive
+	Tags               []string // any-of (array overlap on tags[])
+	Query              string   // case-insensitive substring over id/name/description
+	IncludeUnavailable bool     // false (default) ⇒ only availability='active'
+}
+
+// tmplListCols are the catalog columns returned by list/get, excluding the
+// (potentially large) yaml body — the list view never needs it, and callers that
+// do (the editor) fetch a single row via GetTemplate.
+const tmplListCols = `id, source, path, content_sha256, name, author, severity,
+	description, tags, upstream_ref, revision, availability, created_by, created_at, updated_at`
+
+// ListTemplates returns a filtered, paginated page of the catalog plus the total
+// matching count (for the UI's pager). yaml is omitted from list rows.
+func (s *Store) ListTemplates(ctx context.Context, f TemplateFilter, limit, offset int) ([]Template, int, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	var conds []string
+	var args []any
+	push := func(v any) string {
+		args = append(args, v)
+		return fmt.Sprintf("$%d", len(args))
+	}
+	if !f.IncludeUnavailable {
+		conds = append(conds, "availability = 'active'")
+	}
+	if f.Source != "" {
+		conds = append(conds, "source = "+push(f.Source))
+	}
+	if len(f.Severities) > 0 {
+		lowered := make([]string, len(f.Severities))
+		for i, sev := range f.Severities {
+			lowered[i] = strings.ToLower(sev)
+		}
+		conds = append(conds, "lower(severity) = ANY("+push(lowered)+")")
+	}
+	if len(f.Tags) > 0 {
+		conds = append(conds, "tags && "+push(f.Tags))
+	}
+	if q := strings.TrimSpace(f.Query); q != "" {
+		p := push("%" + q + "%")
+		conds = append(conds, "(id ILIKE "+p+" OR name ILIKE "+p+" OR description ILIKE "+p+")")
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = "WHERE " + strings.Join(conds, " AND ")
+	}
+
+	var total int
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM templates "+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count templates: %w", err)
+	}
+
+	args = append(args, limit)
+	limitPH := fmt.Sprintf("$%d", len(args))
+	args = append(args, offset)
+	offsetPH := fmt.Sprintf("$%d", len(args))
+	rows, err := s.pool.Query(ctx,
+		"SELECT "+tmplListCols+" FROM templates "+where+
+			" ORDER BY lower(name), id LIMIT "+limitPH+" OFFSET "+offsetPH, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list templates: %w", err)
+	}
+	defer rows.Close()
+	var out []Template
+	for rows.Next() {
+		t, err := scanTemplateList(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, t)
+	}
+	return out, total, rows.Err()
+}
+
+// GetTemplate returns one template by id including its yaml body, or ErrNotFound.
+func (s *Store) GetTemplate(ctx context.Context, id string) (Template, error) {
+	var t Template
+	var upstreamRef, createdBy *string
+	err := s.pool.QueryRow(ctx,
+		"SELECT "+tmplListCols+", yaml FROM templates WHERE id = $1", id,
+	).Scan(&t.ID, &t.Source, &t.Path, &t.ContentSHA256, &t.Name, &t.Author, &t.Severity,
+		&t.Description, &t.Tags, &upstreamRef, &t.Revision, &t.Availability, &createdBy,
+		&t.CreatedAt, &t.UpdatedAt, &t.YAML)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Template{}, ErrNotFound
+		}
+		return Template{}, fmt.Errorf("get template: %w", err)
+	}
+	t.UpstreamRef = deref(upstreamRef)
+	t.CreatedBy = deref(createdBy)
+	return t, nil
+}
+
+// scanTemplateList scans a row selected with tmplListCols (no yaml).
+func scanTemplateList(rows pgx.Rows) (Template, error) {
+	var t Template
+	var upstreamRef, createdBy *string
+	if err := rows.Scan(&t.ID, &t.Source, &t.Path, &t.ContentSHA256, &t.Name, &t.Author,
+		&t.Severity, &t.Description, &t.Tags, &upstreamRef, &t.Revision, &t.Availability,
+		&createdBy, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		return Template{}, err
+	}
+	t.UpstreamRef = deref(upstreamRef)
+	t.CreatedBy = deref(createdBy)
+	return t, nil
+}
+
+// CreateCustomTemplate inserts a user-authored template (source='custom'). The
+// caller supplies the parsed metadata + verbatim YAML. A duplicate id — whether
+// an existing custom OR upstream row (the PK is the Nuclei id) — is ErrConflict,
+// which is how a custom template is prevented from shadowing an upstream one.
+func (s *Store) CreateCustomTemplate(ctx context.Context, t Template) (Template, error) {
+	t.Source = "custom"
+	t.Availability = "active"
+	t.Revision = 1
+	err := s.pool.QueryRow(ctx,
+		`INSERT INTO templates (id, source, path, yaml, content_sha256, name, author, severity,
+		   description, tags, revision, availability, created_by)
+		 VALUES ($1, 'custom', $2, $3, $4, $5, $6, $7, $8, $9, 1, 'active', $10)
+		 RETURNING created_at, updated_at`,
+		t.ID, t.Path, t.YAML, t.ContentSHA256, t.Name, t.Author, t.Severity,
+		t.Description, orEmpty(t.Tags), nullStr(t.CreatedBy),
+	).Scan(&t.CreatedAt, &t.UpdatedAt)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return Template{}, ErrConflict
+		}
+		return Template{}, fmt.Errorf("insert custom template: %w", err)
+	}
+	return t, nil
+}
+
+// UpdateCustomTemplate replaces a custom template's body and bumps its revision.
+// It refuses to touch an upstream row (ErrTemplateReadOnly) and reports
+// ErrNotFound for a missing id. The caller guarantees the parsed id equals the
+// target id, so the primary key never changes here.
+func (s *Store) UpdateCustomTemplate(ctx context.Context, id string, t Template) (Template, error) {
+	if err := s.assertCustom(ctx, id); err != nil {
+		return Template{}, err
+	}
+	t.ID = id
+	t.Source = "custom"
+	t.Availability = "active"
+	var createdBy *string
+	err := s.pool.QueryRow(ctx,
+		`UPDATE templates SET path = $2, yaml = $3, content_sha256 = $4, name = $5, author = $6,
+		   severity = $7, description = $8, tags = $9, revision = revision + 1, updated_at = now()
+		 WHERE id = $1 AND source = 'custom'
+		 RETURNING revision, created_by, created_at, updated_at`,
+		id, t.Path, t.YAML, t.ContentSHA256, t.Name, t.Author, t.Severity, t.Description, orEmpty(t.Tags),
+	).Scan(&t.Revision, &createdBy, &t.CreatedAt, &t.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Template{}, ErrNotFound
+		}
+		return Template{}, fmt.Errorf("update custom template: %w", err)
+	}
+	t.CreatedBy = deref(createdBy)
+	return t, nil
+}
+
+// DeleteCustomTemplate removes a custom template. Upstream rows are read-only
+// (ErrTemplateReadOnly); a missing id is ErrNotFound.
+func (s *Store) DeleteCustomTemplate(ctx context.Context, id string) error {
+	if err := s.assertCustom(ctx, id); err != nil {
+		return err
+	}
+	_, err := s.pool.Exec(ctx, `DELETE FROM templates WHERE id = $1 AND source = 'custom'`, id)
+	if err != nil {
+		return fmt.Errorf("delete custom template: %w", err)
+	}
+	return nil
+}
+
+// assertCustom returns ErrNotFound if the id is unknown, or ErrTemplateReadOnly
+// if it exists but is upstream — so the mutating handlers can reject before the
+// write and map a clean status code.
+func (s *Store) assertCustom(ctx context.Context, id string) error {
+	var source string
+	err := s.pool.QueryRow(ctx, `SELECT source FROM templates WHERE id = $1`, id).Scan(&source)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("lookup template: %w", err)
+	}
+	if source != "custom" {
+		return ErrTemplateReadOnly
+	}
+	return nil
+}
+
+// ListTemplateSyncRuns returns the most recent sync-run rows (newest first) for
+// the Sync view — time-since-last-sync, counts, and any error.
+func (s *Store) ListTemplateSyncRuns(ctx context.Context, limit int) ([]TemplateSyncRun, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, started_at, finished_at, status, ref_before, ref_after,
+		   added, removed, updated, skipped, error
+		 FROM template_sync_runs ORDER BY started_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("list template sync runs: %w", err)
+	}
+	defer rows.Close()
+	var out []TemplateSyncRun
+	for rows.Next() {
+		var r TemplateSyncRun
+		var refBefore, refAfter, errStr *string
+		if err := rows.Scan(&r.ID, &r.StartedAt, &r.FinishedAt, &r.Status, &refBefore, &refAfter,
+			&r.Added, &r.Removed, &r.Updated, &r.Skipped, &errStr); err != nil {
+			return nil, err
+		}
+		r.RefBefore, r.RefAfter, r.Error = deref(refBefore), deref(refAfter), deref(errStr)
+		out = append(out, r)
+	}
+	return out, rows.Err()
 }
 
 // StartTemplateSync records a sync attempt before network work begins, so a

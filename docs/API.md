@@ -273,6 +273,49 @@ Both resources support the full REST set: `GET|POST /api/targets`,
 template set nulls the link on past scans but never deletes scan history. A target still in use
 by a scan policy can't be deleted out from under it — the policy references it (see below).
 
+## Template catalog
+
+The backend mirrors the upstream Nuclei template catalog into Postgres (managed by the
+`TemplateSyncer`, #85) and lets you add **custom** templates alongside it. Every template is
+keyed by its Nuclei `id`; `source` is `upstream` or `custom`.
+
+```sh
+# browse/search the catalog (filters: source, severity, tag, free-text q; paginated)
+curl -sb jar.txt 'localhost:8080/api/templates?severity=critical&tag=rce&q=struts&limit=50&offset=0'
+# one template incl. its verbatim YAML body
+curl -sb jar.txt localhost:8080/api/templates/CVE-2021-44228
+# add a custom template — the request body is raw YAML, not JSON
+curl -sb jar.txt -X POST localhost:8080/api/templates --data-binary @my-check.yaml
+# replace a custom template (the id inside the YAML must equal the URL id)
+curl -sb jar.txt -X PUT localhost:8080/api/templates/my-custom-check --data-binary @my-check.yaml
+# delete a custom template
+curl -sb jar.txt -X DELETE localhost:8080/api/templates/my-custom-check
+# recent upstream-sync outcomes (for the Sync view)
+curl -sb jar.txt localhost:8080/api/templates/sync-runs
+```
+
+The list response is a `{items, total, limit, offset}` page; list rows omit the `yaml` body
+(fetch a single template to get it). Filters: `source`, repeatable/CSV `severity` and `tag`
+(any-of), free-text `q` (matches id/name/description), and `include_unavailable=true` to include
+tombstoned upstream rows (removed upstream but retained so curated sets don't silently lose
+members).
+
+Only **custom** templates are writable — `POST` takes YAML and parses it server-side (the YAML is
+stored byte-for-byte; the typed fields are extracted for filtering), create/edit is `operator`,
+delete is `admin`. Mutating an **upstream** row is refused (`409`, it's owned by the syncer), and a
+custom `id` that collides with an existing template (custom or upstream) is a `409` — that's how a
+custom template is prevented from shadowing an upstream one. Reads are `viewer`; writes are audited
+as `config_changed` (`template.create` / `template.update` / `template.delete`).
+
+Custom uploads are sanity-checked at write time (all `400` on failure): the body must be a single
+YAML document with a top-level `id`, a non-empty `info.name`, a severity in Nuclei's set
+(`info`/`low`/`medium`/`high`/`critical`/`unknown`), and at least one executable section (a protocol
+block — `http`, `dns`, `network`, `ssl`, … — or `workflows`). The `id` must be a URL-safe slug (no
+slashes), and on edit the `id` inside the body must equal the `{id}` in the URL. These checks are the
+cheap first line of defense; the upstream sync is intentionally *not* held to them (the community
+tree is authoritative). An authoritative `nuclei -validate` check on the scanner node is planned for
+a later slice.
+
 ## Config: scan policies
 
 A **scan policy** is the central, reusable **scan configuration** — it bundles *everything* a

@@ -79,7 +79,13 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
 - **users** — `id, email, role` where role ∈ `admin | operator | viewer`.
 - **targets** — `id, name, hosts[] (CIDRs/URLs), tags[], created_by`. Targets are the
   **scope allowlist** — scans can only hit pre-approved hosts (guardrail, see §6).
-- **template_sets** — `id, name, git_ref, filter (severities[], tags[], paths[])`.
+- **templates** — lossless source YAML plus indexed metadata (`id, source, path, name, author,
+  severity, description, tags, content_sha256`). The raw YAML is the sole complete
+  representation; metadata is extracted only for catalog filtering.
+- **template_sync_runs** — backend-owned upstream catalog refresh history, including pinned
+  commit and added/updated/removed counts.
+- **template_sets** — currently the alpha filter model; #85 migrates this to explicit catalog
+  membership in the next implementation slice.
 - **scan_policies** — `id, name, target_id, template_set_id, rate_limit, concurrency,
   timeout_sec, max_host_error`. The **central, reusable scan configuration**: it bundles
   *everything* a scan needs — the target (required — the scope), an optional template set

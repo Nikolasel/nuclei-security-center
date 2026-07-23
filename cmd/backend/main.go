@@ -90,6 +90,13 @@ func main() {
 	}
 
 	apiSrv := backend.NewServer(st, orch, auth, archive, web.Handler(), log)
+	templateSyncer, err := backend.NewTemplateSyncer(st, templateSyncConfig(), log)
+	if err != nil {
+		log.Error("configure template sync", "err", err)
+		os.Exit(1)
+	}
+	templateSyncer.Start(ctx)
+	log.Info("template syncer started")
 
 	// The scheduler ticker dispatches cron schedules; the DB is its source of
 	// truth so it resumes cleanly across restarts.
@@ -297,4 +304,22 @@ func retentionSweepInterval() time.Duration {
 		}
 	}
 	return time.Hour
+}
+
+// templateSyncConfig is deliberately backend-only: scanner nodes receive a
+// resolved, immutable bundle in a later #85 slice and never clone upstream
+// repositories themselves. "latest" resolves to the highest stable semver tag.
+func templateSyncConfig() backend.TemplateSyncerConfig {
+	interval := 6 * time.Hour
+	if v := os.Getenv("TEMPLATE_SYNC_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			interval = d
+		}
+	}
+	return backend.TemplateSyncerConfig{
+		Interval: interval,
+		Repo:     envOr("TEMPLATE_SYNC_REPO", "https://github.com/projectdiscovery/nuclei-templates.git"),
+		Ref:      envOr("TEMPLATE_SYNC_REF", "latest"),
+		Dir:      envOr("TEMPLATE_SYNC_DIR", "/tmp/nsc-template-sync"),
+	}
 }

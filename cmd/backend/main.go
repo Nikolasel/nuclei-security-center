@@ -313,6 +313,10 @@ func retentionSweepInterval() time.Duration {
 	return time.Hour
 }
 
+// defaultTemplateRepo is the community nuclei-templates catalog mirrored when
+// TEMPLATE_SYNC_REPO is unset (zero-config alpha).
+const defaultTemplateRepo = "https://github.com/projectdiscovery/nuclei-templates.git"
+
 // templateSyncConfig is deliberately backend-only: scanner nodes receive a
 // resolved, immutable bundle in a later #85 slice and never clone upstream
 // repositories themselves. "latest" resolves to the highest stable semver tag.
@@ -326,7 +330,7 @@ func templateSyncConfig() backend.TemplateSyncerConfig {
 			interval = d
 		}
 	}
-	repo := "https://github.com/projectdiscovery/nuclei-templates.git"
+	repo := defaultTemplateRepo
 	if v, ok := os.LookupEnv("TEMPLATE_SYNC_REPO"); ok {
 		repo = v
 	}

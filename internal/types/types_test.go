@@ -43,3 +43,27 @@ func TestNewIDFormat(t *testing.T) {
 		t.Error("NewID returned duplicate values")
 	}
 }
+
+func TestBundleDigestOrderIndependent(t *testing.T) {
+	a := []TemplateBundleEntry{
+		{ID: "b", Path: "http/b.yaml", SHA256: "22"},
+		{ID: "a", Path: "http/a.yaml", SHA256: "11"},
+	}
+	b := []TemplateBundleEntry{
+		{ID: "a", Path: "different/a.yaml", SHA256: "11"},
+		{ID: "b", Path: "http/b.yaml", SHA256: "22"},
+	}
+	// Same ids+hashes in a different order (and a different path for a) → same
+	// digest: the digest is content-addressed over sorted id\x00sha256 lines.
+	if BundleDigest(a) != BundleDigest(b) {
+		t.Errorf("digest should be order- and path-independent")
+	}
+	// A changed hash changes the digest.
+	c := []TemplateBundleEntry{{ID: "a", SHA256: "11"}, {ID: "b", SHA256: "99"}}
+	if BundleDigest(a) == BundleDigest(c) {
+		t.Errorf("digest should change when a content hash changes")
+	}
+	if BundleDigest(nil) == "" {
+		t.Errorf("digest of empty set should still be a valid sha256 hex, got empty")
+	}
+}

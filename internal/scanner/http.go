@@ -3,6 +3,7 @@ package scanner
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -35,7 +36,32 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/scans/{id}/log", s.auth(s.handleLog))
 	mux.HandleFunc("POST /v1/scans/{id}/cancel", s.auth(s.handleCancel))
 	mux.HandleFunc("GET /v1/capabilities", s.auth(s.handleCapabilities))
+	mux.HandleFunc("POST /v1/templates/bundle", s.auth(s.handleApplyBundle))
 	return mux
+}
+
+// maxBundleUpload caps the compressed request body for a pushed bundle, bounding
+// what the node reads before gzip; the decompressed size is separately bounded in
+// the bundle store (CWE-409/CWE-770).
+const maxBundleUpload = 256 << 20 // 256 MiB
+
+// handleApplyBundle receives a template bundle the backend pushes (#85), verifies
+// it, and activates it on the node. A bad bundle (bad archive, path escape, hash
+// or digest mismatch) is a 400; a genuine node-side failure is a 500.
+func (s *Server) handleApplyBundle(w http.ResponseWriter, r *http.Request) {
+	body := http.MaxBytesReader(w, r.Body, maxBundleUpload)
+	status, err := s.runner.ApplyBundle(body)
+	if err != nil {
+		if errors.Is(err, ErrInvalidBundle) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.log.Error("apply template bundle", "err", err)
+		http.Error(w, "failed to apply bundle", http.StatusInternalServerError)
+		return
+	}
+	s.log.Info("template bundle applied", "templates_commit", status.TemplatesCommit, "count", status.TemplateCount)
+	writeJSON(w, http.StatusOK, status)
 }
 
 // handleCapabilities reports the node's runtime facts (nuclei version, template

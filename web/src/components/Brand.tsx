@@ -10,16 +10,12 @@ export function Brand({ compact = false, className = "" }: BrandProps) {
   const mark = <img src="/nuclei-logo.svg" alt="" className="h-9 w-9 shrink-0" />;
 
   if (compact) {
-    return (
-      <div className={`flex items-center ${className}`} aria-label="Nuclei Security Center">
-        {mark}
-      </div>
-    );
+    return <div className={`flex items-center ${className}`}>{mark}</div>;
   }
 
   return (
     <NavLink
-      to="/findings"
+      to="/"
       className={`flex items-center gap-2.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-cyan-300 ${className}`}
       aria-label="Nuclei Security Center home"
     >

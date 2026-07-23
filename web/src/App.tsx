@@ -2,7 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { useMe } from "./auth";
 import { Brand } from "./components/Brand";
 import { Layout } from "./components/Layout";
-import { Button, Card, ErrorText, Spinner } from "./components/ui";
+import { Button, ErrorText, Spinner } from "./components/ui";
 import { FindingDetailPage } from "./pages/FindingDetailPage";
 import { FindingsPage } from "./pages/FindingsPage";
 import { NodesPage } from "./pages/NodesPage";
@@ -19,14 +19,14 @@ function LoginScreen() {
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-slate-950 px-4">
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_35%,rgba(34,211,238,0.18),transparent_32%),radial-gradient(circle_at_75%_75%,rgba(139,92,246,0.17),transparent_30%)]" />
-      <Card className="relative w-[min(92vw,25rem)] border border-cyan-200/20 bg-slate-950/85 p-8 text-center shadow-[0_0_55px_rgba(34,211,238,0.14)] backdrop-blur dark:border-cyan-200/20 dark:bg-slate-950/85">
+      <div className="relative w-[min(92vw,25rem)] rounded-lg border border-cyan-200/20 bg-slate-950/85 p-8 text-center shadow-[0_0_55px_rgba(34,211,238,0.14)] backdrop-blur">
         <Brand compact className="justify-center" />
         <h1 className="mt-5 text-xl font-semibold text-white">Nuclei Security Center</h1>
         <p className="mt-2 text-sm text-slate-300">Sign in with your organization account.</p>
         <a href="/api/auth/login" className="mt-6 inline-block">
           <Button variant="primary">Log in</Button>
         </a>
-      </Card>
+      </div>
     </div>
   );
 }

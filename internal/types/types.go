@@ -2,7 +2,14 @@
 // scanner node, plus the subset of Nuclei's JSONL output we parse for indexing.
 package types
 
-import "github.com/google/uuid"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
+	"sort"
+
+	"github.com/google/uuid"
+)
 
 // ScanState is the lifecycle of a scan, tracked by both the scanner node
 // (in memory, for one run) and the backend (durably, in Postgres).
@@ -103,10 +110,58 @@ const (
 // Capabilities is the response from GET /v1/capabilities on the scanner node —
 // the runtime facts only the node knows, polled by the backend to derive node
 // liveness (#98). Zone/CIDRs/tags are NOT here: those live in the backend's node
-// registry, not on the (stateless) node.
+// registry, not on the (stateless) node. TemplatesCommit is the digest of the
+// template bundle the node currently has active (empty if none applied yet).
 type Capabilities struct {
 	NucleiVersion   string `json:"nuclei_version,omitempty"`
 	TemplatesCommit string `json:"templates_commit,omitempty"`
+}
+
+// TemplateBundleEntry is one template inside a bundle's manifest (#85). SHA256 is
+// the hex sha256 of the template's YAML bytes — the same content hash the catalog
+// stores — so the node can verify each extracted file byte-for-byte.
+type TemplateBundleEntry struct {
+	ID     string `json:"id"`
+	Path   string `json:"path"`   // bundle-relative path, e.g. "http/cves/2021/CVE-2021-44228.yaml"
+	SHA256 string `json:"sha256"` // hex sha256 of the file's YAML bytes
+}
+
+// TemplateBundleManifest is manifest.json at the root of a bundle tarball. The
+// backend builds it from the full active catalog (upstream + custom) — a node
+// holds the whole catalog and a scan later selects by id, rather than the backend
+// re-streaming a per-scan subset. The node verifies every listed file is present
+// with the right hash and that Digest matches BundleDigest; the manifest also
+// gives the node its id→path index for per-scan template selection.
+type TemplateBundleManifest struct {
+	Digest    string                `json:"digest"` // canonical digest, == BundleDigest(Templates)
+	Templates []TemplateBundleEntry `json:"templates"`
+}
+
+// TemplateBundleStatus is the node's response to POST /v1/templates/bundle after
+// it verifies and activates a bundle. TemplatesCommit is the activated digest —
+// the value a subsequent scan records as its templates_commit for reproducibility.
+type TemplateBundleStatus struct {
+	TemplatesCommit string `json:"templates_commit"`
+	TemplateCount   int    `json:"template_count"`
+}
+
+// BundleDigest computes a bundle's canonical, order-independent digest: the
+// sha256 over each template's "id\x00sha256\n" line, sorted by id. It is content-
+// addressed — independent of tar byte order, file timestamps, and compression —
+// so the backend and node derive the identical value from the same set of
+// templates, and it becomes the scan's templates_commit. Duplicate or empty ids
+// are the caller's concern; this hashes exactly what it is given.
+func BundleDigest(entries []TemplateBundleEntry) string {
+	lines := make([]string, len(entries))
+	for i, e := range entries {
+		lines[i] = e.ID + "\x00" + e.SHA256 + "\n"
+	}
+	sort.Strings(lines)
+	h := sha256.New()
+	for _, l := range lines {
+		_, _ = io.WriteString(h, l)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // ScanProgress is a live snapshot of a running scan's progress, parsed from

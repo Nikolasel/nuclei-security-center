@@ -29,6 +29,7 @@ type Runner struct {
 	naabuPath  string
 	scanType   string // naabu scan mode for discovery: "syn" (default) or "connect" (#86)
 	workRoot   string
+	bundle     *bundleStore // node-managed active template tree pushed by the backend (#85)
 
 	mu    sync.Mutex
 	scans map[string]*job
@@ -52,13 +53,27 @@ func NewRunner(nucleiPath, naabuPath, scanType, workRoot string) (*Runner, error
 	if err := os.MkdirAll(workRoot, 0o750); err != nil {
 		return nil, fmt.Errorf("create work root: %w", err)
 	}
+	// The template bundle lives alongside per-scan dirs under workRoot. A UUID scan
+	// id never collides with this fixed name. Point SCANNER_WORK_DIR at a persistent
+	// volume to keep the applied bundle across restarts.
+	bundle, err := newBundleStore(filepath.Join(workRoot, "_bundle"))
+	if err != nil {
+		return nil, err
+	}
 	return &Runner{
 		nucleiPath: nucleiPath,
 		naabuPath:  naabuPath,
 		scanType:   normalizeScanType(scanType),
 		workRoot:   workRoot,
+		bundle:     bundle,
 		scans:      make(map[string]*job),
 	}, nil
+}
+
+// ApplyBundle verifies and activates a template bundle pushed by the backend
+// (#85). It is the node's receive side of the strictly backend→node transfer.
+func (r *Runner) ApplyBundle(body io.Reader) (types.TemplateBundleStatus, error) {
+	return r.bundle.apply(body)
 }
 
 // Start launches a scan asynchronously and returns its node-local id. The scan
@@ -309,10 +324,13 @@ func (r *Runner) syncTemplates() {
 var versionRe = regexp.MustCompile(`v?\d+\.\d+\.\d+`)
 
 // Capabilities reports the node's runtime facts for the backend's health poll
-// (#98). TemplatesCommit is not tracked standalone yet (the community set is
-// synced per scan), so it's left empty here — nuclei_version is the live signal.
+// (#98). TemplatesCommit is the digest of the active template bundle (#85), empty
+// until the backend pushes one; the backend uses it to detect drift before a scan.
 func (r *Runner) Capabilities() types.Capabilities {
-	return types.Capabilities{NucleiVersion: r.nucleiVersion()}
+	return types.Capabilities{
+		NucleiVersion:   r.nucleiVersion(),
+		TemplatesCommit: r.bundle.activeDigest(),
+	}
 }
 
 // nucleiVersion returns the engine version string, or "" if it can't be read.

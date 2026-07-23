@@ -227,8 +227,8 @@ schedules, or the database — only how to run one scan and hand back results.
 | `GET /v1/scans/{id}` | Status + progress + stats (`running`/`complete`/`failed`) |
 | `GET /v1/scans/{id}/results` | Stream NDJSON results (backend pulls on completion) |
 | `POST /v1/scans/{id}/cancel` | Cancel a running scan |
-| `POST /v1/templates/sync` | Force a template ref sync (also done inline before each scan) |
-| `GET /v1/capabilities` | `{ nuclei_version, templates_commit }` — polled by the backend for node liveness (#98) |
+| `POST /v1/templates/bundle` | Receive the **full-catalog** template bundle the backend pushes (#85): a gzipped tar of every active template's YAML + a `manifest.json`. The node holds the whole catalog (a scan later selects by id); the backend pushes it on an hourly idle cadence + a pre-dispatch top-up when the node is stale. The node extracts to a staging dir, verifies every file's sha256 and the canonical `manifest.digest` (`types.BundleDigest`), then atomically activates it — refusing (`400`) a bad archive, a path escape (zip-slip), or any hash/digest mismatch, fail-closed. → `{ templates_commit, template_count }`. Strictly backend→node (invariant #2); the node never pulls. Replaces the old `nuclei -update-templates` model. |
+| `GET /v1/capabilities` | `{ nuclei_version, templates_commit }` — polled by the backend for node liveness (#98); `templates_commit` is the digest of the active bundle (empty until one is pushed), used to detect drift before dispatch |
 | `GET /healthz` | Liveness / readiness |
 
 - **Auth:** `Authorization: Bearer <service-token>`, TLS required. **mTLS upgrade (#26):** for a

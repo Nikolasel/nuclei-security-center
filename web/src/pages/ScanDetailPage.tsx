@@ -192,26 +192,32 @@ export function ScanDetailPage() {
                   <p className="mt-1 text-xs text-neutral-500">
                     {(() => {
                       const p = scan.data.progress;
-                      const targets = p.hosts ?? 0;
-                      // Nuclei's input count is what we divide the aggregate
-                      // counters by (every target runs the same templates). After
-                      // discovery that input is the list of host:port ENDPOINTS, not
-                      // distinct hosts — a /24 with 2 live hosts and 14 open ports
-                      // scans as 14 endpoints, so calling them "hosts" here misreads
-                      // (and contradicts the "N ports on M hosts" line below). Label
-                      // by whether discovery ran; without it the inputs are hosts.
-                      const unit = (scan.data.discovered_targets?.length ?? 0) > 0 ? "endpoint" : "host";
-                      const perHost =
-                        targets > 0
-                          ? `${Math.round((p.requests ?? 0) / targets).toLocaleString()} / ${Math.round(
-                              (p.total ?? 0) / targets,
-                            ).toLocaleString()} req/${unit} · ${targets} ${unit}${targets === 1 ? "" : "s"}`
-                          : `${(p.requests ?? 0).toLocaleString()} / ${(p.total ?? 0).toLocaleString()} requests`;
+                      const done = p.requests ?? 0;
+                      const total = p.total ?? 0;
+                      // Nuclei reports only OVERALL request counts, not per-target
+                      // progress — it interleaves templates across all targets rather
+                      // than finishing one before the next. So show the real overall
+                      // numbers, and translate the completion fraction into an
+                      // ESTIMATE of targets done (~frac × count) rather than faking a
+                      // per-target request figure by dividing the total. When discovery
+                      // ran, the target count is the authoritative discovered-endpoint
+                      // count (stable, and matches the "N ports on M hosts" line below);
+                      // Nuclei's own "hosts" stat counts distinct hosts and fluctuates.
+                      // Without discovery, fall back to that host count.
+                      const discovered = scan.data.discovered_targets?.length ?? 0;
+                      const count = discovered > 0 ? discovered : (p.hosts ?? 0);
+                      const unit = discovered > 0 ? "endpoint" : "host";
+                      const frac = total > 0 ? done / total : (p.percent ?? 0) / 100;
+                      const estDone = Math.min(count, Math.round(frac * count));
+                      const summary =
+                        count > 0
+                          ? `${done.toLocaleString()} / ${total.toLocaleString()} requests · ~${estDone} of ${count} ${unit}${count === 1 ? "" : "s"} scanned`
+                          : `${done.toLocaleString()} / ${total.toLocaleString()} requests`;
                       const elapsed = (Date.now() - new Date(scan.data.created_at).getTime()) / 1000;
                       const eta = scanEtaSeconds(p, elapsed);
                       return (
                         <>
-                          {perHost}
+                          {summary}
                           {p.rps ? ` · ${p.rps} rps` : ""} ·{" "}
                           {eta != null ? `${formatDuration(eta)} remaining` : "estimating…"}
                         </>

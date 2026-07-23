@@ -328,10 +328,11 @@ function knob(v: number | null | undefined) {
 function discoveryCell(p: ScanPolicy) {
   if (p.discovery_enabled === false) return <span className="text-neutral-400">off</span>;
   const mode = p.discovery_scan_type?.trim();
+  const ports = p.discovery_ports?.trim() || "top-1000";
+  const summary = `${mode ? `${mode} · ` : ""}${ports}`;
   return (
-    <span className="font-mono text-xs">
-      {mode ? `${mode} · ` : ""}
-      {p.discovery_ports?.trim() ? p.discovery_ports : "top-1000"}
+    <span className="inline-block max-w-80 truncate align-bottom font-mono text-xs" title={summary}>
+      {summary}
     </span>
   );
 }

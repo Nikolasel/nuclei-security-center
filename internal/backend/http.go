@@ -115,6 +115,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/scan-policies/{id}", s.mutation(eventConfigChanged, "scan_policy.update", "scan_policy", RoleOperator, s.handleUpdateScanPolicy))
 	mux.HandleFunc("DELETE /api/scan-policies/{id}", s.mutation(eventConfigChanged, "scan_policy.delete", "scan_policy", RoleAdmin, s.handleDeleteScanPolicy))
 
+	// Template catalog (#85). Reads (browse/search/detail, sync history) → viewer.
+	// Only custom templates are writable; upstream rows are owned by the syncer and
+	// the store rejects mutating them (ErrTemplateReadOnly). Create/edit → operator,
+	// delete → admin (matches targets/template-sets). Audited as config changes.
+	// The literal /sync-runs route is more specific than /{id}, so ServeMux routes
+	// it first — no real Nuclei template id collides with it.
+	mux.HandleFunc("GET /api/templates", s.requireRole(RoleViewer, s.handleListTemplates))
+	mux.HandleFunc("GET /api/templates/sync-runs", s.requireRole(RoleViewer, s.handleListTemplateSyncRuns))
+	mux.HandleFunc("POST /api/templates", s.mutation(eventConfigChanged, "template.create", "template", RoleOperator, s.handleCreateTemplate))
+	mux.HandleFunc("GET /api/templates/{id}", s.requireRole(RoleViewer, s.handleGetTemplate))
+	mux.HandleFunc("PUT /api/templates/{id}", s.mutation(eventConfigChanged, "template.update", "template", RoleOperator, s.handleUpdateTemplate))
+	mux.HandleFunc("DELETE /api/templates/{id}", s.mutation(eventConfigChanged, "template.delete", "template", RoleAdmin, s.handleDeleteTemplate))
+
 	// Template sets (config)
 	mux.HandleFunc("GET /api/template-sets", s.requireRole(RoleViewer, s.handleListTemplateSets))
 	mux.HandleFunc("POST /api/template-sets", s.mutation(eventConfigChanged, "template_set.create", "template_set", RoleOperator, s.handleCreateTemplateSet))

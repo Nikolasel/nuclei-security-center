@@ -24,3 +24,8 @@ var ErrLastCatchAll = errors.New("cannot delete the last catch-all scanner node"
 // ErrNoNodeForTarget is returned by dispatch selection when no scanner node
 // serves a target's IP and there is no catch-all node to fall back to.
 var ErrNoNodeForTarget = errors.New("no scanner node serves the target")
+
+// ErrTemplateReadOnly is returned when a write targets an upstream template.
+// Upstream rows are owned by the sync (#85) — only custom templates are
+// editable through the API, so editing/deleting an upstream one is refused.
+var ErrTemplateReadOnly = errors.New("upstream templates are read-only")

@@ -1,0 +1,179 @@
+package backend
+
+import (
+	"errors"
+	"io"
+	"net/http"
+	"regexp"
+
+	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/Nikolasel/nuclei-security-center/internal/templates"
+)
+
+// maxTemplateYAML caps a custom-template upload. Nuclei templates are small
+// (a few KB); this is generous while bounding memory on a bad request (CWE-770).
+const maxTemplateYAML = 1 << 20 // 1 MiB
+
+// customIDPattern constrains a custom template's Nuclei id so it is a safe,
+// single-path-segment slug: it becomes the {id} route param and the synthesized
+// custom/<id>.yaml catalog path, so slashes, spaces, and dots-only are rejected.
+var customIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$`)
+
+// templateResponse is the single-template envelope (detail / create / update).
+// It embeds the catalog row and adds the yaml body, which the Template struct
+// itself hides (`json:"-"`) so list responses stay lean.
+type templateResponse struct {
+	store.Template
+	YAML string `json:"yaml"`
+}
+
+func templateDetail(t store.Template) templateResponse {
+	return templateResponse{Template: t, YAML: t.YAML}
+}
+
+// templatesPage is the paginated envelope for GET /api/templates.
+type templatesPage struct {
+	Items  []store.Template `json:"items"`
+	Total  int              `json:"total"`
+	Limit  int              `json:"limit"`
+	Offset int              `json:"offset"`
+}
+
+func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if src := q.Get("source"); src != "" && src != "upstream" && src != "custom" {
+		http.Error(w, "source must be 'upstream' or 'custom'", http.StatusBadRequest)
+		return
+	}
+	limit, offset := pageParams(q)
+	f := store.TemplateFilter{
+		Source:             q.Get("source"),
+		Severities:         multiCSV(q, "severity"),
+		Tags:               multiCSV(q, "tag"),
+		Query:              q.Get("q"),
+		IncludeUnavailable: q.Get("include_unavailable") == "true",
+	}
+	items, total, err := s.store.ListTemplates(r.Context(), f, limit, offset)
+	if err != nil {
+		s.serverError(w, "list templates", err)
+		return
+	}
+	if items == nil {
+		items = []store.Template{}
+	}
+	writeJSON(w, http.StatusOK, templatesPage{Items: items, Total: total, Limit: limit, Offset: offset})
+}
+
+func (s *Server) handleGetTemplate(w http.ResponseWriter, r *http.Request) {
+	t, err := s.store.GetTemplate(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, templateDetail(t))
+}
+
+func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
+	body, ok := readTemplateBody(w, r)
+	if !ok {
+		return
+	}
+	t, ok := s.parseCustomTemplate(w, body)
+	if !ok {
+		return
+	}
+	t.CreatedBy = identityFrom(r.Context()).Subject
+	created, err := s.store.CreateCustomTemplate(r.Context(), t)
+	if err != nil {
+		s.writeStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, templateDetail(created))
+}
+
+func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
+	body, ok := readTemplateBody(w, r)
+	if !ok {
+		return
+	}
+	t, ok := s.parseCustomTemplate(w, body)
+	if !ok {
+		return
+	}
+	// The id lives inside the YAML and is the primary key; changing it on edit
+	// would be an identity swap, not an update. Require the body id to match the
+	// URL so the PK stays stable.
+	if t.ID != r.PathValue("id") {
+		http.Error(w, "template id in body does not match the URL", http.StatusBadRequest)
+		return
+	}
+	updated, err := s.store.UpdateCustomTemplate(r.Context(), r.PathValue("id"), t)
+	if err != nil {
+		s.writeStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, templateDetail(updated))
+}
+
+func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.DeleteCustomTemplate(r.Context(), r.PathValue("id")); err != nil {
+		s.writeStoreErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleListTemplateSyncRuns backs the Sync view: recent refresh outcomes,
+// newest first. Read-only; triggering a sync on demand is a later slice.
+func (s *Server) handleListTemplateSyncRuns(w http.ResponseWriter, r *http.Request) {
+	runs, err := s.store.ListTemplateSyncRuns(r.Context(), 20)
+	if err != nil {
+		s.serverError(w, "list template sync runs", err)
+		return
+	}
+	if runs == nil {
+		runs = []store.TemplateSyncRun{}
+	}
+	writeJSON(w, http.StatusOK, runs)
+}
+
+// readTemplateBody reads a raw YAML upload (not JSON) up to maxTemplateYAML,
+// rejecting an empty body with 400.
+func readTemplateBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxTemplateYAML))
+	if err != nil {
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return nil, false
+	}
+	if len(body) == 0 {
+		http.Error(w, "empty template body", http.StatusBadRequest)
+		return nil, false
+	}
+	return body, true
+}
+
+// parseCustomTemplate validates a YAML upload with the same parser the syncer
+// uses, then builds a store.Template with a synthesized custom/<id>.yaml path.
+// It writes the 400 itself and returns ok=false on any validation failure.
+func (s *Server) parseCustomTemplate(w http.ResponseWriter, body []byte) (store.Template, bool) {
+	// The path passed to Parse is only used for metadata; the authoritative
+	// custom path is derived from the parsed id below, so a placeholder is fine.
+	meta, err := templates.Parse("custom/placeholder.yaml", body)
+	if errors.Is(err, templates.ErrNotTemplate) {
+		http.Error(w, "not a Nuclei template: missing top-level id", http.StatusBadRequest)
+		return store.Template{}, false
+	}
+	if err != nil {
+		http.Error(w, "invalid template: "+err.Error(), http.StatusBadRequest)
+		return store.Template{}, false
+	}
+	if !customIDPattern.MatchString(meta.ID) {
+		http.Error(w, "template id must be a slug (letters, digits, dot, dash, underscore; no slashes)", http.StatusBadRequest)
+		return store.Template{}, false
+	}
+	return store.Template{
+		ID: meta.ID, Path: "custom/" + meta.ID + ".yaml", YAML: meta.YAML,
+		ContentSHA256: meta.ContentSHA256, Name: meta.Name, Author: meta.Author,
+		Severity: meta.Severity, Description: meta.Description, Tags: meta.Tags,
+	}, true
+}

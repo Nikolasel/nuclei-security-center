@@ -20,10 +20,13 @@ func (s *Store) setExists(ctx context.Context, setID string) error {
 	return err
 }
 
-func (s *Store) explicitSetExists(ctx context.Context, setID string) error {
+// requireExplicitTemplateSet locks the set row for the caller's transaction and
+// rejects legacy rows. Holding the lock through the write keeps conversion and
+// membership edits from interleaving.
+func requireExplicitTemplateSet(ctx context.Context, tx pgx.Tx, setID string) error {
 	var legacy bool
-	err := s.pool.QueryRow(ctx,
-		`SELECT legacy_filter FROM template_sets WHERE id = $1`, setID,
+	err := tx.QueryRow(ctx,
+		`SELECT legacy_filter FROM template_sets WHERE id = $1 FOR UPDATE`, setID,
 	).Scan(&legacy)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
@@ -68,14 +71,14 @@ func (s *Store) ListTemplateSetMembers(ctx context.Context, setID string) ([]Tem
 // ids. An unknown template id is ErrInvalidRef (FK); an unknown set is
 // ErrNotFound. Returns the resulting member count.
 func (s *Store) ReplaceTemplateSetMembers(ctx context.Context, setID string, ids []string, addedBy string) (int, error) {
-	if err := s.explicitSetExists(ctx, setID); err != nil {
-		return 0, err
-	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := requireExplicitTemplateSet(ctx, tx, setID); err != nil {
+		return 0, err
+	}
 
 	if _, err := tx.Exec(ctx, `DELETE FROM template_set_members WHERE template_set_id = $1`, setID); err != nil {
 		return 0, fmt.Errorf("clear template set members: %w", err)
@@ -106,11 +109,16 @@ func (s *Store) ReplaceTemplateSetMembers(ctx context.Context, setID string, ids
 // AddTemplateSetMembers adds ids to a set, ignoring ones already present
 // (idempotent). Unknown template id ⇒ ErrInvalidRef; unknown set ⇒ ErrNotFound.
 func (s *Store) AddTemplateSetMembers(ctx context.Context, setID string, ids []string, addedBy string) error {
-	if err := s.explicitSetExists(ctx, setID); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin add template set members: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := requireExplicitTemplateSet(ctx, tx, setID); err != nil {
 		return err
 	}
 	for _, id := range ids {
-		if _, err := s.pool.Exec(ctx,
+		if _, err := tx.Exec(ctx,
 			`INSERT INTO template_set_members (template_set_id, template_id, added_by)
 			 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, setID, id, nullStr(addedBy)); err != nil {
 			if isForeignKeyViolation(err) {
@@ -119,22 +127,33 @@ func (s *Store) AddTemplateSetMembers(ctx context.Context, setID string, ids []s
 			return fmt.Errorf("add template set member: %w", err)
 		}
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit add template set members: %w", err)
+	}
 	return nil
 }
 
 // RemoveTemplateSetMember removes one template from a set. ErrNotFound if the
 // set is unknown or the template is not a member.
 func (s *Store) RemoveTemplateSetMember(ctx context.Context, setID, templateID string) error {
-	if err := s.explicitSetExists(ctx, setID); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin remove template set member: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := requireExplicitTemplateSet(ctx, tx, setID); err != nil {
 		return err
 	}
-	tag, err := s.pool.Exec(ctx,
+	tag, err := tx.Exec(ctx,
 		`DELETE FROM template_set_members WHERE template_set_id = $1 AND template_id = $2`, setID, templateID)
 	if err != nil {
 		return fmt.Errorf("remove template set member: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrNotFound
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit remove template set member: %w", err)
 	}
 	return nil
 }

@@ -89,14 +89,15 @@ func (s *Store) ListTemplateSets(ctx context.Context) ([]TemplateSet, error) {
 
 // UpdateTemplateSet updates mutable fields and returns the fresh row.
 func (s *Store) UpdateTemplateSet(ctx context.Context, id string, in TemplateSet) (TemplateSet, error) {
-	current, err := s.GetTemplateSet(ctx, id)
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
+		return TemplateSet{}, fmt.Errorf("begin update template set: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := requireExplicitTemplateSet(ctx, tx, id); err != nil {
 		return TemplateSet{}, err
 	}
-	if current.LegacyFilter {
-		return TemplateSet{}, ErrTemplateSetLegacy
-	}
-	t, err := scanTemplateSet(s.pool.QueryRow(ctx,
+	t, err := scanTemplateSet(tx.QueryRow(ctx,
 		`UPDATE template_sets
 		 SET name = $2, updated_at = now()
 		 WHERE id = $1
@@ -107,6 +108,9 @@ func (s *Store) UpdateTemplateSet(ctx context.Context, id string, in TemplateSet
 			return TemplateSet{}, ErrConflict
 		}
 		return TemplateSet{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return TemplateSet{}, fmt.Errorf("commit update template set: %w", err)
 	}
 	return t, nil
 }
@@ -227,7 +231,7 @@ func legacyTemplateFilterWhere(filter LegacyTemplateFilter) (string, []any) {
 		p := push(paths)
 		conds = append(conds,
 			"(path = ANY("+p+") OR EXISTS (SELECT 1 FROM unnest("+p+"::text[]) AS selected(prefix)"+
-				" WHERE path LIKE selected.prefix || '/%'))")
+				" WHERE starts_with(path, selected.prefix || '/')))")
 	}
 	return strings.Join(conds, " AND "), args
 }

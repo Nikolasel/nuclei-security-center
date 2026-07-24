@@ -153,8 +153,13 @@ function ScanPolicyModal({ existing, onClose }: { existing?: ScanPolicy; onClose
           <Select value={templateSetId} onChange={(e) => setTemplateSetId(e.target.value)} className="w-full">
             <option value="">All templates</option>
             {(templateSets.data ?? []).map((t) => (
-              <option key={t.id} value={t.id}>
+              <option key={t.id} value={t.id} disabled={t.legacy_filter || t.member_count === 0}>
                 {t.name}
+                {t.legacy_filter
+                  ? " (legacy — convert first)"
+                  : t.member_count === 0
+                    ? " (empty)"
+                    : ` (${t.member_count} templates)`}
               </option>
             ))}
           </Select>

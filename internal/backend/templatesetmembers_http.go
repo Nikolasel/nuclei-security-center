@@ -70,11 +70,38 @@ func (s *Server) handleRemoveTemplateSetMember(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleConvertTemplateSet materializes a legacy filter snapshot against the
+// current active upstream catalog in one transaction. A no-match conversion fails
+// closed and leaves the legacy set untouched.
+func (s *Server) handleConvertTemplateSet(w http.ResponseWriter, r *http.Request) {
+	set, err := s.store.ConvertLegacyTemplateSet(
+		r.Context(), r.PathValue("id"), identityFrom(r.Context()).Subject,
+	)
+	if err != nil {
+		s.writeConvertTemplateSetErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, set)
+}
+
+func (s *Server) writeConvertTemplateSetErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrTemplateSetNotLegacy) ||
+		errors.Is(err, store.ErrNoTemplateMatches) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	s.writeStoreErr(w, err)
+}
+
 // writeMemberErr maps a bad template id (FK violation, ErrInvalidRef) to a 400
 // distinct from a 404 on the set itself; everything else falls through.
 func (s *Server) writeMemberErr(w http.ResponseWriter, err error) {
 	if errors.Is(err, store.ErrInvalidRef) {
 		http.Error(w, "one or more template_ids do not exist", http.StatusBadRequest)
+		return
+	}
+	if errors.Is(err, store.ErrTemplateSetLegacy) {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	s.writeStoreErr(w, err)

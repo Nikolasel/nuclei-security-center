@@ -68,10 +68,14 @@ export interface ScannerNodeInput {
 export interface TemplateSet {
   id: string;
   name: string;
-  git_ref?: string;
-  severities: string[];
-  tags: string[];
-  paths: string[];
+  legacy_filter: boolean;
+  legacy_filter_snapshot?: {
+    git_ref?: string;
+    severities: string[];
+    tags: string[];
+    paths: string[];
+  };
+  member_count: number;
   created_by?: string;
   created_at: string;
   updated_at: string;
@@ -478,6 +482,8 @@ export const api = {
     request<TemplateSet>("POST", "/api/template-sets", t),
   updateTemplateSet: (id: string, t: Partial<TemplateSet>) =>
     request<TemplateSet>("PUT", `/api/template-sets/${id}`, t),
+  convertTemplateSet: (id: string) =>
+    request<TemplateSet>("POST", `/api/template-sets/${id}/convert`),
   deleteTemplateSet: (id: string) => request<void>("DELETE", `/api/template-sets/${id}`),
 
   // Scan policies (#87). Reads are viewer; create/edit are operator; delete is

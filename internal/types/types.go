@@ -35,15 +35,9 @@ type ScanSpec struct {
 // TemplateSelector picks which templates run. TemplateIDs select entries from
 // the full catalog bundle already active on the scanner node; TemplatesCommit is
 // that bundle's canonical digest, making a scan reproducible as (ids, commit).
-// The legacy filter fields remain on the wire during the #85 transition but are
-// no longer used by dispatch or the scanner.
 type TemplateSelector struct {
 	TemplateIDs     []string `json:"template_ids,omitempty"`
 	TemplatesCommit string   `json:"templates_commit,omitempty"`
-	GitRef          string   `json:"git_ref,omitempty"`
-	Severities      []string `json:"severities,omitempty"`
-	Tags            []string `json:"tags,omitempty"`
-	Paths           []string `json:"paths,omitempty"`
 }
 
 // ScanOptions maps to Nuclei's rate/concurrency/timeout knobs. MaxHostError is

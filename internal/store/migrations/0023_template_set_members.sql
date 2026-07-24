@@ -1,8 +1,8 @@
 -- Explicit template-set membership (#85). A template set becomes a curated list
 -- of individual catalog templates (upstream or custom), replacing the POC's
 -- "filter over the community repo" model. This migration is ADDITIVE: the legacy
--- git_ref/severities/tags/paths columns stay for now so dispatch keeps working;
--- the scan-contract cutover slice removes them and switches dispatch to members.
+-- git_ref/severities/tags/paths columns stay for now; migration 0025 snapshots
+-- and removes them after dispatch has switched to explicit membership.
 
 CREATE TABLE IF NOT EXISTS template_set_members (
     template_set_id UUID NOT NULL REFERENCES template_sets(id) ON DELETE CASCADE,

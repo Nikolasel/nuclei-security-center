@@ -289,14 +289,26 @@ curl -sb jar.txt -X POST   localhost:8080/api/template-sets/<set_id>/members -d 
 curl -sb jar.txt -X DELETE localhost:8080/api/template-sets/<set_id>/members/tech-detect
 # list a set's member templates (catalog rows, yaml omitted)
 curl -sb jar.txt localhost:8080/api/template-sets/<set_id>/members
+# convert a pre-0025 filter set against the current active catalog
+curl -sb jar.txt -X POST localhost:8080/api/template-sets/<set_id>/convert
 ```
 
-A template set now reports `legacy_filter` (true for the pre-existing POC filter-style sets) and a
-live `member_count`. Reads are `viewer`; membership edits are `operator`, audited as
-`config_changed` (`template_set.members_replace` / `_add` / `_remove`). An unknown `template_id`
-is a `400`; an unknown set is a `404`. Dispatch resolves members to concrete `template_ids`.
-Legacy-filter sets and zero-member sets fail closed with “convert to an explicit selection first”;
-a set containing a tombstoned/unavailable template also fails until its selection is updated.
+A template set reports `legacy_filter`, a read-only `legacy_filter_snapshot` for pre-existing POC
+rows, and a live `member_count`. The old top-level `git_ref` / `severities` / `tags` / `paths`
+fields are no longer part of the table or API contract. Conversion resolves the saved severity,
+tag, and path filters against the **current active upstream catalog** (legacy filters never
+selected custom templates), atomically inserts those exact IDs, then clears `legacy_filter` and
+its snapshot; before conversion, the retired per-set git ref is shown only as historical context
+because the backend-wide catalog pin is now authoritative. A filter that matches nothing returns
+`409` and leaves the set unchanged.
+
+Reads are `viewer`; conversion and membership edits are `operator`, audited as
+`config_changed` (`template_set.convert` / `template_set.members_replace` / `_add` / `_remove`). An unknown `template_id`
+is a `400`; an unknown set is a `404`. Direct membership edits on a legacy row return `409`, keeping
+it read-only until the atomic conversion action. Dispatch resolves members to concrete
+`template_ids`. Legacy-filter sets and zero-member sets fail closed with “convert to an explicit
+selection first”; a set containing a tombstoned/unavailable template also fails until its selection
+is updated.
 
 ## Template catalog
 

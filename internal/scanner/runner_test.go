@@ -12,9 +12,8 @@ func TestBuildArgs(t *testing.T) {
 	spec := types.ScanSpec{
 		Targets: []string{"scanme.sh"},
 		Templates: types.TemplateSelector{
-			Severities: []string{"critical", "high"},
-			Tags:       []string{"cve"},
-			Paths:      []string{"legacy/path.yaml"},
+			TemplateIDs:     []string{"a", "b"},
+			TemplatesCommit: "catalog-digest",
 		},
 		Options: types.ScanOptions{RateLimit: 150, Concurrency: 25, MaxHostError: 50},
 	}
@@ -50,7 +49,7 @@ func TestBuildArgs(t *testing.T) {
 	if !slices.Contains(args, "-stats-json") {
 		t.Errorf("expected -stats-json in args: %v", args)
 	}
-	for _, legacy := range []string{"-severity", "-tags", "legacy/path.yaml"} {
+	for _, legacy := range []string{"-severity", "-tags"} {
 		if slices.Contains(args, legacy) {
 			t.Errorf("legacy selector %q must not reach nuclei: %v", legacy, args)
 		}

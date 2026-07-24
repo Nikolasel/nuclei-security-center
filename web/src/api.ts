@@ -43,6 +43,8 @@ export interface ScannerNode {
   healthy?: boolean | null;
   last_seen?: string;
   nuclei_version?: string;
+  templates_commit?: string;
+  templates_synced_at?: string;
   /** the last poll failure's message; present only while unhealthy (e.g. a 401
    *  from a wrong token, or a connection error from an unreachable node). */
   health_error?: string;
@@ -79,6 +81,61 @@ export interface TemplateSet {
   created_by?: string;
   created_at: string;
   updated_at: string;
+}
+
+export type TemplateSource = "upstream" | "custom";
+
+export interface Template {
+  id: string;
+  source: TemplateSource;
+  path: string;
+  content_sha256: string;
+  name: string;
+  author: string;
+  severity: string;
+  description: string;
+  tags: string[];
+  upstream_ref?: string;
+  revision: number;
+  availability: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TemplateDetail extends Template {
+  yaml: string;
+}
+
+export interface TemplatesQuery {
+  source?: TemplateSource;
+  severities?: string[];
+  tags?: string[];
+  q?: string;
+  include_unavailable?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export interface TemplateSyncRun {
+  id: string;
+  started_at: string;
+  finished_at?: string;
+  status: string;
+  ref_before?: string;
+  ref_after?: string;
+  added: number;
+  removed: number;
+  updated: number;
+  skipped: number;
+  error?: string;
+}
+
+export interface TemplateSyncStatus {
+  enabled: boolean;
+  interval?: string;
+  repo?: string;
+  ref?: string;
 }
 
 // ScanPolicy (#87) is the central, reusable scan configuration: it bundles
@@ -460,6 +517,20 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return (await res.json()) as T;
 }
 
+async function requestYAML<T>(method: string, path: string, yaml: string): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/yaml" },
+    body: yaml,
+  });
+  if (!res.ok) {
+    const text = (await res.text()).trim();
+    throw new ApiError(res.status, text || res.statusText);
+  }
+  return (await res.json()) as T;
+}
+
 export const api = {
   me: () => request<Identity>("GET", "/api/auth/me"),
 
@@ -476,6 +547,36 @@ export const api = {
   updateNode: (id: string, n: ScannerNodeInput) =>
     request<ScannerNode>("PUT", `/api/nodes/${id}`, n),
   deleteNode: (id: string) => request<void>("DELETE", `/api/nodes/${id}`),
+  syncNodeTemplates: (id: string) =>
+    request<{ templates_commit: string; template_count: number }>(
+      "POST",
+      `/api/nodes/${id}/templates/sync`,
+    ),
+
+  listTemplates: (q: TemplatesQuery = {}) => {
+    const p = new URLSearchParams();
+    if (q.source) p.set("source", q.source);
+    if (q.severities?.length) p.set("severity", q.severities.join(","));
+    if (q.tags?.length) p.set("tag", q.tags.join(","));
+    if (q.q) p.set("q", q.q);
+    if (q.include_unavailable) p.set("include_unavailable", "true");
+    if (q.limit != null) p.set("limit", String(q.limit));
+    if (q.offset != null) p.set("offset", String(q.offset));
+    const qs = p.toString();
+    return request<Page<Template>>("GET", qs ? `/api/templates?${qs}` : "/api/templates");
+  },
+  getTemplate: (id: string) =>
+    request<TemplateDetail>("GET", `/api/templates/${encodeURIComponent(id)}`),
+  createTemplate: (yaml: string) => requestYAML<TemplateDetail>("POST", "/api/templates", yaml),
+  updateTemplate: (id: string, yaml: string) =>
+    requestYAML<TemplateDetail>("PUT", `/api/templates/${encodeURIComponent(id)}`, yaml),
+  deleteTemplate: (id: string) =>
+    request<void>("DELETE", `/api/templates/${encodeURIComponent(id)}`),
+  getTemplateSync: () => request<TemplateSyncStatus>("GET", "/api/templates/sync"),
+  requestTemplateSync: () =>
+    request<{ queued: boolean }>("POST", "/api/templates/sync"),
+  listTemplateSyncRuns: () =>
+    request<TemplateSyncRun[]>("GET", "/api/templates/sync-runs"),
 
   listTemplateSets: () => request<TemplateSet[]>("GET", "/api/template-sets"),
   createTemplateSet: (t: Partial<TemplateSet>) =>
@@ -485,6 +586,16 @@ export const api = {
   convertTemplateSet: (id: string) =>
     request<TemplateSet>("POST", `/api/template-sets/${id}/convert`),
   deleteTemplateSet: (id: string) => request<void>("DELETE", `/api/template-sets/${id}`),
+  listTemplateSetMembers: (id: string) =>
+    request<Template[]>("GET", `/api/template-sets/${id}/members`),
+  replaceTemplateSetMembers: (id: string, templateIDs: string[]) =>
+    request<TemplateSet>("PUT", `/api/template-sets/${id}/members`, {
+      template_ids: templateIDs,
+    }),
+  addTemplateSetMembers: (id: string, templateIDs: string[]) =>
+    request<TemplateSet>("POST", `/api/template-sets/${id}/members`, {
+      template_ids: templateIDs,
+    }),
 
   // Scan policies (#87). Reads are viewer; create/edit are operator; delete is
   // admin. A null knob means "use the built-in default" for that field.

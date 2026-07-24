@@ -21,15 +21,19 @@ import (
 // OIDC/BFF auth (§6); when auth is nil (OIDC unconfigured) the guards fall back
 // to a dev identity with all roles, so local smoke tests still work.
 type Server struct {
-	store       *store.Store
-	orch        *Orchestrator
-	auth        *Authenticator
-	archive     ObjectStore          // nil when object storage is not configured
-	searcher    FindingsSearcher     // reads the findings list; defaults to Postgres
-	distributor *TemplateDistributor // nil when template sync is disabled (#85)
-	spa         http.Handler
-	log         *slog.Logger
+	store          *store.Store
+	orch           *Orchestrator
+	auth           *Authenticator
+	archive        ObjectStore          // nil when object storage is not configured
+	searcher       FindingsSearcher     // reads the findings list; defaults to Postgres
+	templateSyncer *TemplateSyncer      // nil when upstream catalog sync is disabled
+	distributor    *TemplateDistributor // nil when template sync is disabled (#85)
+	spa            http.Handler
+	log            *slog.Logger
 }
+
+// SetTemplateSyncer wires the upstream catalog status/trigger API.
+func (s *Server) SetTemplateSyncer(syncer *TemplateSyncer) { s.templateSyncer = syncer }
 
 // SetTemplateDistributor wires both the admin "sync now" action and the
 // orchestrator's pre-dispatch top-up (#85).
@@ -129,9 +133,11 @@ func (s *Server) Handler() http.Handler {
 	// Only custom templates are writable; upstream rows are owned by the syncer and
 	// the store rejects mutating them (ErrTemplateReadOnly). Create/edit → operator,
 	// delete → admin (matches targets/template-sets). Audited as config changes.
-	// The literal /sync-runs route is more specific than /{id}, so ServeMux routes
-	// it first — no real Nuclei template id collides with it.
+	// Literal sync routes are more specific than /{id}, so ServeMux routes them
+	// first — no real Nuclei template id collides with them.
 	mux.HandleFunc("GET /api/templates", s.requireRole(RoleViewer, s.handleListTemplates))
+	mux.HandleFunc("GET /api/templates/sync", s.requireRole(RoleViewer, s.handleGetTemplateSync))
+	mux.HandleFunc("POST /api/templates/sync", s.mutation(eventConfigChanged, "templates.sync_requested", "template_sync", RoleOperator, s.handleRequestTemplateSync))
 	mux.HandleFunc("GET /api/templates/sync-runs", s.requireRole(RoleViewer, s.handleListTemplateSyncRuns))
 	mux.HandleFunc("POST /api/templates", s.mutation(eventConfigChanged, "template.create", "template", RoleOperator, s.handleCreateTemplate))
 	mux.HandleFunc("GET /api/templates/{id}", s.requireRole(RoleViewer, s.handleGetTemplate))

@@ -169,6 +169,12 @@ The JSON API is served under **`/api/*`**; the React SPA (in `web/`) is built by
 **embedded into the backend binary** (`go:embed`), served at `/` same-origin so the BFF
 session cookie stays same-site. `/healthz` stays at the root for probes.
 
+**Template workflow UI (#85):** `/templates` has Catalog, Custom templates, and Sync tabs.
+Catalog selection adds exact template IDs to explicit sets; custom YAML can be pasted or uploaded;
+Sync shows the safe upstream configuration, recent runs, and queues an operator-triggered refresh.
+`/template-sets` edits exact membership (legacy rows remain read-only until conversion), and the
+admin node table exposes each node's active bundle digest/last push plus “Sync templates.”
+
 ## Architecture in one breath
 
 Three services, split so the scanner is a disposable, credential-less execution engine:

@@ -14,6 +14,7 @@ import { ServiceAccountsPage } from "./pages/ServiceAccountsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { TargetsPage } from "./pages/TargetsPage";
 import { TemplateSetsPage } from "./pages/TemplateSetsPage";
+import { TemplatesPage } from "./pages/TemplatesPage";
 
 function LoginScreen() {
   return (
@@ -60,6 +61,7 @@ export default function App() {
         <Route path="/scans/:id" element={<ScanDetailPage />} />
         <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/targets" element={<TargetsPage />} />
+        <Route path="/templates" element={<TemplatesPage />} />
         <Route path="/template-sets" element={<TemplateSetsPage />} />
         <Route path="/scan-policies" element={<ScanPoliciesPage />} />
         <Route path="/nodes" element={<NodesPage />} />

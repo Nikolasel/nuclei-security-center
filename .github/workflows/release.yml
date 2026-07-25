@@ -45,7 +45,7 @@ jobs:
       # QEMU covers any target-arch execution during the build. The Go/SPA/nuclei
       # stages are pinned to BUILDPLATFORM (no emulation), but keep this so the
       # arm64 leg still works if a future stage adds a target-arch RUN.
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
 
       - uses: docker/setup-buildx-action@v4
 

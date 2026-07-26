@@ -17,7 +17,7 @@ import (
 // Findings export (Phase 2, slice 3). The deduplicated lifecycle list is
 // exportable in four formats: JSON (the API row shape), CSV (a flat table for
 // spreadsheets), SARIF 2.1.0 (for code-scanning / CI ingestion), and raw JSONL
-// (the verbatim Nuclei output of each finding's latest occurrence — Nuclei's
+// (the preserved Nuclei output of each finding's latest occurrence — Nuclei's
 // native out.jsonl shape, for tools that consume it). All honor the same filters
 // as GET /api/findings, so "export what I'm looking at" works. SARIF is emitted
 // as a small, stable struct via encoding/json rather than a dependency — it's a
@@ -91,12 +91,12 @@ func (s *Server) handleExportFindings(w http.ResponseWriter, r *http.Request) {
 // writeFindingsRawJSONL emits one compact raw Nuclei JSON object per line — the
 // native out.jsonl shape — with the lifecycle finding id prepended as a
 // namespaced field so each line joins back to the projected exports. Each
-// payload is already valid JSON from the store (Postgres JSONB).
+// payload is already valid JSON from the store's preserved raw-line column.
 func writeFindingsRawJSONL(w io.Writer, rows []store.RawExportRow) {
 	var buf bytes.Buffer
 	for _, r := range rows {
 		buf.Reset()
-		// Compact strips the JSONB pretty-printing to one line.
+		// Compact guarantees one JSON object per line while retaining its values.
 		if err := json.Compact(&buf, r.Raw); err != nil {
 			// Not compactable (shouldn't happen) — emit verbatim, unjoined.
 			_, _ = w.Write(r.Raw)

@@ -50,10 +50,18 @@ type templatesPage struct {
 	Offset int              `json:"offset"`
 }
 
+type templateIDsResponse struct {
+	IDs []string `json:"ids"`
+}
+
 func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	if src := q.Get("source"); src != "" && src != "upstream" && src != "custom" {
 		http.Error(w, "source must be 'upstream' or 'custom'", http.StatusBadRequest)
+		return
+	}
+	if sortBy := q.Get("sort"); sortBy != "" && sortBy != "name" && sortBy != "inserted" {
+		http.Error(w, "sort must be 'name' or 'inserted'", http.StatusBadRequest)
 		return
 	}
 	limit, offset := pageParams(q)
@@ -61,7 +69,9 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 		Source:             q.Get("source"),
 		Severities:         multiCSV(q, "severity"),
 		Tags:               multiCSV(q, "tag"),
+		CVEOnly:            q.Get("cve") == "true",
 		Query:              q.Get("q"),
+		Sort:               q.Get("sort"),
 		IncludeUnavailable: q.Get("include_unavailable") == "true",
 	}
 	items, total, err := s.store.ListTemplates(r.Context(), f, limit, offset)
@@ -73,6 +83,35 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 		items = []store.Template{}
 	}
 	writeJSON(w, http.StatusOK, templatesPage{Items: items, Total: total, Limit: limit, Offset: offset})
+}
+
+func (s *Server) handleListTemplateIDs(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if src := q.Get("source"); src != "" && src != "upstream" && src != "custom" {
+		http.Error(w, "source must be 'upstream' or 'custom'", http.StatusBadRequest)
+		return
+	}
+	if sortBy := q.Get("sort"); sortBy != "" && sortBy != "name" && sortBy != "inserted" {
+		http.Error(w, "sort must be 'name' or 'inserted'", http.StatusBadRequest)
+		return
+	}
+	ids, err := s.store.ListTemplateIDs(r.Context(), store.TemplateFilter{
+		Source:             q.Get("source"),
+		Severities:         multiCSV(q, "severity"),
+		Tags:               multiCSV(q, "tag"),
+		CVEOnly:            q.Get("cve") == "true",
+		Query:              q.Get("q"),
+		Sort:               q.Get("sort"),
+		IncludeUnavailable: q.Get("include_unavailable") == "true",
+	})
+	if err != nil {
+		s.serverError(w, "list template ids", err)
+		return
+	}
+	if ids == nil {
+		ids = []string{}
+	}
+	writeJSON(w, http.StatusOK, templateIDsResponse{IDs: ids})
 }
 
 func (s *Server) handleGetTemplate(w http.ResponseWriter, r *http.Request) {
@@ -169,12 +208,26 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) handleGetTemplateSync(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleGetTemplateSync(w http.ResponseWriter, r *http.Request) {
+	status := TemplateSyncStatus{Enabled: false}
 	if s.templateSyncer == nil {
-		writeJSON(w, http.StatusOK, TemplateSyncStatus{Enabled: false})
+		if s.store == nil {
+			writeJSON(w, http.StatusOK, status)
+			return
+		}
+	} else {
+		status = s.templateSyncer.Status()
+	}
+	entries, err := s.store.ActiveTemplateBundleEntries(r.Context())
+	if err != nil {
+		s.serverError(w, "read active template catalog digest", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, s.templateSyncer.Status())
+	status.TemplateCount = len(entries)
+	if len(entries) > 0 {
+		status.TemplatesCommit = types.BundleDigest(entries)
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (s *Server) handleRequestTemplateSync(w http.ResponseWriter, _ *http.Request) {

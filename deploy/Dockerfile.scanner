@@ -30,7 +30,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/s
 # are checksum-verified against each release's own checksums file before use
 # (replaces the implicit trust in mutable upstream image tags). Templates are
 # not baked here: the backend pushes the catalog bundle the node runs.
-FROM --platform=$BUILDPLATFORM alpine:3.21 AS nuclei
+FROM --platform=$BUILDPLATFORM alpine:3.24 AS nuclei
 ARG NUCLEI_VERSION
 ARG NAABU_VERSION
 ARG TARGETARCH

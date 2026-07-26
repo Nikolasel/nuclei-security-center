@@ -19,6 +19,7 @@ type TemplateImportWrite struct {
 type TemplateSetImportWrite struct {
 	ExistingID  string
 	Name        string
+	DynamicAll  bool
 	TemplateIDs []string
 }
 
@@ -81,8 +82,8 @@ func (s *Store) ApplyTemplateImport(
 	if setID == "" {
 		setID = types.NewID()
 		_, err := tx.Exec(ctx,
-			`INSERT INTO template_sets (id, name, created_by) VALUES ($1, $2, $3)`,
-			setID, setWrite.Name, nullStr(actor))
+			`INSERT INTO template_sets (id, name, dynamic_all, created_by) VALUES ($1, $2, $3, $4)`,
+			setID, setWrite.Name, setWrite.DynamicAll, nullStr(actor))
 		if err != nil {
 			if isUniqueViolation(err) {
 				return nil, ErrConflict
@@ -90,12 +91,15 @@ func (s *Store) ApplyTemplateImport(
 			return nil, fmt.Errorf("insert imported template set: %w", err)
 		}
 	} else {
-		if err := requireExplicitTemplateSet(ctx, tx, setID); err != nil {
+		var exists bool
+		if err := tx.QueryRow(ctx,
+			`SELECT true FROM template_sets WHERE id = $1 FOR UPDATE`, setID,
+		).Scan(&exists); err != nil {
 			return nil, err
 		}
 		_, err := tx.Exec(ctx,
-			`UPDATE template_sets SET name = $2, updated_at = now() WHERE id = $1`,
-			setID, setWrite.Name)
+			`UPDATE template_sets SET name = $2, dynamic_all = $3, updated_at = now() WHERE id = $1`,
+			setID, setWrite.Name, setWrite.DynamicAll)
 		if err != nil {
 			if isUniqueViolation(err) {
 				return nil, ErrConflict
@@ -107,7 +111,7 @@ func (s *Store) ApplyTemplateImport(
 			return nil, fmt.Errorf("clear imported template set: %w", err)
 		}
 	}
-	if len(setWrite.TemplateIDs) > 0 {
+	if !setWrite.DynamicAll && len(setWrite.TemplateIDs) > 0 {
 		_, err := tx.Exec(ctx,
 			`INSERT INTO template_set_members (template_set_id, template_id, added_by)
 			 SELECT $1, template_id, $3

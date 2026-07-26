@@ -61,6 +61,31 @@ func TestPortableJSONRoundTripPreservesYAML(t *testing.T) {
 	}
 }
 
+func TestPortableDynamicSetRoundTripDoesNotFreezeCatalog(t *testing.T) {
+	set := &portableSet{Name: "All templates", DynamicAll: true}
+	data, err := buildPortableJSON(nil, set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parsePortableJSON(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Templates) != 0 || parsed.Set == nil || !parsed.Set.DynamicAll ||
+		len(parsed.Set.TemplateIDs) != 0 {
+		t.Fatalf("dynamic set did not round-trip as set-only metadata: %+v", parsed)
+	}
+}
+
+func TestPortableDynamicSetRejectsFrozenMembership(t *testing.T) {
+	_, err := validatePortableEntries(nil, &portableSet{
+		Name: "Invalid dynamic set", DynamicAll: true, TemplateIDs: []string{"one"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "must not contain template_ids") {
+		t.Fatalf("dynamic membership error = %v", err)
+	}
+}
+
 func TestPortableArchiveRejectsHashMismatchAndUnsafePath(t *testing.T) {
 	template := portableTestTemplate("bad-hash", "custom", "custom/bad-hash.yaml")
 	payload := portableTemplateJSON{

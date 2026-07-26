@@ -30,14 +30,11 @@ var ErrNoNodeForTarget = errors.New("no scanner node serves the target")
 // editable through the API, so editing/deleting an upstream one is refused.
 var ErrTemplateReadOnly = errors.New("upstream templates are read-only")
 
-// ErrTemplateSetNotLegacy is returned when conversion is requested for a set
-// that already uses explicit membership.
-var ErrTemplateSetNotLegacy = errors.New("template set is already explicit")
+// ErrTemplateSetDynamic is returned when a caller tries to edit stored
+// membership for an all-active-templates set. Dynamic membership is resolved
+// from the catalog at read/dispatch time and therefore has no editable rows.
+var ErrTemplateSetDynamic = errors.New("dynamic all-templates sets have no editable members")
 
-// ErrNoTemplateMatches leaves a legacy set untouched when its retired filter
-// resolves to no active catalog templates.
-var ErrNoTemplateMatches = errors.New("legacy filter matches no active templates")
-
-// ErrTemplateSetLegacy keeps membership edits read-only until the filter is
-// atomically converted, avoiding partially materialized legacy sets.
-var ErrTemplateSetLegacy = errors.New("legacy filter set must be converted first")
+// ErrTemplateSetInUse prevents deleting a set still referenced by a scan policy.
+// Policies must always retain an explicit set reference.
+var ErrTemplateSetInUse = errors.New("template set is used by one or more scan policies")

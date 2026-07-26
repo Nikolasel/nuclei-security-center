@@ -13,7 +13,7 @@ import (
 
 // ScanPolicy (#87) is the central, reusable scan configuration: it bundles
 // EVERYTHING a scan needs — the target to scan (TargetID, required — the scope),
-// an optional template set (TemplateSetID, empty = all templates), and Nuclei's
+// a required template set (including the dynamic all-active mode), and Nuclei's
 // execution knobs. Every scan (ad-hoc or scheduled) is launched by selecting a
 // policy. Each knob is a pointer: nil means "leave the built-in default for this
 // field", so a policy can tune just one setting; the non-nil ones are overlaid
@@ -22,7 +22,7 @@ type ScanPolicy struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
 	TargetID      string `json:"target_id"`
-	TemplateSetID string `json:"template_set_id,omitempty"`
+	TemplateSetID string `json:"template_set_id"`
 	RateLimit     *int   `json:"rate_limit,omitempty"`
 	Concurrency   *int   `json:"concurrency,omitempty"`
 	TimeoutSec    *int   `json:"timeout_sec,omitempty"`
@@ -54,8 +54,8 @@ const scanPolicyCols = `id, name, target_id, template_set_id, rate_limit, concur
 // scanScanPolicy reads one row (column order must match scanPolicyCols).
 func scanScanPolicy(row pgx.Row) (ScanPolicy, error) {
 	var p ScanPolicy
-	var templateSetID, discoveryScanType, discoveryPorts, createdBy *string
-	err := row.Scan(&p.ID, &p.Name, &p.TargetID, &templateSetID, &p.RateLimit, &p.Concurrency, &p.TimeoutSec,
+	var discoveryScanType, discoveryPorts, createdBy *string
+	err := row.Scan(&p.ID, &p.Name, &p.TargetID, &p.TemplateSetID, &p.RateLimit, &p.Concurrency, &p.TimeoutSec,
 		&p.MaxHostError, &p.DiscoveryEnabled, &discoveryScanType, &discoveryPorts, &p.DiscoveryTimeoutSec, &p.DiscoveryRate,
 		&p.DiscoveryProbeTimeoutMs, &p.DiscoveryRetries, &createdBy, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
@@ -64,7 +64,6 @@ func scanScanPolicy(row pgx.Row) (ScanPolicy, error) {
 		}
 		return ScanPolicy{}, err
 	}
-	p.TemplateSetID = deref(templateSetID)
 	p.DiscoveryScanType = deref(discoveryScanType)
 	p.DiscoveryPorts = deref(discoveryPorts)
 	p.CreatedBy = deref(createdBy)
@@ -81,7 +80,7 @@ func (s *Store) CreateScanPolicy(ctx context.Context, in ScanPolicy) (ScanPolicy
 		     discovery_probe_timeout_ms, discovery_retries, created_by)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, COALESCE($9, TRUE), $10, $11, $12, $13, $14, $15, $16)
 		 RETURNING `+scanPolicyCols,
-		in.ID, in.Name, in.TargetID, nullStr(in.TemplateSetID), in.RateLimit, in.Concurrency, in.TimeoutSec, in.MaxHostError,
+		in.ID, in.Name, in.TargetID, in.TemplateSetID, in.RateLimit, in.Concurrency, in.TimeoutSec, in.MaxHostError,
 		in.DiscoveryEnabled, nullStr(in.DiscoveryScanType), nullStr(in.DiscoveryPorts), in.DiscoveryTimeoutSec, in.DiscoveryRate,
 		in.DiscoveryProbeTimeoutMs, in.DiscoveryRetries, nullStr(in.CreatedBy)))
 	if err != nil {
@@ -131,7 +130,7 @@ func (s *Store) UpdateScanPolicy(ctx context.Context, id string, in ScanPolicy) 
 		     discovery_probe_timeout_ms = $14, discovery_retries = $15, updated_at = now()
 		 WHERE id = $1
 		 RETURNING `+scanPolicyCols,
-		id, in.Name, in.TargetID, nullStr(in.TemplateSetID), in.RateLimit, in.Concurrency, in.TimeoutSec, in.MaxHostError,
+		id, in.Name, in.TargetID, in.TemplateSetID, in.RateLimit, in.Concurrency, in.TimeoutSec, in.MaxHostError,
 		in.DiscoveryEnabled, nullStr(in.DiscoveryScanType), nullStr(in.DiscoveryPorts), in.DiscoveryTimeoutSec, in.DiscoveryRate,
 		in.DiscoveryProbeTimeoutMs, in.DiscoveryRetries))
 	if err != nil {

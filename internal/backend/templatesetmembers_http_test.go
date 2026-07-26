@@ -35,19 +35,8 @@ func TestWriteMemberErrMapsInvalidRef(t *testing.T) {
 		t.Errorf("ErrNotFound → %d, want 404", rr.Code)
 	}
 	rr = httptest.NewRecorder()
-	s.writeMemberErr(rr, store.ErrTemplateSetLegacy)
+	s.writeMemberErr(rr, store.ErrTemplateSetDynamic)
 	if rr.Code != 409 {
-		t.Errorf("ErrTemplateSetLegacy → %d, want 409", rr.Code)
-	}
-}
-
-func TestLegacyConversionErrorsAreConflicts(t *testing.T) {
-	for _, err := range []error{store.ErrTemplateSetNotLegacy, store.ErrNoTemplateMatches} {
-		s := &Server{}
-		rr := httptest.NewRecorder()
-		s.writeConvertTemplateSetErr(rr, err)
-		if rr.Code != 409 {
-			t.Errorf("%v → %d, want 409", err, rr.Code)
-		}
+		t.Errorf("ErrTemplateSetDynamic → %d, want 409", rr.Code)
 	}
 }

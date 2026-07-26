@@ -360,7 +360,9 @@ stripped from repository URLs. `POST /api/templates/sync` queues a refresh and r
 requests coalesce behind a running or already-queued refresh. It returns `503` when
 `TEMPLATE_SYNC_REPO` is empty. The request is `operator`-only and audited as `config_changed`
 (`templates.sync_requested`); the eventual background outcome remains visible in
-`/api/templates/sync-runs`.
+`/api/templates/sync-runs`. Each completed run includes the resulting `templates_commit` and
+`template_count`; failed runs carry the unchanged active state. These historical bundle IDs let an
+administrator identify which catalog snapshot a stale scanner node still holds.
 
 Custom uploads are sanity-checked at write time (all `400` on failure): the body must be a single
 YAML document with a top-level `id`, a non-empty `info.name`, a severity in Nuclei's set

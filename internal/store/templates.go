@@ -43,11 +43,16 @@ type TemplateSyncRun struct {
 	Status     string     `json:"status"`
 	RefBefore  string     `json:"ref_before,omitempty"`
 	RefAfter   string     `json:"ref_after,omitempty"`
-	Added      int        `json:"added"`
-	Removed    int        `json:"removed"`
-	Updated    int        `json:"updated"`
-	Skipped    int        `json:"skipped"`
-	Error      string     `json:"error,omitempty"`
+	// TemplatesCommit and TemplateCount snapshot the active full-catalog state
+	// after this attempt. They are nil/empty only for running or pre-migration
+	// history; failed runs retain the unchanged active state.
+	TemplatesCommit string `json:"templates_commit,omitempty"`
+	TemplateCount   *int   `json:"template_count,omitempty"`
+	Added           int    `json:"added"`
+	Removed         int    `json:"removed"`
+	Updated         int    `json:"updated"`
+	Skipped         int    `json:"skipped"`
+	Error           string `json:"error,omitempty"`
 }
 
 // TemplateSyncStats summarizes the catalog changes made by an upstream sync.
@@ -362,7 +367,7 @@ func (s *Store) ListTemplateSyncRuns(ctx context.Context, limit int) ([]Template
 	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, started_at, finished_at, status, ref_before, ref_after,
-		   added, removed, updated, skipped, error
+		   templates_commit, template_count, added, removed, updated, skipped, error
 		 FROM template_sync_runs ORDER BY started_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list template sync runs: %w", err)
@@ -371,23 +376,24 @@ func (s *Store) ListTemplateSyncRuns(ctx context.Context, limit int) ([]Template
 	var out []TemplateSyncRun
 	for rows.Next() {
 		var r TemplateSyncRun
-		var refBefore, refAfter, errStr *string
+		var refBefore, refAfter, templatesCommit, errStr *string
 		if err := rows.Scan(&r.ID, &r.StartedAt, &r.FinishedAt, &r.Status, &refBefore, &refAfter,
-			&r.Added, &r.Removed, &r.Updated, &r.Skipped, &errStr); err != nil {
+			&templatesCommit, &r.TemplateCount, &r.Added, &r.Removed, &r.Updated, &r.Skipped, &errStr); err != nil {
 			return nil, err
 		}
-		r.RefBefore, r.RefAfter, r.Error = deref(refBefore), deref(refAfter), deref(errStr)
+		r.RefBefore, r.RefAfter = deref(refBefore), deref(refAfter)
+		r.TemplatesCommit, r.Error = deref(templatesCommit), deref(errStr)
 		out = append(out, r)
 	}
 	return out, rows.Err()
 }
 
-// ActiveTemplateBundleEntries returns the id/path/sha256 of every active template
-// (no YAML) — enough to compute the catalog's canonical bundle digest cheaply, so
-// the distributor can decide whether a node is already current before building
-// the (heavier) full bundle. Ordered by id for a stable manifest.
-func (s *Store) ActiveTemplateBundleEntries(ctx context.Context) ([]types.TemplateBundleEntry, error) {
-	rows, err := s.pool.Query(ctx,
+type templateBundleQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func activeTemplateBundleEntries(ctx context.Context, q templateBundleQuerier) ([]types.TemplateBundleEntry, error) {
+	rows, err := q.Query(ctx,
 		`SELECT id, path, content_sha256 FROM templates WHERE availability = 'active' ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("list template bundle entries: %w", err)
@@ -402,6 +408,22 @@ func (s *Store) ActiveTemplateBundleEntries(ctx context.Context) ([]types.Templa
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+func activeTemplateBundleState(ctx context.Context, q templateBundleQuerier) (string, int, error) {
+	entries, err := activeTemplateBundleEntries(ctx, q)
+	if err != nil {
+		return "", 0, err
+	}
+	return types.BundleDigest(entries), len(entries), nil
+}
+
+// ActiveTemplateBundleEntries returns the id/path/sha256 of every active template
+// (no YAML) — enough to compute the catalog's canonical bundle digest cheaply, so
+// the distributor can decide whether a node is already current before building
+// the (heavier) full bundle. Ordered by id for a stable manifest.
+func (s *Store) ActiveTemplateBundleEntries(ctx context.Context) ([]types.TemplateBundleEntry, error) {
+	return activeTemplateBundleEntries(ctx, s.pool)
 }
 
 // TemplatesUpdatedAfter reports whether any selected active template changed
@@ -564,10 +586,16 @@ func (s *Store) ApplyUpstreamTemplates(ctx context.Context, runID, ref string, i
 		return TemplateSyncStats{}, fmt.Errorf("tombstone removed upstream templates: %w", err)
 	}
 	stats.Removed = int(removed.RowsAffected())
+	templatesCommit, templateCount, err := activeTemplateBundleState(ctx, tx)
+	if err != nil {
+		return TemplateSyncStats{}, fmt.Errorf("snapshot active catalog after sync: %w", err)
+	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE template_sync_runs SET finished_at = now(), status = 'success', ref_after = $2,
-		 added = $3, removed = $4, updated = $5, skipped = $6, error = NULL WHERE id = $1`,
-		runID, ref, stats.Added, stats.Removed, stats.Updated, stats.Skipped); err != nil {
+		 added = $3, removed = $4, updated = $5, skipped = $6,
+		 templates_commit = $7, template_count = $8, error = NULL WHERE id = $1`,
+		runID, ref, stats.Added, stats.Removed, stats.Updated, stats.Skipped,
+		templatesCommit, templateCount); err != nil {
 		return TemplateSyncStats{}, fmt.Errorf("complete template sync: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -582,12 +610,18 @@ func (s *Store) ApplyUpstreamTemplates(ctx context.Context, runID, ref string, i
 // reflects reality. It uses started_at (finished_at is NULL while running).
 func (s *Store) ReapStaleTemplateSyncRuns(ctx context.Context, olderThan time.Duration) (int64, error) {
 	cutoff := time.Now().UTC().Add(-olderThan)
+	templatesCommit, templateCount, snapshotErr := activeTemplateBundleState(ctx, s.pool)
 	tag, err := s.pool.Exec(ctx,
 		`UPDATE template_sync_runs SET finished_at = now(), status = 'failed',
-		 error = 'reaped: backend restarted or timed out mid-sync'
-		 WHERE status = 'running' AND started_at < $1`, cutoff)
+		 error = 'reaped: backend restarted or timed out mid-sync',
+		 templates_commit = $2, template_count = $3
+		 WHERE status = 'running' AND started_at < $1`,
+		cutoff, nullStr(templatesCommit), nullableCount(templatesCommit, templateCount))
 	if err != nil {
 		return 0, fmt.Errorf("reap stale template sync runs: %w", err)
+	}
+	if snapshotErr != nil {
+		return tag.RowsAffected(), fmt.Errorf("snapshot active catalog while reaping sync runs: %w", snapshotErr)
 	}
 	return tag.RowsAffected(), nil
 }
@@ -595,11 +629,23 @@ func (s *Store) ReapStaleTemplateSyncRuns(ctx context.Context, olderThan time.Du
 // FailTemplateSync finishes an attempt that failed before its catalog changes
 // could be applied.
 func (s *Store) FailTemplateSync(ctx context.Context, runID string, cause error) error {
+	templatesCommit, templateCount, snapshotErr := activeTemplateBundleState(ctx, s.pool)
 	_, err := s.pool.Exec(ctx,
-		`UPDATE template_sync_runs SET finished_at = now(), status = 'failed', error = $2 WHERE id = $1`,
-		runID, cause.Error())
+		`UPDATE template_sync_runs SET finished_at = now(), status = 'failed', error = $2,
+		 templates_commit = $3, template_count = $4 WHERE id = $1`,
+		runID, cause.Error(), nullStr(templatesCommit), nullableCount(templatesCommit, templateCount))
 	if err != nil {
 		return fmt.Errorf("record failed template sync: %w", err)
 	}
+	if snapshotErr != nil {
+		return fmt.Errorf("recorded failed template sync without catalog state: %w", snapshotErr)
+	}
 	return nil
+}
+
+func nullableCount(commit string, count int) *int {
+	if commit == "" {
+		return nil
+	}
+	return &count
 }

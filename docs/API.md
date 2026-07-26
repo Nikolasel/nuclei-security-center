@@ -313,8 +313,8 @@ For the UI-based operational workflow and PO acceptance test, see
 [Template administration](TEMPLATE_ADMINISTRATION.md).
 
 ```sh
-# browse/search newest-ingested CVE templates (paginated)
-curl -sb jar.txt 'localhost:8080/api/templates?cve=true&sort=inserted&limit=50&offset=0'
+# browse/search newest-ingested CVE templates via their canonical tag (paginated)
+curl -sb jar.txt 'localhost:8080/api/templates?tag=cve&sort=inserted&limit=50&offset=0'
 # return every id matching the same filters (used by "select all matching")
 curl -sb jar.txt 'localhost:8080/api/templates/ids?severity=critical&tag=rce&q=struts'
 # one template incl. its verbatim YAML body
@@ -335,12 +335,13 @@ curl -sb jar.txt localhost:8080/api/templates/sync-runs
 
 The list response is a `{items, total, limit, offset}` page; list rows omit the `yaml` body
 (fetch a single template to get it). Filters: `source`, repeatable/CSV `severity` and `tag`
-(any-of), free-text `q` (matches id/name/description), `cve=true`, and
-`include_unavailable=true` to include tombstoned upstream rows (removed upstream but retained so
-curated sets don't silently lose members). `sort=inserted` orders by NSC's `created_at` ingestion
-timestamp, newest first; this is labelled **Inserted** because the upstream catalog does not
-provide an authoritative ProjectDiscovery added/updated timestamp. `GET /api/templates/ids`
-accepts the same filters and returns all matching ids without pagination.
+(any-of), free-text `q` (matches id/name/description), and `include_unavailable=true` to include
+tombstoned upstream rows (removed upstream but retained so curated sets don't silently lose
+members). CVE templates use the canonical `cve` tag, so no separate CVE-only filter is needed.
+`sort=inserted` orders by NSC's `created_at` ingestion timestamp, newest first; this is labelled
+**Inserted** because the upstream catalog does not provide an authoritative ProjectDiscovery
+added/updated timestamp. `GET /api/templates/ids` accepts the same filters and returns all matching
+ids without pagination.
 
 Only **custom** templates are writable — `POST` takes YAML and parses it server-side (the YAML is
 stored byte-for-byte; the typed fields are extracted for filtering), create/edit is `operator`,

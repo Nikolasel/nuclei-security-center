@@ -302,7 +302,6 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
   const [severity, setSeverity] = useState("");
   const [query, setQuery] = useState("");
   const [tags, setTags] = useState("");
-  const [cveOnly, setCVEOnly] = useState(false);
   const [sort, setSort] = useState<"name" | "inserted">("name");
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -315,13 +314,12 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
     source: source || undefined,
     severities: severity ? [severity] : undefined,
     tags: parseList(tags),
-    cve_only: cveOnly,
     q: query.trim(),
     sort,
   };
 
   const templates = useQuery({
-    queryKey: ["templates", "catalog", source, severity, query, tags, cveOnly, sort, offset],
+    queryKey: ["templates", "catalog", source, severity, query, tags, sort, offset],
     queryFn: () =>
       api.listTemplates({
         ...filters,
@@ -365,7 +363,7 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
   return (
     <div className="space-y-4">
       <Card className="p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <Field label="Search">
             <Input value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} placeholder="ID, name, description" />
           </Field>
@@ -384,12 +382,6 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
           </Field>
           <Field label="Tags (comma separated)">
             <Input value={tags} onChange={(event) => { setTags(event.target.value); resetPage(); }} placeholder="cve, rce" />
-          </Field>
-          <Field label="CVE">
-            <Select className="w-full" value={cveOnly ? "cve" : ""} onChange={(event) => { setCVEOnly(event.target.value === "cve"); resetPage(); }}>
-              <option value="">All templates</option>
-              <option value="cve">CVE templates only</option>
-            </Select>
           </Field>
           <Field label="Sort">
             <Select className="w-full" value={sort} onChange={(event) => { setSort(event.target.value as "name" | "inserted"); resetPage(); }}>

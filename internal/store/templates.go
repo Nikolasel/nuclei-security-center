@@ -65,7 +65,6 @@ type TemplateFilter struct {
 	Source             string   // "upstream" | "custom" | "" (any)
 	Severities         []string // any-of, case-insensitive
 	Tags               []string // any-of (array overlap on tags[])
-	CVEOnly            bool     // true ⇒ templates carrying the canonical "cve" tag
 	Query              string   // case-insensitive substring over id/name/description
 	Sort               string   // "name" (default) | "inserted" (newest first)
 	IncludeUnavailable bool     // false (default) ⇒ only availability='active'
@@ -160,9 +159,6 @@ func templateFilterWhere(f TemplateFilter) (string, []any) {
 	}
 	if len(f.Tags) > 0 {
 		conds = append(conds, "tags && "+push(f.Tags))
-	}
-	if f.CVEOnly {
-		conds = append(conds, "'cve' = ANY(tags)")
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
 		p := push("%" + q + "%")

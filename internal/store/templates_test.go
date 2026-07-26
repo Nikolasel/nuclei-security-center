@@ -5,12 +5,11 @@ import (
 	"testing"
 )
 
-func TestTemplateFilterWhereCVEAndOtherFilters(t *testing.T) {
+func TestTemplateFilterWhereCombinesFilters(t *testing.T) {
 	where, args := templateFilterWhere(TemplateFilter{
 		Source:     "upstream",
 		Severities: []string{"HIGH"},
-		Tags:       []string{"rce"},
-		CVEOnly:    true,
+		Tags:       []string{"cve", "rce"},
 		Query:      "apache",
 	})
 	for _, fragment := range []string{
@@ -18,7 +17,6 @@ func TestTemplateFilterWhereCVEAndOtherFilters(t *testing.T) {
 		"source = $1",
 		"lower(severity) = ANY($2)",
 		"tags && $3",
-		"'cve' = ANY(tags)",
 		"id ILIKE $4",
 	} {
 		if !strings.Contains(where, fragment) {

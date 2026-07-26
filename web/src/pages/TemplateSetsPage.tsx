@@ -32,7 +32,6 @@ function TemplateSetModal({
   const [source, setSource] = useState<TemplateSource | "">("");
   const [severity, setSeverity] = useState("");
   const [tags, setTags] = useState("");
-  const [cveOnly, setCVEOnly] = useState(false);
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loadedMembers, setLoadedMembers] = useState(existing == null || existing.dynamic_all);
@@ -41,7 +40,6 @@ function TemplateSetModal({
     source: source || undefined,
     severities: severity ? [severity] : undefined,
     tags: parseList(tags),
-    cve_only: cveOnly,
   };
 
   const members = useQuery({
@@ -57,7 +55,7 @@ function TemplateSetModal({
   }, [loadedMembers, members.data]);
 
   const templates = useQuery({
-    queryKey: ["templates", "set-picker", query, source, severity, tags, cveOnly, offset],
+    queryKey: ["templates", "set-picker", query, source, severity, tags, offset],
     queryFn: () =>
       api.listTemplates({
         ...filters,
@@ -190,7 +188,7 @@ function TemplateSetModal({
               </div>
             </div>
           )}
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
             <Input value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} placeholder="Search templates" aria-label="Search templates" />
             <Select value={source} onChange={(event) => { setSource(event.target.value as TemplateSource | ""); resetPage(); }} aria-label="Template source">
               <option value="">All sources</option>
@@ -202,10 +200,6 @@ function TemplateSetModal({
               {SEVERITIES.map((value) => <option key={value} value={value}>{value}</option>)}
             </Select>
             <Input value={tags} onChange={(event) => { setTags(event.target.value); resetPage(); }} placeholder="Tags: cve, rce" aria-label="Template tags" />
-            <Select value={cveOnly ? "cve" : ""} onChange={(event) => { setCVEOnly(event.target.value === "cve"); resetPage(); }} aria-label="CVE templates">
-              <option value="">All templates</option>
-              <option value="cve">CVE templates only</option>
-            </Select>
           </div>
 
           {selectMatching.isError && <ErrorText error={selectMatching.error} />}

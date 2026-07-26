@@ -300,19 +300,13 @@ export function TemplateSetsPage() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <h1 className="text-xl font-semibold">Template Sets</h1>
           <p className="mt-1 text-sm text-neutral-500">
             Curate exact template IDs, or explicitly choose a dynamic set containing every active template.
           </p>
         </div>
-        <div className="flex flex-wrap items-end gap-4">
-          <Field label="Export format">
-            <Select value={exportFormat} onChange={(event) => setExportFormat(event.target.value as TemplateArchiveFormat)}>
-              <option value="yaml">YAML archive</option>
-              <option value="json">JSON</option>
-            </Select>
-          </Field>
+        <div className="flex shrink-0 items-center gap-2">
           {canWrite && <Button onClick={() => setImporting(true)}>Import set</Button>}
           {canWrite && <Button variant="primary" onClick={() => setEditing("new")}>New template set</Button>}
         </div>
@@ -324,6 +318,23 @@ export function TemplateSetsPage() {
 
       {sets.isLoading ? <Spinner /> : sets.isError ? <ErrorText error={sets.error} /> : (
         <Card>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
+            <p className="text-xs text-neutral-500">
+              Choose the format used by each row&apos;s Export action.
+            </p>
+            <label className="flex items-center gap-2 text-xs font-medium text-neutral-600 dark:text-neutral-400">
+              <span>Export as</span>
+              <Select
+                className="min-w-32"
+                value={exportFormat}
+                onChange={(event) => setExportFormat(event.target.value as TemplateArchiveFormat)}
+                aria-label="Template set export format"
+              >
+                <option value="yaml">YAML archive</option>
+                <option value="json">JSON</option>
+              </Select>
+            </label>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>

@@ -68,7 +68,7 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
 | Scanner node | Go, standalone HTTP service | Pure execution engine; holds no DB creds; scale/segment independently |
 | DB | Postgres | Data + schedule + backend-side dispatch queue in one service |
 | Object store | S3-compatible behind one interface | MinIO locally → S3/GCS/Azure Blob in cloud, no code change |
-| Templates | Lossless Postgres catalog → pushed node bundle | Backend owns upstream/custom content; scans select ids from a content-addressed full-catalog bundle |
+| Templates | Lossless Postgres catalog → pushed node bundle | Backend owns upstream/custom content; scans select ids from a content-addressed full-catalog bundle. Custom writes are accepted only after a healthy node's pinned Nuclei validates the YAML |
 | User auth | OIDC via BFF (Cognito / Entra / Keycloak) | SSO everywhere; tokens stay server-side, SPA gets only a session cookie |
 | Service auth | API bearer token (TLS); mTLS as upgrade | Backend → scanner-node calls, no user identity involved |
 
@@ -238,6 +238,7 @@ schedules, or the database — only how to run one scan and hand back results.
 | `GET /v1/scans/{id}/results` | Stream NDJSON results (backend pulls on completion) |
 | `POST /v1/scans/{id}/cancel` | Cancel a running scan |
 | `POST /v1/templates/bundle` | Receive the **full-catalog** template bundle the backend pushes (#85): a gzipped tar of every active template's YAML + a `manifest.json`. The node holds the whole catalog (a scan selects by id); the backend pushes it on an hourly idle cadence + a pre-dispatch top-up when stale. The node extracts to staging, verifies every file sha256 and canonical `manifest.digest` (`types.BundleDigest`), then activates under an exclusive `TryLock` — refusing (`400`) a bad archive/path/hash/digest and (`409`) a push while any scan holds the active tree. → `{ templates_commit, template_count }`. Strictly backend→node (invariant #2); the node never pulls. |
+| `POST /v1/templates/validate` | Validate one raw-YAML custom template with the node's pinned `nuclei -validate`, without a target. The body is limited to 1 MiB and executed in a private temporary directory with a 30-second deadline and bounded diagnostics. Returns `{ valid, errors[], nuclei_version }`; a rejected template is a `200` verdict (`valid=false`), while execution/timeout faults use 5xx. Backend custom create/update calls this only on a node already known healthy and fails closed if none is available. |
 | `GET /v1/capabilities` | `{ nuclei_version, templates_commit }` — polled by the backend for node liveness (#98); `templates_commit` is the digest of the active bundle (empty until one is pushed), used to detect drift before dispatch |
 | `GET /healthz` | Liveness / readiness |
 

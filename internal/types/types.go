@@ -145,6 +145,16 @@ type TemplateBundleStatus struct {
 	TemplateCount   int    `json:"template_count"`
 }
 
+// TemplateValidationResult is the scanner node's authoritative verdict for one
+// custom template. Errors contains bounded, human-readable Nuclei diagnostics;
+// the YAML itself is never echoed back. NucleiVersion identifies the exact
+// engine that produced the verdict.
+type TemplateValidationResult struct {
+	Valid         bool     `json:"valid"`
+	Errors        []string `json:"errors"`
+	NucleiVersion string   `json:"nuclei_version"`
+}
+
 // BundleDigest computes a bundle's canonical, order-independent digest: the
 // sha256 over each template's "id\x00sha256\n" line, sorted by id. It is content-
 // addressed — independent of tar byte order, file timestamps, and compression —

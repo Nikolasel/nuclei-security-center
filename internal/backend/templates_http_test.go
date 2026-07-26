@@ -1,9 +1,13 @@
 package backend
 
 import (
+	"context"
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
 const validCustomYAML = `id: my-custom-check
@@ -105,4 +109,50 @@ func TestReadTemplateBodyRejectsEmpty(t *testing.T) {
 	if rr.Code != 400 {
 		t.Errorf("status = %d, want 400", rr.Code)
 	}
+}
+
+func TestAuthorizeCustomTemplateMapsVerdicts(t *testing.T) {
+	t.Run("invalid is bad request", func(t *testing.T) {
+		s := &Server{templateValidator: func(context.Context, []byte) (types.TemplateValidationResult, error) {
+			return types.TemplateValidationResult{
+				Valid:         false,
+				Errors:        []string{"invalid matcher"},
+				NucleiVersion: "v3.11.0",
+			}, nil
+		}}
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/templates", nil)
+		if _, ok := s.authorizeCustomTemplate(rr, req, []byte(validCustomYAML)); ok {
+			t.Fatal("expected invalid verdict rejection")
+		}
+		if rr.Code != 400 || !strings.Contains(rr.Body.String(), "invalid matcher") {
+			t.Fatalf("response = %d %q", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("node failure is unavailable", func(t *testing.T) {
+		s := &Server{templateValidator: func(context.Context, []byte) (types.TemplateValidationResult, error) {
+			return types.TemplateValidationResult{}, errors.New("node unavailable")
+		}}
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/templates", nil)
+		if _, ok := s.authorizeCustomTemplate(rr, req, []byte(validCustomYAML)); ok {
+			t.Fatal("expected unavailable rejection")
+		}
+		if rr.Code != 503 || rr.Header().Get("Retry-After") != "5" {
+			t.Fatalf("response = %d Retry-After=%q", rr.Code, rr.Header().Get("Retry-After"))
+		}
+	})
+
+	t.Run("valid reports engine", func(t *testing.T) {
+		s := &Server{templateValidator: func(context.Context, []byte) (types.TemplateValidationResult, error) {
+			return types.TemplateValidationResult{Valid: true, Errors: []string{}, NucleiVersion: "v3.11.0"}, nil
+		}}
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest("POST", "/api/templates", nil)
+		result, ok := s.authorizeCustomTemplate(rr, req, []byte(validCustomYAML))
+		if !ok || result.NucleiVersion != "v3.11.0" {
+			t.Fatalf("result = %+v, ok = %v", result, ok)
+		}
+	})
 }

@@ -235,7 +235,9 @@ the backend-owned active catalog bundle is the only template source a scan may u
 - **Pinned, checksum-verified `nuclei`** — a build stage downloads the release asset and **verifies
   its SHA-256 against the release checksums file** before copying just the `nuclei` binary onto the
   runtime (on `PATH`, so `NUCLEI_PATH=nuclei` still works). This removes the trust dependency on a
-  mutable upstream image tag.
+  mutable upstream image tag. The same pinned binary authoritatively validates custom-template
+  create/update requests: the backend selects a node already known healthy from
+  `NODE_HEALTH_INTERVAL` polling and fails the write with `503` if no validator is available.
 - **Bundle-only templates** — before dispatch, the backend pushes the full active catalog when the
   node is stale. Each scan carries concrete ids + the bundle digest; the node resolves every id
   from `manifest.json`, rejects missing ids/drift, and holds a shared lock on the active tree until

@@ -346,7 +346,10 @@ stored byte-for-byte; the typed fields are extracted for filtering), create/edit
 delete is `admin`. Mutating an **upstream** row is refused (`409`, it's owned by the syncer), and a
 custom `id` that collides with an existing template (custom or upstream) is a `409` — that's how a
 custom template is prevented from shadowing an upstream one. Reads are `viewer`; writes are audited
-as `config_changed` (`template.create` / `template.update` / `template.delete`).
+as `config_changed` (`template.create` / `template.update` / `template.delete`). A successful
+create/update response also includes
+`validation: {valid:true, errors:[], nuclei_version:"v…"}`, identifying the deployed engine that
+accepted it.
 
 `GET /api/templates/sync` returns whether upstream mirroring is enabled plus its interval, repository,
 and ref. The cache path is not exposed, and credentials/query strings are stripped from repository
@@ -361,8 +364,13 @@ YAML document with a top-level `id`, a non-empty `info.name`, a severity in Nucl
 block — `http`, `dns`, `network`, `ssl`, … — or `workflows`). The `id` must be a URL-safe slug (no
 slashes), and on edit the `id` inside the body must equal the `{id}` in the URL. These checks are the
 cheap first line of defense; the upstream sync is intentionally *not* held to them (the community
-tree is authoritative). An authoritative `nuclei -validate` check on the scanner node is planned for
-a later slice.
+tree is authoritative). After those checks, create/update sends the exact YAML to the first
+registered node (ordered by name) that the health monitor has positively observed as healthy. That
+node runs its pinned `nuclei -validate` without a target. A Nuclei rejection is `400` with bounded
+diagnostics and nothing is persisted. If no validator is known healthy, every healthy candidate
+fails in transit, validation times out, or the node cannot execute Nuclei, the write fails closed
+with `503` plus `Retry-After: 5`. Import remains a bulk catalog operation and does not spawn one
+Nuclei process per archive entry; adding one bounded bulk validation pass is tracked in #140.
 
 ### Template portability
 

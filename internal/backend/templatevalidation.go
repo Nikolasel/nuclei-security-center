@@ -17,7 +17,7 @@ var errTemplateValidatorUnavailable = errors.New("no healthy template validator 
 // or unhealthy node.
 func (s *Server) validateCustomTemplate(ctx context.Context, yaml []byte) (types.TemplateValidationResult, error) {
 	var result types.TemplateValidationResult
-	err := s.withHealthyTemplateValidator(ctx, func(client *ScannerClient) error {
+	err := s.withHealthyTemplateValidator(ctx, 0, func(client *ScannerClient) error {
 		var err error
 		result, err = client.ValidateTemplate(ctx, yaml)
 		if err == nil && result.NucleiVersion == "" {
@@ -44,7 +44,7 @@ func (s *Server) validateCustomTemplateBatch(
 		return types.TemplateBatchValidationResult{}, fmt.Errorf("build template validation bundle: %w", err)
 	}
 	var result types.TemplateBatchValidationResult
-	err = s.withHealthyTemplateValidator(ctx, func(client *ScannerClient) error {
+	err = s.withHealthyTemplateValidator(ctx, types.TemplateBatchValidationMaxAttempts, func(client *ScannerClient) error {
 		var err error
 		result, err = client.ValidateTemplateBatch(ctx, bundle)
 		if err == nil && result.NucleiVersion == "" {
@@ -57,6 +57,7 @@ func (s *Server) validateCustomTemplateBatch(
 
 func (s *Server) withHealthyTemplateValidator(
 	ctx context.Context,
+	maxAttempts int,
 	validate func(*ScannerClient) error,
 ) error {
 	if s.store == nil || s.orch == nil || s.orch.Health() == nil {
@@ -71,11 +72,16 @@ func (s *Server) withHealthyTemplateValidator(
 	}
 
 	var lastErr error
+	attempts := 0
 	for _, node := range nodes {
 		health, known := s.orch.Health().Get(node.ID)
 		if !known || !health.Healthy {
 			continue
 		}
+		if maxAttempts > 0 && attempts >= maxAttempts {
+			break
+		}
+		attempts++
 		client, err := clientForNode(node)
 		if err == nil {
 			err = validate(client)

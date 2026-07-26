@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"io"
 	"sort"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -154,6 +155,17 @@ type TemplateValidationResult struct {
 	Errors        []string `json:"errors"`
 	NucleiVersion string   `json:"nuclei_version"`
 }
+
+// Batch validation has three nested deadlines. Keeping them together makes the
+// required ordering explicit across the node, backend client, and import
+// handler: a node gets two minutes, transport gets ten seconds of grace, and an
+// import permits two complete healthy-node attempts plus final response grace.
+const (
+	TemplateBatchValidationNodeTimeout    = 2 * time.Minute
+	TemplateBatchValidationClientTimeout  = TemplateBatchValidationNodeTimeout + 10*time.Second
+	TemplateBatchValidationMaxAttempts    = 2
+	TemplateBatchValidationRequestTimeout = time.Duration(TemplateBatchValidationMaxAttempts)*TemplateBatchValidationClientTimeout + 10*time.Second
+)
 
 // TemplateValidationFailure is the bounded Nuclei diagnostic for one template
 // in a batch. TemplateID comes from the verified bundle manifest, never from

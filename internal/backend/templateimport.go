@@ -5,14 +5,11 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 	templatespkg "github.com/Nikolasel/nuclei-security-center/internal/templates"
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
-
-const templateImportValidationTimeout = 140 * time.Second
 
 type portableTemplateWritePlan struct {
 	Writes   []store.TemplateImportWrite
@@ -189,7 +186,7 @@ func (s *Server) validateTemplateImportWrites(
 	if s.templateBatchValidator == nil {
 		return types.TemplateBatchValidationResult{}, errTemplateValidatorUnavailable
 	}
-	validationCtx, cancel := context.WithTimeout(ctx, templateImportValidationTimeout)
+	validationCtx, cancel := context.WithTimeout(ctx, types.TemplateBatchValidationRequestTimeout)
 	defer cancel()
 	return s.templateBatchValidator(validationCtx, writes)
 }

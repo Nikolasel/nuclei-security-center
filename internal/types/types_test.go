@@ -3,6 +3,7 @@ package types
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 // A representative Nuclei JSONL result line (fields as emitted by `nuclei -jsonl`).
@@ -65,5 +66,24 @@ func TestBundleDigestOrderIndependent(t *testing.T) {
 	}
 	if BundleDigest(nil) == "" {
 		t.Errorf("digest of empty set should still be a valid sha256 hex, got empty")
+	}
+}
+
+func TestTemplateBatchValidationTimeoutLayering(t *testing.T) {
+	if TemplateBatchValidationNodeTimeout >= TemplateBatchValidationClientTimeout {
+		t.Fatalf(
+			"node timeout %s must be shorter than client timeout %s",
+			TemplateBatchValidationNodeTimeout,
+			TemplateBatchValidationClientTimeout,
+		)
+	}
+	fullAttempts := time.Duration(TemplateBatchValidationMaxAttempts) * TemplateBatchValidationClientTimeout
+	if TemplateBatchValidationRequestTimeout <= fullAttempts {
+		t.Fatalf(
+			"request timeout %s must permit %d complete client attempts (%s)",
+			TemplateBatchValidationRequestTimeout,
+			TemplateBatchValidationMaxAttempts,
+			fullAttempts,
+		)
 	}
 }

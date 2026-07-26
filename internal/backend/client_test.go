@@ -61,8 +61,8 @@ func TestScannerClientValidateTemplateBatch(t *testing.T) {
 	bundle := []byte("transient-bundle")
 	client := NewScannerClient("http://scanner.test", "node-token")
 	client.httpForTimeout = func(timeout time.Duration) *http.Client {
-		if timeout != 130*time.Second {
-			t.Errorf("timeout = %s, want 130s", timeout)
+		if timeout != types.TemplateBatchValidationClientTimeout {
+			t.Errorf("timeout = %s, want %s", timeout, types.TemplateBatchValidationClientTimeout)
 		}
 		return &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			if r.Method != http.MethodPost || r.URL.Path != "/v1/templates/validate-batch" {

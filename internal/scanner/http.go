@@ -45,9 +45,8 @@ func (s *Server) Handler() http.Handler {
 }
 
 const (
-	maxTemplateValidationUpload    = 1 << 20 // 1 MiB
-	templateValidationTimeout      = 30 * time.Second
-	templateBatchValidationTimeout = 2 * time.Minute
+	maxTemplateValidationUpload = 1 << 20 // 1 MiB
+	templateValidationTimeout   = 30 * time.Second
 )
 
 // handleValidateTemplate runs Nuclei's own parser against one custom template.
@@ -90,7 +89,7 @@ func (s *Server) handleValidateTemplate(w http.ResponseWriter, r *http.Request) 
 // bundle on the node.
 func (s *Server) handleValidateTemplateBatch(w http.ResponseWriter, r *http.Request) {
 	body := http.MaxBytesReader(w, r.Body, maxBundleUpload)
-	ctx, cancel := context.WithTimeout(r.Context(), templateBatchValidationTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), types.TemplateBatchValidationNodeTimeout)
 	defer cancel()
 	stopClose := context.AfterFunc(ctx, func() { _ = body.Close() })
 	defer stopClose()

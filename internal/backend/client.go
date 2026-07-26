@@ -175,7 +175,7 @@ func (c *ScannerClient) ValidateTemplateBatch(ctx context.Context, bundle []byte
 		return types.TemplateBatchValidationResult{}, err
 	}
 	req.Header.Set("Content-Type", "application/gzip")
-	resp, err := c.clientForTimeout(130 * time.Second).Do(req)
+	resp, err := c.clientForTimeout(types.TemplateBatchValidationClientTimeout).Do(req)
 	if err != nil {
 		return types.TemplateBatchValidationResult{}, err
 	}

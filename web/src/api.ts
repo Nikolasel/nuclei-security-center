@@ -146,6 +146,8 @@ export interface TemplateSyncRun {
   status: string;
   ref_before?: string;
   ref_after?: string;
+  templates_commit?: string;
+  template_count?: number;
   added: number;
   removed: number;
   updated: number;

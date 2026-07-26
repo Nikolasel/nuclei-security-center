@@ -36,3 +36,13 @@ func TestTemplateSortOrder(t *testing.T) {
 		t.Errorf("name order = %q", got)
 	}
 }
+
+func TestNullableCountTracksKnownBundleState(t *testing.T) {
+	if got := nullableCount("", 0); got != nil {
+		t.Fatalf("unknown bundle count = %v, want nil", *got)
+	}
+	got := nullableCount("digest", 0)
+	if got == nil || *got != 0 {
+		t.Fatalf("known empty bundle count = %v, want 0", got)
+	}
+}

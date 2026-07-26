@@ -83,8 +83,10 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   severity, description, tags, content_sha256`). The raw YAML is the sole complete
   representation; metadata is extracted only for catalog filtering.
 - **template_sync_runs** — backend-owned upstream catalog refresh history, including pinned
-  commit and added/updated/removed/skipped counts (a stray malformed file is skipped-and-counted,
-  not fatal; the run fails closed only if nothing parses).
+  upstream commit, resulting canonical `templates_commit` + template count, and
+  added/updated/removed/skipped counts. Failed runs record the unchanged active bundle state, so a
+  node reporting an older digest can be matched to catalog history (a stray malformed file is
+  skipped-and-counted, not fatal; the run fails closed only if nothing parses).
 - **template_sets** — either curated exact membership in `template_set_members`, or an explicit
   `dynamic_all` mode that resolves every active catalog template at scan time. The retired POC
   filter columns and compatibility code are gone (alpha breaking change). Exact sets and selected

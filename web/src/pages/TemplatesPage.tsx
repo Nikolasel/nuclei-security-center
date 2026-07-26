@@ -610,6 +610,7 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
                   <th className="px-3 py-2 font-medium">Started</th>
                   <th className="px-3 py-2 font-medium">Status</th>
                   <th className="px-3 py-2 font-medium">Result</th>
+                  <th className="px-3 py-2 font-medium">Catalog bundle</th>
                   <th className="px-3 py-2 font-medium">Upstream commit</th>
                   <th className="px-3 py-2 font-medium">Finished</th>
                   <th className="px-3 py-2 font-medium">Error</th>
@@ -619,14 +620,26 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
                 {runs.data.map((run) => (
                   <tr key={run.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
                     <td className="px-3 py-2 whitespace-nowrap">{fmtTime(run.started_at)}</td>
-                    <td className="px-3 py-2"><Pill tone={run.status === "complete" ? "good" : run.status === "failed" ? "warn" : "neutral"}>{run.status}</Pill></td>
+                    <td className="px-3 py-2"><Pill tone={run.status === "success" ? "good" : run.status === "failed" ? "warn" : "neutral"}>{run.status}</Pill></td>
                     <td className="px-3 py-2 whitespace-nowrap tabular-nums">+{run.added} / ~{run.updated} / −{run.removed} / {run.skipped} skipped</td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      {run.templates_commit ? (
+                        <>
+                          <div className="font-mono text-xs" title={run.templates_commit}>
+                            {shortDigest(run.templates_commit)}
+                          </div>
+                          <div className="text-xs tabular-nums text-neutral-500">
+                            {run.template_count ?? 0} templates
+                          </div>
+                        </>
+                      ) : "—"}
+                    </td>
                     <td className="px-3 py-2 font-mono text-xs" title={run.ref_after}>{shortDigest(run.ref_after)}</td>
                     <td className="px-3 py-2 whitespace-nowrap text-neutral-500">{fmtTime(run.finished_at)}</td>
                     <td className="max-w-md px-3 py-2 text-xs text-rose-600 dark:text-rose-400" title={run.error}>{run.error || "—"}</td>
                   </tr>
                 ))}
-                {runs.data.length === 0 && <tr><td colSpan={6} className="px-3 py-8 text-center text-neutral-400">No upstream sync has run yet.</td></tr>}
+                {runs.data.length === 0 && <tr><td colSpan={7} className="px-3 py-8 text-center text-neutral-400">No upstream sync has run yet.</td></tr>}
               </tbody>
             </table>
           </div>

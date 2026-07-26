@@ -27,6 +27,9 @@ import {
 import { parseList } from "../util";
 
 const PAGE_SIZE = 30;
+// Stay below the common 8 KiB request-line ceiling used by proxies. For larger
+// selections, a named set provides the path-based export endpoint.
+const MAX_TEMPLATE_EXPORT_URL_LENGTH = 7_000;
 
 function fmtTime(value?: string) {
   return value ? new Date(value).toLocaleString() : "—";
@@ -334,7 +337,12 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
       void qc.invalidateQueries({ queryKey: ["template-sets"] });
     },
   });
+  const download = useMutation({
+    mutationFn: () => api.downloadTemplates([...selected], exportFormat),
+  });
   const resetPage = () => setOffset(0);
+  const exportURL = api.templateExportURL([...selected], exportFormat);
+  const exportTooLarge = exportURL.length > MAX_TEMPLATE_EXPORT_URL_LENGTH;
 
   return (
     <div className="space-y-4">
@@ -375,10 +383,8 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
                 <option value="json">JSON document</option>
               </Select>
             </Field>
-            <Button onClick={() => {
-              window.location.assign(api.templateExportURL([...selected], exportFormat));
-            }}>
-              Export selected
+            <Button disabled={exportTooLarge || download.isPending} onClick={() => download.mutate()}>
+              {download.isPending ? "Preparing export…" : "Export selected"}
             </Button>
             {canWrite && (
               <>
@@ -400,6 +406,15 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
               </>
             )}
           </div>
+          {exportTooLarge && (
+            <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
+              This selection is too large for a reliable URL-based export.{" "}
+              {canWrite
+                ? "Add it to a template set and export the set instead."
+                : "Ask an operator to save it as a template set, then export the set."}
+            </p>
+          )}
+          {download.isError && <div className="mt-3"><ErrorText error={download.error} /></div>}
           {(add.isError || create.isError) && <div className="mt-3"><ErrorText error={add.error ?? create.error} /></div>}
         </Card>
       )}

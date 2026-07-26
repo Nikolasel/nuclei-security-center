@@ -229,6 +229,9 @@ export function TemplateSetsPage() {
       void qc.invalidateQueries({ queryKey: ["template-sets"] });
     },
   });
+  const download = useMutation({
+    mutationFn: ({ id }: { id: string }) => api.downloadTemplateSet(id, exportFormat),
+  });
   const imported = (result: TemplateImportResponse) => {
     const summary = result.templates;
     const setResult = result.set
@@ -266,6 +269,7 @@ export function TemplateSetsPage() {
       {notice && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">{notice}</div>}
       {remove.isError && <ErrorText error={remove.error} />}
       {convert.isError && <ErrorText error={convert.error} />}
+      {download.isError && <ErrorText error={download.error} />}
 
       {sets.isLoading ? <Spinner /> : sets.isError ? <ErrorText error={sets.error} /> : (
         <Card>
@@ -306,9 +310,10 @@ export function TemplateSetsPage() {
                           <>
                             <Button
                               variant="ghost"
-                              onClick={() => window.location.assign(api.templateSetExportURL(set.id, exportFormat))}
+                              disabled={download.isPending}
+                              onClick={() => download.mutate({ id: set.id })}
                             >
-                              Export
+                              {download.isPending && download.variables?.id === set.id ? "Exporting…" : "Export"}
                             </Button>
                             <Button variant="ghost" onClick={() => setEditing(set)}>
                               {canWrite ? "Edit selection" : "View selection"}

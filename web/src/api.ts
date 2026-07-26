@@ -565,6 +565,38 @@ async function uploadArchive(
   return (await res.json()) as TemplateImportResponse;
 }
 
+async function downloadArchive(path: string, fallbackName: string): Promise<void> {
+  const res = await fetch(path, { credentials: "same-origin" });
+  if (!res.ok) {
+    const text = (await res.text()).trim();
+    throw new ApiError(res.status, text || res.statusText);
+  }
+  const disposition = res.headers.get("content-disposition") ?? "";
+  const match = disposition.match(/filename="([^"]+)"/i);
+  const filename = (match?.[1] || fallbackName).split(/[\\/]/).pop() || fallbackName;
+  const objectURL = URL.createObjectURL(await res.blob());
+  const link = document.createElement("a");
+  link.href = objectURL;
+  link.download = filename;
+  try {
+    document.body.append(link);
+    link.click();
+  } finally {
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectURL), 0);
+  }
+}
+
+function templateExportURL(ids: string[], format: TemplateArchiveFormat): string {
+  const p = new URLSearchParams({ format });
+  ids.forEach((id) => p.append("ids", id));
+  return `/api/templates/export?${p.toString()}`;
+}
+
+function templateSetExportURL(id: string, format: TemplateArchiveFormat): string {
+  return `/api/template-sets/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`;
+}
+
 export const api = {
   me: () => request<Identity>("GET", "/api/auth/me"),
 
@@ -611,11 +643,12 @@ export const api = {
     request<{ queued: boolean }>("POST", "/api/templates/sync"),
   listTemplateSyncRuns: () =>
     request<TemplateSyncRun[]>("GET", "/api/templates/sync-runs"),
-  templateExportURL: (ids: string[], format: TemplateArchiveFormat) => {
-    const p = new URLSearchParams({ format });
-    ids.forEach((id) => p.append("ids", id));
-    return `/api/templates/export?${p.toString()}`;
-  },
+  templateExportURL,
+  downloadTemplates: (ids: string[], format: TemplateArchiveFormat) =>
+    downloadArchive(
+      templateExportURL(ids, format),
+      format === "yaml" ? "templates.tar.gz" : "templates.json",
+    ),
   importTemplates: (file: File, conflict: TemplateImportConflict) =>
     uploadArchive("/api/templates/import", file, conflict),
 
@@ -637,8 +670,12 @@ export const api = {
     request<TemplateSet>("POST", `/api/template-sets/${id}/members`, {
       template_ids: templateIDs,
     }),
-  templateSetExportURL: (id: string, format: TemplateArchiveFormat) =>
-    `/api/template-sets/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`,
+  templateSetExportURL,
+  downloadTemplateSet: (id: string, format: TemplateArchiveFormat) =>
+    downloadArchive(
+      templateSetExportURL(id, format),
+      format === "yaml" ? "template-set.tar.gz" : "template-set.json",
+    ),
   importTemplateSet: (file: File, conflict: TemplateImportConflict) =>
     uploadArchive("/api/template-sets/import", file, conflict),
 

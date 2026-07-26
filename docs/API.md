@@ -277,8 +277,8 @@ by a scan policy can't be deleted out from under it — the policy references it
 
 ### Template-set membership
 
-A template set is an **explicit list of individual catalog templates**, not a runtime filter over
-Nuclei's community repository:
+A template set is either an **exact list of individual catalog templates** or an explicit
+`dynamic_all` set that resolves every active catalog template at scan time:
 
 ```sh
 # set a set's membership to exactly these catalog template ids (the editor's "save")
@@ -289,26 +289,19 @@ curl -sb jar.txt -X POST   localhost:8080/api/template-sets/<set_id>/members -d 
 curl -sb jar.txt -X DELETE localhost:8080/api/template-sets/<set_id>/members/tech-detect
 # list a set's member templates (catalog rows, yaml omitted)
 curl -sb jar.txt localhost:8080/api/template-sets/<set_id>/members
-# convert a pre-0025 filter set against the current active catalog
-curl -sb jar.txt -X POST localhost:8080/api/template-sets/<set_id>/convert
 ```
 
-A template set reports `legacy_filter`, a read-only `legacy_filter_snapshot` for pre-existing POC
-rows, and a live `member_count`. The old top-level `git_ref` / `severities` / `tags` / `paths`
-fields are no longer part of the table or API contract. Conversion resolves the saved severity,
-tag, and path filters against the **current active upstream catalog** (legacy filters never
-selected custom templates), atomically inserts those exact IDs, then clears `legacy_filter` and
-its snapshot; before conversion, the retired per-set git ref is shown only as historical context
-because the backend-wide catalog pin is now authoritative. A filter that matches nothing returns
-`409` and leaves the set unchanged.
+A template set reports `dynamic_all` and a live `member_count`. For an exact set, the count is its
+stored membership; for a dynamic set, it is the current active-catalog size. The old top-level
+`git_ref` / `severities` / `tags` / `paths` fields and their compatibility/conversion path are no
+longer part of the table or API contract.
 
-Reads are `viewer`; conversion and membership edits are `operator`, audited as
-`config_changed` (`template_set.convert` / `template_set.members_replace` / `_add` / `_remove`). An unknown `template_id`
-is a `400`; an unknown set is a `404`. Direct membership edits on a legacy row return `409`, keeping
-it read-only until the atomic conversion action. Dispatch resolves members to concrete
-`template_ids`. Legacy-filter sets and zero-member sets fail closed with “convert to an explicit
-selection first”; a set containing a tombstoned/unavailable template also fails until its selection
-is updated.
+Reads are `viewer`; membership edits are `operator`, audited as `config_changed`
+(`template_set.members_replace` / `_add` / `_remove`). An unknown `template_id` is a `400`; an
+unknown set is a `404`. Direct membership edits on a dynamic set return `409` because it has no
+stored member rows. Dispatch resolves every set to concrete `template_ids`. Empty exact sets fail
+closed; a set containing a tombstoned/unavailable template also fails until its selection is
+updated.
 
 ## Template catalog
 
@@ -320,8 +313,10 @@ For the UI-based operational workflow and PO acceptance test, see
 [Template administration](TEMPLATE_ADMINISTRATION.md).
 
 ```sh
-# browse/search the catalog (filters: source, severity, tag, free-text q; paginated)
-curl -sb jar.txt 'localhost:8080/api/templates?severity=critical&tag=rce&q=struts&limit=50&offset=0'
+# browse/search newest-ingested CVE templates (paginated)
+curl -sb jar.txt 'localhost:8080/api/templates?cve=true&sort=inserted&limit=50&offset=0'
+# return every id matching the same filters (used by "select all matching")
+curl -sb jar.txt 'localhost:8080/api/templates/ids?severity=critical&tag=rce&q=struts'
 # one template incl. its verbatim YAML body
 curl -sb jar.txt localhost:8080/api/templates/CVE-2021-44228
 # add a custom template — the request body is raw YAML, not JSON
@@ -340,9 +335,12 @@ curl -sb jar.txt localhost:8080/api/templates/sync-runs
 
 The list response is a `{items, total, limit, offset}` page; list rows omit the `yaml` body
 (fetch a single template to get it). Filters: `source`, repeatable/CSV `severity` and `tag`
-(any-of), free-text `q` (matches id/name/description), and `include_unavailable=true` to include
-tombstoned upstream rows (removed upstream but retained so curated sets don't silently lose
-members).
+(any-of), free-text `q` (matches id/name/description), `cve=true`, and
+`include_unavailable=true` to include tombstoned upstream rows (removed upstream but retained so
+curated sets don't silently lose members). `sort=inserted` orders by NSC's `created_at` ingestion
+timestamp, newest first; this is labelled **Inserted** because the upstream catalog does not
+provide an authoritative ProjectDiscovery added/updated timestamp. `GET /api/templates/ids`
+accepts the same filters and returns all matching ids without pagination.
 
 Only **custom** templates are writable — `POST` takes YAML and parses it server-side (the YAML is
 stored byte-for-byte; the typed fields are extracted for filtering), create/edit is `operator`,
@@ -354,12 +352,15 @@ create/update response also includes
 `validation: {valid:true, errors:[], nuclei_version:"v…"}`, identifying the deployed engine that
 accepted it.
 
-`GET /api/templates/sync` returns whether upstream mirroring is enabled plus its interval, repository,
-and ref. The cache path is not exposed, and credentials/query strings are stripped from repository
-URLs. `POST /api/templates/sync` queues a refresh and returns `202`; requests coalesce behind a
-running or already-queued refresh. It returns `503` when `TEMPLATE_SYNC_REPO` is empty. The request
-is `operator`-only and audited as `config_changed` (`templates.sync_requested`); the eventual
-background outcome remains visible in `/api/templates/sync-runs`.
+`GET /api/templates/sync` returns whether upstream mirroring is enabled plus its interval,
+repository, ref, active catalog bundle digest (`templates_commit`), and active template count. The
+digest is the same identifier shown for each scanner node, so an administrator can see whether a
+node matches the backend catalog. The cache path is not exposed, and credentials/query strings are
+stripped from repository URLs. `POST /api/templates/sync` queues a refresh and returns `202`;
+requests coalesce behind a running or already-queued refresh. It returns `503` when
+`TEMPLATE_SYNC_REPO` is empty. The request is `operator`-only and audited as `config_changed`
+(`templates.sync_requested`); the eventual background outcome remains visible in
+`/api/templates/sync-runs`.
 
 Custom uploads are sanity-checked at write time (all `400` on failure): the body must be a single
 YAML document with a top-level `id`, a non-empty `info.name`, a severity in Nuclei's set
@@ -377,7 +378,7 @@ bounded batch process, described under [Template portability](#template-portabil
 
 ### Template portability
 
-Viewer-role users can export selected templates or one explicit template set; operators can import
+Viewer-role users can export selected templates or one template set; operators can import
 those files into another NSC instance:
 
 ```sh
@@ -387,7 +388,7 @@ curl -sb jar.txt -o templates.tar.gz \
 # or as one JSON portability document (the raw YAML is retained as a string)
 curl -sb jar.txt -o templates.json \
   'localhost:8080/api/templates/export?ids=custom-one&format=json'
-# an explicit set export also contains its name and exact member ids
+# an exact set export also contains its name and exact member ids
 curl -sb jar.txt -o portable-set.tar.gz \
   'localhost:8080/api/template-sets/<set_id>/export?format=yaml'
 
@@ -401,8 +402,8 @@ curl -sb jar.txt -X POST -F file=@portable-set.tar.gz \
 `format=yaml` is a gzip-compressed tar with `manifest.json`, the verbatim files under
 `templates/<source>/<path>`, and (for set exports) `set.json`. `format=json` is one JSON document
 carrying the same manifest fields and each template's verbatim YAML string; a set export includes a
-`set` object. Both forms carry SHA-256 digests and round-trip custom YAML byte-for-byte. A legacy set
-returns `409` until it is converted to explicit membership.
+`set` object. Both forms carry SHA-256 digests and round-trip custom YAML byte-for-byte. A dynamic
+set export records `dynamic_all:true` without freezing or embedding the current catalog.
 
 The optional `on_conflict` strategy defaults to `skip`:
 
@@ -433,8 +434,8 @@ validated; it omits `validation` when the conflict policy selected no custom wri
 ## Config: scan policies
 
 A **scan policy** is the central, reusable **scan configuration** — it bundles *everything* a
-scan needs: the **target** (`target_id`, required — the scope), an optional **template set**
-(`template_set_id`, omitted = all templates), and Nuclei's execution knobs
+scan needs: the **target** (`target_id`, required — the scope), a required **template set**
+(`template_set_id`, exact or dynamic all-active), and Nuclei's execution knobs
 (`rate_limit` / `concurrency` / `timeout_sec` / `max_host_error`). **Every scan and schedule is
 launched by selecting a policy** — the scan/schedule body carries only a `scan_policy_id`. Each
 knob is optional: a `null` (omitted) field means "use the built-in default" (rate `150` /
@@ -465,7 +466,8 @@ Full REST set: `GET|POST /api/scan-policies`, `GET|PUT|DELETE /api/scan-policies
 `viewer`, create/edit `operator`, delete `admin`, audited as `config_changed`). The
 `target_id`/`template_set_id` must reference existing rows (`400` otherwise). Deleting a policy
 nulls the link on past scans (history survives) and **cascades away any schedules built on it**;
-deleting a policy's target cascades the policy away too.
+deleting a policy's target cascades the policy away too. A template set referenced by a policy
+cannot be deleted until the policy is changed or removed.
 
 ## Scanner nodes
 

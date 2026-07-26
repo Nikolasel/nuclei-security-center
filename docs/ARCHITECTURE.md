@@ -85,18 +85,19 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
 - **template_sync_runs** — backend-owned upstream catalog refresh history, including pinned
   commit and added/updated/removed/skipped counts (a stray malformed file is skipped-and-counted,
   not fatal; the run fails closed only if nothing parses).
-- **template_sets** — curated explicit membership in `template_set_members`. The retired filter
-  columns are gone. Pre-existing POC rows retain a read-only JSON filter snapshot and fail closed
-  until an operator atomically converts the snapshot against the current active upstream catalog.
-  Sets and selected templates are portable as either a lossless YAML tarball (verbatim files +
-  manifest) or one JSON document retaining the verbatim YAML strings. Import writes custom
-  templates and set membership atomically; upstream rows remain sync-owned and are reference-only.
+- **template_sets** — either curated exact membership in `template_set_members`, or an explicit
+  `dynamic_all` mode that resolves every active catalog template at scan time. The retired POC
+  filter columns and compatibility code are gone (alpha breaking change). Exact sets and selected
+  templates are portable as either a lossless YAML tarball (verbatim files + manifest) or one JSON
+  document retaining the verbatim YAML strings; a dynamic set exports its mode rather than freezing
+  the current catalog. Import writes custom templates and set membership atomically; upstream rows
+  remain sync-owned and are reference-only.
 - **scan_policies** — `id, name, target_id, template_set_id, rate_limit, concurrency,
   timeout_sec, max_host_error`. The **central, reusable scan configuration**: it bundles
-  *everything* a scan needs — the target (required — the scope), an optional template set
-  (NULL = all templates), and Nuclei's execution knobs (each nullable = "use the built-in
+  *everything* a scan needs — the target (required — the scope), a required template set
+  (exact or dynamic all-active), and Nuclei's execution knobs (each nullable = "use the built-in
   default"). **Every scan and schedule is launched by selecting a policy.** Deleting a policy's
-  target cascades the policy away; deleting a template set nulls it back to "all templates".
+  target cascades the policy away; a template set referenced by a policy cannot be deleted.
 - **schedules** — `id, scan_policy_id, cron, enabled` — a policy paired with a cadence. Deleting
   the policy cascades the schedule away.
 - **scans** — `id, source (schedule|adhoc), scan_policy_id, target_id, template_set_id, status,
@@ -166,8 +167,8 @@ so scans survive a busy or briefly-unreachable node.
 
 1. **Trigger** — a schedule's cron fires (backend ticker) *or* a user clicks "Run now."
    A `scans` row is inserted with status `queued`.
-2. **Resolve + top up** — the backend resolves the policy's template set to concrete
-   catalog ids (or every active id when the policy has no set), computes the full active
+2. **Resolve + top up** — the backend resolves the policy's required template set to concrete
+   catalog ids (an exact snapshot or every active id for `dynamic_all`), computes the full active
    catalog's canonical `templates_commit`, and records both in the scan spec. Before
    dispatch it picks the target's node and pushes the full catalog if any selected
    template changed since `templates_synced_at` **or** the node's freshly reported

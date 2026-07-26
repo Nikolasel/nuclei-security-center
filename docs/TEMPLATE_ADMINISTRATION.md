@@ -128,12 +128,12 @@ Go to **Template Sets → New template set**.
 4. Reopen the set and confirm it contains exactly two IDs.
 5. Change a search filter without checking another row; confirm the saved membership does not
    change.
+6. Use **Select all matching** with a filter and confirm it selects matches across every page.
 
 An empty set may be saved for later curation, but cannot be selected by a scan policy.
 
-If an upgraded installation shows a **legacy filter** set, select **Convert to selection**. The
-system evaluates its saved filter snapshot against the current active upstream catalog once and
-freezes the resulting IDs. Review that selection afterward; conversion is deliberately not dynamic.
+Create a second set in **All active templates (dynamic)** mode. Its member count follows the active
+catalog and later upstream additions are included automatically.
 
 ### 5. Push and inspect the node bundle
 
@@ -142,7 +142,8 @@ Go to **Scanner Nodes** and select **Sync templates** on the healthy node.
 Expected result:
 
 - the UI reports the template count and catalog digest;
-- the node's **Templates** column shows the digest and push time; and
+- the node's **Catalog bundle** column shows the same digest as **Templates → Sync**, plus the push
+  time; and
 - the custom template is included because nodes receive the full active catalog, not only upstream
   content.
 
@@ -165,13 +166,13 @@ an active Nuclei process.
 
 Expected result:
 
-- legacy and empty sets cannot be selected;
+- empty exact sets cannot be selected and every policy requires a set;
 - dispatch ensures the matching node has the current bundle;
 - the scan records its Nuclei version and `templates_commit`; and
 - the selected IDs, not a filter or Git checkout, determine what Nuclei runs.
 
-Leaving **Template set** unset intentionally selects every active catalog template. Use that option
-carefully on large catalogs.
+Choose the explicit dynamic set when the policy should scan every active catalog template. Use that
+mode carefully on large catalogs.
 
 ### 7. Test portability
 
@@ -221,7 +222,7 @@ Expected validation behavior:
 | Import returns `400` with a template ID | Fix that archive entry. The entire selected batch was rejected and nothing was persisted. |
 | Import returns `503` | Selected custom writes required validation, but no healthy node completed it. Restore node health and retry. |
 | Upstream sync is disabled | Configure `TEMPLATE_SYNC_REPO`, or intentionally operate a custom-only catalog. |
-| Set cannot be selected in a policy | Convert a legacy set, add members to an empty set, or replace unavailable members. |
+| Set cannot be selected in a policy | Add members to an empty exact set, choose a dynamic set, or replace unavailable members. |
 | Manual node sync returns `409` | A scan is using the active bundle. Wait for it to finish and retry. |
 | Manual node sync returns `502` | Check node reachability, authentication/mTLS, disk space, and bundle diagnostics. |
 | Scan reports template ID/digest drift | Push the current catalog, verify node health/storage, and retry. The node correctly refused unreproducible execution. |

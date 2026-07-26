@@ -40,6 +40,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/capabilities", s.auth(s.handleCapabilities))
 	mux.HandleFunc("POST /v1/templates/bundle", s.auth(s.handleApplyBundle))
 	mux.HandleFunc("POST /v1/templates/validate", s.auth(s.handleValidateTemplate))
+	mux.HandleFunc("POST /v1/templates/validate-batch", s.auth(s.handleValidateTemplateBatch))
 	return mux
 }
 
@@ -78,6 +79,31 @@ func (s *Server) handleValidateTemplate(w http.ResponseWriter, r *http.Request) 
 		}
 		s.log.Error("validate template", "err", err)
 		http.Error(w, "template validation failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleValidateTemplateBatch verifies a transient catalog-format bundle and
+// validates all of its templates in one Nuclei process. It never activates the
+// bundle on the node.
+func (s *Server) handleValidateTemplateBatch(w http.ResponseWriter, r *http.Request) {
+	body := http.MaxBytesReader(w, r.Body, maxBundleUpload)
+	ctx, cancel := context.WithTimeout(r.Context(), types.TemplateBatchValidationNodeTimeout)
+	defer cancel()
+	stopClose := context.AfterFunc(ctx, func() { _ = body.Close() })
+	defer stopClose()
+	result, err := s.runner.ValidateTemplateBundle(ctx, body)
+	if err != nil {
+		switch {
+		case errors.Is(ctx.Err(), context.DeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
+			http.Error(w, "template batch validation timed out", http.StatusGatewayTimeout)
+		case errors.Is(err, ErrInvalidBundle):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		default:
+			s.log.Error("validate template batch", "err", err)
+			http.Error(w, "template batch validation failed", http.StatusInternalServerError)
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, result)

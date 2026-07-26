@@ -88,7 +88,10 @@ one transaction. `internal/backend/template_syncer.go`,
 authoritative validation by a known-healthy scanner node: authenticated
 `POST /v1/templates/validate` runs the pinned `nuclei -validate` with no target, a bounded body /
 timeout / diagnostic response, and reports the Nuclei version; invalid YAML maps to backend `400`,
-while no healthy validator or a node execution/transport failure maps to `503`.
+while no healthy validator or a node execution/transport failure maps to `503`. Portability imports
+apply conflict policy first, package only the final custom create/overwrite/renamed writes into a
+transient verified bundle, and call `POST /v1/templates/validate-batch`: one bounded Nuclei process,
+per-template diagnostics, and no store transaction unless the entire selected batch is valid (#140).
 
 **Port discovery (#86 — naabu pre-pass):** a scan policy can drive an optional
 **naabu** port scan on the scanner node *before* Nuclei, so Nuclei only probes live

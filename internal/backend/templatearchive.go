@@ -19,6 +19,7 @@ import (
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 	templatespkg "github.com/Nikolasel/nuclei-security-center/internal/templates"
+	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
 const (
@@ -76,9 +77,10 @@ type templateImportSummary struct {
 }
 
 type portableImportResponse struct {
-	Templates templateImportSummary `json:"templates"`
-	Set       *store.TemplateSet    `json:"set,omitempty"`
-	SetStatus string                `json:"set_status,omitempty"`
+	Templates  templateImportSummary                `json:"templates"`
+	Validation *types.TemplateBatchValidationResult `json:"validation,omitempty"`
+	Set        *store.TemplateSet                   `json:"set,omitempty"`
+	SetStatus  string                               `json:"set_status,omitempty"`
 }
 
 func (s *Server) handleExportTemplates(w http.ResponseWriter, r *http.Request) {
@@ -289,7 +291,12 @@ func (s *Server) handlePortableImport(w http.ResponseWriter, r *http.Request, re
 		r.Context(), archive, strategy, requireSet, identityFrom(r.Context()).Subject,
 	)
 	if err != nil {
+		var validationErr *templateImportValidationError
 		switch {
+		case errors.As(err, &validationErr):
+			http.Error(w, formatTemplateImportValidationError(validationErr.Result), http.StatusBadRequest)
+		case errors.Is(err, errTemplateValidatorUnavailable):
+			s.serviceUnavailable(w, "validate template import", err)
 		case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrTemplateSetLegacy):
 			http.Error(w, err.Error(), http.StatusConflict)
 		case errors.Is(err, store.ErrInvalidRef):

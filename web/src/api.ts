@@ -123,6 +123,13 @@ export interface TemplateImportResponse {
     upstream_ignored: number;
     renamed: { from: string; to: string }[];
   };
+  validation?: {
+    valid: boolean;
+    failures: { template_id: string; errors: string[] }[];
+    errors: string[];
+    truncated?: boolean;
+    nuclei_version: string;
+  };
   set?: TemplateSet;
   set_status?: "created" | "updated" | "skipped" | "renamed";
 }

@@ -210,13 +210,12 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetTemplateSync(w http.ResponseWriter, r *http.Request) {
 	status := TemplateSyncStatus{Enabled: false}
-	if s.templateSyncer == nil {
-		if s.store == nil {
-			writeJSON(w, http.StatusOK, status)
-			return
-		}
-	} else {
+	if s.templateSyncer != nil {
 		status = s.templateSyncer.Status()
+	}
+	if s.store == nil {
+		writeJSON(w, http.StatusOK, status)
+		return
 	}
 	entries, err := s.store.ActiveTemplateBundleEntries(r.Context())
 	if err != nil {

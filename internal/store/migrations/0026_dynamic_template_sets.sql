@@ -16,31 +16,46 @@ WHERE template_set_id IN (
 DELETE FROM template_sets WHERE legacy_filter;
 
 -- Preserve existing policies that used NULL as the implicit "all templates"
--- choice by attaching them to one explicit dynamic set. Reuse a pre-existing
--- set named "All templates" if present; otherwise create the built-in row.
+-- choice by attaching them to one explicit dynamic set. Only create the
+-- migration set when such policies exist. Never reuse a row by display name:
+-- an exact user-curated set may legitimately be named "All templates", and
+-- converting it would silently discard its stored membership.
 DO $$
 DECLARE
-    all_templates_id UUID;
+    all_templates_id   UUID := '00000000-0000-4000-8000-000000000085';
+    all_templates_name TEXT := 'All templates';
+    name_suffix        INTEGER := 0;
 BEGIN
-    SELECT id INTO all_templates_id
-    FROM template_sets
-    WHERE lower(name) = 'all templates'
-    LIMIT 1;
+    IF EXISTS (SELECT 1 FROM scan_policies WHERE template_set_id IS NULL) THEN
+        IF EXISTS (SELECT 1 FROM template_sets WHERE id = all_templates_id) THEN
+            RAISE EXCEPTION
+                'reserved dynamic template-set id % is already in use',
+                all_templates_id;
+        END IF;
 
-    IF all_templates_id IS NULL THEN
-        all_templates_id := '00000000-0000-4000-8000-000000000085';
+        -- The case-insensitive name index is unique. Preserve every existing
+        -- row and choose a clear alternate label if a user already claimed the
+        -- preferred name.
+        WHILE EXISTS (
+            SELECT 1 FROM template_sets WHERE lower(name) = lower(all_templates_name)
+        ) LOOP
+            name_suffix := name_suffix + 1;
+            IF name_suffix = 1 THEN
+                all_templates_name := 'All templates (dynamic)';
+            ELSE
+                all_templates_name := format(
+                    'All templates (dynamic %s)', name_suffix
+                );
+            END IF;
+        END LOOP;
+
         INSERT INTO template_sets (id, name, dynamic_all)
-        VALUES (all_templates_id, 'All templates', true);
-    ELSE
-        UPDATE template_sets
-        SET dynamic_all = true, updated_at = now()
-        WHERE id = all_templates_id;
-        DELETE FROM template_set_members WHERE template_set_id = all_templates_id;
-    END IF;
+        VALUES (all_templates_id, all_templates_name, true);
 
-    UPDATE scan_policies
-    SET template_set_id = all_templates_id, updated_at = now()
-    WHERE template_set_id IS NULL;
+        UPDATE scan_policies
+        SET template_set_id = all_templates_id, updated_at = now()
+        WHERE template_set_id IS NULL;
+    END IF;
 END $$;
 
 ALTER TABLE scan_policies

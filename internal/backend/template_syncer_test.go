@@ -56,6 +56,12 @@ func TestTemplateSyncHTTPDisabledAndQueued(t *testing.T) {
 		trigger: make(chan struct{}, 1),
 	}
 	rr = httptest.NewRecorder()
+	s.handleGetTemplateSync(rr, httptest.NewRequest(http.MethodGet, "/api/templates/sync", nil))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"enabled":true`) {
+		t.Fatalf("enabled status without store = %d %s", rr.Code, rr.Body.String())
+	}
+
+	rr = httptest.NewRecorder()
 	s.handleRequestTemplateSync(rr, httptest.NewRequest(http.MethodPost, "/api/templates/sync", nil))
 	if rr.Code != http.StatusAccepted || len(s.templateSyncer.trigger) != 1 {
 		t.Fatalf("queued request = %d %s, trigger count %d", rr.Code, rr.Body.String(), len(s.templateSyncer.trigger))

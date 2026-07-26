@@ -91,12 +91,12 @@ func (s *Server) handleExportFindings(w http.ResponseWriter, r *http.Request) {
 // writeFindingsRawJSONL emits one compact raw Nuclei JSON object per line — the
 // native out.jsonl shape — with the lifecycle finding id prepended as a
 // namespaced field so each line joins back to the projected exports. Each
-// payload is already valid JSON from the store (Postgres JSONB).
+// payload is already valid JSON from the store's preserved raw-line column.
 func writeFindingsRawJSONL(w io.Writer, rows []store.RawExportRow) {
 	var buf bytes.Buffer
 	for _, r := range rows {
 		buf.Reset()
-		// Compact strips the JSONB pretty-printing to one line.
+		// Compact guarantees one JSON object per line while retaining its values.
 		if err := json.Compact(&buf, r.Raw); err != nil {
 			// Not compactable (shouldn't happen) — emit verbatim, unjoined.
 			_, _ = w.Write(r.Raw)

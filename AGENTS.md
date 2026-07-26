@@ -147,7 +147,8 @@ logic in SQL or long-lived in-memory schedulers. Endpoints: `GET/POST /api/sched
 `POST /api/schedules/{id}/run` (operator, off-cycle dispatch, leaves cadence untouched).
 
 **Findings are two tables:** `findings` is the immutable per-scan
-**occurrence** log (holds the verbatim raw JSONL; answers "what did scan X observe");
+**occurrence** log (holds the verbatim raw JSONL in `raw_line` plus a NUL-safe JSONB
+projection in `raw`; answers "what did scan X observe");
 `finding_lifecycle` is the **deduplicated** entity keyed on `(target_id, template_id,
 matched_at)` that users triage. Ingest inserts an occurrence and upserts the lifecycle row
 (`store.IngestFinding`). The lifecycle follows **Tenable Security Center's model**, two

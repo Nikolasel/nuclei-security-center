@@ -26,13 +26,13 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/b
 # UBI 10 Micro ships no CA trust store at all (verified: none of the standard
 # /etc/ssl or /etc/pki paths exist), so copy a known-good bundle to a path Go's
 # crypto/x509 searches on Linux. The backend needs this for its outbound TLS.
-FROM alpine:3.21 AS certs
+FROM alpine:3.24 AS certs
 RUN apk add --no-cache ca-certificates
 
 # Seed the persistent template-cache mount with runtime-user ownership. Docker
 # copies this directory metadata into a newly-created named volume; without it,
 # /var/lib/nsc is root-owned and the non-root backend cannot create its clone.
-FROM alpine:3.21 AS runtime-dirs
+FROM alpine:3.24 AS runtime-dirs
 RUN mkdir -p /var/lib/nsc && chown 1001:0 /var/lib/nsc && chmod 0750 /var/lib/nsc
 
 # ---- minimal runtime: static binary on Red Hat UBI 10 Micro, non-root ----

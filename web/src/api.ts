@@ -105,6 +105,11 @@ export interface Template {
 
 export interface TemplateDetail extends Template {
   yaml: string;
+  validation?: {
+    valid: boolean;
+    errors: string[];
+    nuclei_version: string;
+  };
 }
 
 export type TemplateArchiveFormat = "yaml" | "json";

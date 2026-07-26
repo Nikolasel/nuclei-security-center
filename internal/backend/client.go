@@ -28,6 +28,9 @@ type ScannerClient struct {
 	token   string
 	tlsCfg  *tls.Config
 	http    *http.Client
+	// httpForTimeout is a test seam for dedicated long/short-lived clients.
+	// Production leaves it nil and uses newHTTPClient.
+	httpForTimeout func(time.Duration) *http.Client
 }
 
 // NewScannerClient builds a client for the node at baseURL (e.g. http://scanner:8081).
@@ -49,6 +52,13 @@ func (c *ScannerClient) newHTTPClient(timeout time.Duration) *http.Client {
 		hc.Transport = &http.Transport{TLSClientConfig: c.tlsCfg.Clone()}
 	}
 	return hc
+}
+
+func (c *ScannerClient) clientForTimeout(timeout time.Duration) *http.Client {
+	if c.httpForTimeout != nil {
+		return c.httpForTimeout(timeout)
+	}
+	return c.newHTTPClient(timeout)
 }
 
 func (c *ScannerClient) newReq(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
@@ -128,6 +138,33 @@ func (c *ScannerClient) Capabilities(ctx context.Context) (types.Capabilities, e
 		return types.Capabilities{}, err
 	}
 	return caps, nil
+}
+
+// ValidateTemplate asks the scanner node's pinned Nuclei binary for an
+// authoritative custom-template verdict. A valid=false result is not a
+// transport error; callers map it to a client-side validation response.
+func (c *ScannerClient) ValidateTemplate(ctx context.Context, yaml []byte) (types.TemplateValidationResult, error) {
+	req, err := c.newReq(ctx, http.MethodPost, "/v1/templates/validate", bytes.NewReader(yaml))
+	if err != nil {
+		return types.TemplateValidationResult{}, err
+	}
+	req.Header.Set("Content-Type", "application/yaml")
+	resp, err := c.clientForTimeout(35 * time.Second).Do(req)
+	if err != nil {
+		return types.TemplateValidationResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return types.TemplateValidationResult{}, fmt.Errorf("validate template: %s", statusErr(resp))
+	}
+	var result types.TemplateValidationResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return types.TemplateValidationResult{}, err
+	}
+	if result.Errors == nil {
+		result.Errors = []string{}
+	}
+	return result, nil
 }
 
 // pushBundleTimeout bounds a full-catalog bundle upload + the node's verify/

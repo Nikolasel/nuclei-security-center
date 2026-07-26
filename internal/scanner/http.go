@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
@@ -37,7 +39,48 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/scans/{id}/cancel", s.auth(s.handleCancel))
 	mux.HandleFunc("GET /v1/capabilities", s.auth(s.handleCapabilities))
 	mux.HandleFunc("POST /v1/templates/bundle", s.auth(s.handleApplyBundle))
+	mux.HandleFunc("POST /v1/templates/validate", s.auth(s.handleValidateTemplate))
 	return mux
+}
+
+const (
+	maxTemplateValidationUpload = 1 << 20 // 1 MiB
+	templateValidationTimeout   = 30 * time.Second
+)
+
+// handleValidateTemplate runs Nuclei's own parser against one custom template.
+// Invalid templates are successful verdict responses (valid=false); only node
+// execution failures use an HTTP error status.
+func (s *Server) handleValidateTemplate(w http.ResponseWriter, r *http.Request) {
+	body := http.MaxBytesReader(w, r.Body, maxTemplateValidationUpload)
+	yaml, err := io.ReadAll(body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			http.Error(w, "template exceeds 1 MiB", http.StatusRequestEntityTooLarge)
+			return
+		}
+		http.Error(w, "read template", http.StatusBadRequest)
+		return
+	}
+	if len(yaml) == 0 {
+		http.Error(w, "template body is empty", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), templateValidationTimeout)
+	defer cancel()
+	result, err := s.runner.ValidateTemplate(ctx, yaml)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			http.Error(w, "template validation timed out", http.StatusGatewayTimeout)
+			return
+		}
+		s.log.Error("validate template", "err", err)
+		http.Error(w, "template validation failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 // maxBundleUpload caps the compressed request body for a pushed bundle, bounding

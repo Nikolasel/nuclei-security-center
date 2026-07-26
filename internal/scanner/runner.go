@@ -333,7 +333,11 @@ func (r *Runner) Capabilities() types.Capabilities {
 
 // nucleiVersion returns the engine version string, or "" if it can't be read.
 func (r *Runner) nucleiVersion() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	return r.nucleiVersionContext(context.Background())
+}
+
+func (r *Runner) nucleiVersionContext(parent context.Context) string {
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, r.nucleiPath, "-version").CombinedOutput()
 	if err != nil {

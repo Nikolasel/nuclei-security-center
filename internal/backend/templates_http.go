@@ -1,19 +1,28 @@
 package backend
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"regexp"
+	"strings"
+	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 	"github.com/Nikolasel/nuclei-security-center/internal/templates"
+	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
 // maxTemplateYAML caps a custom-template upload. Nuclei templates are small
 // (a few KB); this is generous while bounding memory on a bad request (CWE-770).
 const maxTemplateYAML = 1 << 20 // 1 MiB
+
+// customTemplateValidationTimeout bounds node selection plus validation across
+// all healthy candidates; a request cannot accumulate one client timeout per
+// registered node.
+const customTemplateValidationTimeout = 40 * time.Second
 
 // customIDPattern constrains a custom template's Nuclei id so it is a safe,
 // single-path-segment slug: it becomes the {id} route param and the synthesized
@@ -25,7 +34,8 @@ var customIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$`)
 // itself hides (`json:"-"`) so list responses stay lean.
 type templateResponse struct {
 	store.Template
-	YAML string `json:"yaml"`
+	YAML       string                          `json:"yaml"`
+	Validation *types.TemplateValidationResult `json:"validation,omitempty"`
 }
 
 func templateDetail(t store.Template) templateResponse {
@@ -83,13 +93,19 @@ func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	validation, ok := s.authorizeCustomTemplate(w, r, body)
+	if !ok {
+		return
+	}
 	t.CreatedBy = identityFrom(r.Context()).Subject
 	created, err := s.store.CreateCustomTemplate(r.Context(), t)
 	if err != nil {
 		s.writeStoreErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, templateDetail(created))
+	response := templateDetail(created)
+	response.Validation = &validation
+	writeJSON(w, http.StatusCreated, response)
 }
 
 func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
@@ -108,12 +124,41 @@ func (s *Server) handleUpdateTemplate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "template id in body does not match the URL", http.StatusBadRequest)
 		return
 	}
+	validation, ok := s.authorizeCustomTemplate(w, r, body)
+	if !ok {
+		return
+	}
 	updated, err := s.store.UpdateCustomTemplate(r.Context(), r.PathValue("id"), t)
 	if err != nil {
 		s.writeStoreErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, templateDetail(updated))
+	response := templateDetail(updated)
+	response.Validation = &validation
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *Server) authorizeCustomTemplate(w http.ResponseWriter, r *http.Request, yaml []byte) (types.TemplateValidationResult, bool) {
+	if s.templateValidator == nil {
+		s.serviceUnavailable(w, "validate custom template", errTemplateValidatorUnavailable)
+		return types.TemplateValidationResult{}, false
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), customTemplateValidationTimeout)
+	defer cancel()
+	result, err := s.templateValidator(ctx, yaml)
+	if err != nil {
+		s.serviceUnavailable(w, "validate custom template", err)
+		return types.TemplateValidationResult{}, false
+	}
+	if !result.Valid {
+		message := strings.Join(result.Errors, "; ")
+		if message == "" {
+			message = "Nuclei rejected the template"
+		}
+		http.Error(w, "nuclei validation failed: "+message, http.StatusBadRequest)
+		return types.TemplateValidationResult{}, false
+	}
+	return result, true
 }
 
 func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {

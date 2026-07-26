@@ -111,9 +111,11 @@ http:
 function CustomTemplateModal({
   existing,
   onClose,
+  onSaved,
 }: {
   existing?: Template;
   onClose: () => void;
+  onSaved: (saved: TemplateDetail) => void;
 }) {
   const qc = useQueryClient();
   const detail = useQuery({
@@ -136,6 +138,7 @@ function CustomTemplateModal({
     onSuccess: (saved) => {
       qc.setQueryData<TemplateDetail>(["template", saved.id], saved);
       void qc.invalidateQueries({ queryKey: ["templates"] });
+      onSaved(saved);
       onClose();
     },
   });
@@ -154,7 +157,8 @@ function CustomTemplateModal({
       ) : (
         <div className="space-y-4">
           <p className="text-xs text-neutral-500">
-            Upload or paste one Nuclei YAML document. The template ID is immutable after creation.
+            Upload or paste one Nuclei YAML document. A healthy scanner node validates it with the
+            deployed Nuclei engine before it is saved. The template ID is immutable after creation.
           </p>
           <input
             type="file"
@@ -445,6 +449,7 @@ function CustomTab({ canWrite, canDelete }: { canWrite: boolean; canDelete: bool
   const [offset, setOffset] = useState(0);
   const [viewing, setViewing] = useState<Template | null>(null);
   const [editing, setEditing] = useState<Template | "new" | null>(null);
+  const [notice, setNotice] = useState("");
   const templates = useQuery({
     queryKey: ["templates", "custom", offset],
     queryFn: () => api.listTemplates({ source: "custom", limit: PAGE_SIZE, offset }),
@@ -457,9 +462,10 @@ function CustomTab({ canWrite, canDelete }: { canWrite: boolean; canDelete: bool
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-neutral-500">Organization-specific YAML stored losslessly alongside the upstream catalog.</p>
+        <p className="text-sm text-neutral-500">Organization-specific YAML, validated by Nuclei and stored losslessly alongside the upstream catalog.</p>
         {canWrite && <Button variant="primary" onClick={() => setEditing("new")}>New custom template</Button>}
       </div>
+      {notice && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">{notice}</div>}
       {remove.isError && <ErrorText error={remove.error} />}
       {templates.isError ? <ErrorText error={templates.error} /> : templates.isLoading || !templates.data ? <Spinner /> : (
         <Card>
@@ -487,7 +493,15 @@ function CustomTab({ canWrite, canDelete }: { canWrite: boolean; canDelete: bool
         </Card>
       )}
       {viewing && <TemplateDetailModal template={viewing} onClose={() => setViewing(null)} />}
-      {editing && <CustomTemplateModal existing={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />}
+      {editing && (
+        <CustomTemplateModal
+          existing={editing === "new" ? undefined : editing}
+          onClose={() => setEditing(null)}
+          onSaved={(saved) => setNotice(
+            `Saved ${saved.id}; validated with Nuclei ${saved.validation?.nuclei_version ?? "on the scanner node"}.`,
+          )}
+        />
+      )}
     </div>
   );
 }

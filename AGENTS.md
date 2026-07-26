@@ -84,7 +84,11 @@ templates or an explicit set as a YAML tarball / JSON portability document; cust
 lossless, upstream entries stay sync-owned, and imports apply conflict policy plus set membership in
 one transaction. `internal/backend/template_syncer.go`,
 `internal/backend/distributor.go`, `internal/store/templates*.go`, and
-`internal/scanner/bundle.go`.
+`internal/scanner/bundle.go`. Custom template create/update is additionally fail-closed behind
+authoritative validation by a known-healthy scanner node: authenticated
+`POST /v1/templates/validate` runs the pinned `nuclei -validate` with no target, a bounded body /
+timeout / diagnostic response, and reports the Nuclei version; invalid YAML maps to backend `400`,
+while no healthy validator or a node execution/transport failure maps to `503`.
 
 **Port discovery (#86 — naabu pre-pass):** a scan policy can drive an optional
 **naabu** port scan on the scanner node *before* Nuclei, so Nuclei only probes live

@@ -33,7 +33,8 @@ the design rationale.
 
 Both services ship as multi-arch (`linux/amd64` + `linux/arm64`) images on a minimal **Red Hat UBI
 10 Micro** base; the scanner is fully self-contained, baking in a checksum-verified, pinned `nuclei`
-binary (`NUCLEI_VERSION`) plus the community templates. See
+binary (`NUCLEI_VERSION`) and `naabu`. The backend-owned template catalog is pushed to nodes as a
+verified bundle; the image contains no mutable community template cache. See
 **[docs/CONFIGURATION.md → Container images](docs/CONFIGURATION.md#container-images)**.
 
 ## Quick start
@@ -68,6 +69,7 @@ docker-compose.yml   postgres + minio + keycloak + scanner + backend
 - **[Architecture](docs/ARCHITECTURE.md)** — design principles, components, data model, and decisions.
 - **[API reference](docs/API.md)** — REST endpoints for scans, findings, dispositions, exports, and schedules.
 - **[Configuration](docs/CONFIGURATION.md)** — environment variables, OIDC/BFF auth, and object storage.
+- **[Template administration](docs/TEMPLATE_ADMINISTRATION.md)** — PO/operator guide to catalog sync, custom validation, explicit sets, node bundles, and portability.
 - **[Development](docs/DEVELOPMENT.md)** — local dev workflow, auth-disabled mode, tests, and CI/CD.
 
 ## License

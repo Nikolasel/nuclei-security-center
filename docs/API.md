@@ -316,6 +316,9 @@ The backend mirrors the upstream Nuclei template catalog into Postgres (managed 
 `TemplateSyncer`, #85) and lets you add **custom** templates alongside it. Every template is
 keyed by its Nuclei `id`; `source` is `upstream` or `custom`.
 
+For the UI-based operational workflow and PO acceptance test, see
+[Template administration](TEMPLATE_ADMINISTRATION.md).
+
 ```sh
 # browse/search the catalog (filters: source, severity, tag, free-text q; paginated)
 curl -sb jar.txt 'localhost:8080/api/templates?severity=critical&tag=rce&q=struts&limit=50&offset=0'

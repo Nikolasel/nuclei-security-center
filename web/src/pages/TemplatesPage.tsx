@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   api,
   SEVERITIES,
@@ -116,7 +116,14 @@ function CustomTemplateModal({
     enabled: existing != null,
   });
   const [draft, setDraft] = useState(existing ? "" : SAMPLE_TEMPLATE);
-  const yaml = existing && draft === "" ? detail.data?.yaml ?? "" : draft;
+  const [draftLoaded, setDraftLoaded] = useState(existing == null);
+  useEffect(() => {
+    if (!draftLoaded && detail.data) {
+      setDraft(detail.data.yaml);
+      setDraftLoaded(true);
+    }
+  }, [detail.data, draftLoaded]);
+  const yaml = draft;
   const save = useMutation({
     mutationFn: () =>
       existing ? api.updateTemplate(existing.id, yaml) : api.createTemplate(yaml),

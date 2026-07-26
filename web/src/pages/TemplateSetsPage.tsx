@@ -88,6 +88,11 @@ function TemplateSetModal({
             </div>
             <Pill tone={selected.size ? "good" : "warn"}>{selected.size} selected</Pill>
           </div>
+          {selected.size === 0 && (
+            <p className="mb-3 text-xs text-amber-700 dark:text-amber-300">
+              Empty sets can be saved for later curation, but cannot be selected by a scan policy.
+            </p>
+          )}
           {selected.size > 0 && (
             <div className="mb-3 max-h-28 overflow-y-auto rounded-md bg-neutral-50 p-2 dark:bg-neutral-950/50">
               <div className="flex flex-wrap gap-1.5">
@@ -170,7 +175,7 @@ function TemplateSetModal({
           {!readOnly && (
             <Button
               variant="primary"
-              disabled={save.isPending || !name.trim() || selected.size === 0 || !loadedMembers}
+              disabled={save.isPending || !name.trim() || !loadedMembers}
               onClick={() => save.mutate()}
             >
               {save.isPending ? "Saving selection…" : `Save ${selected.size} templates`}

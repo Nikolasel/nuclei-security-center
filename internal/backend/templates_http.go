@@ -123,8 +123,25 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handleGetTemplateSync(w http.ResponseWriter, _ *http.Request) {
+	if s.templateSyncer == nil {
+		writeJSON(w, http.StatusOK, TemplateSyncStatus{Enabled: false})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.templateSyncer.Status())
+}
+
+func (s *Server) handleRequestTemplateSync(w http.ResponseWriter, _ *http.Request) {
+	if s.templateSyncer == nil {
+		http.Error(w, "upstream template sync is disabled", http.StatusServiceUnavailable)
+		return
+	}
+	s.templateSyncer.RequestSync()
+	writeJSON(w, http.StatusAccepted, map[string]bool{"queued": true})
+}
+
 // handleListTemplateSyncRuns backs the Sync view: recent refresh outcomes,
-// newest first. Read-only; triggering a sync on demand is a later slice.
+// newest first.
 func (s *Server) handleListTemplateSyncRuns(w http.ResponseWriter, r *http.Request) {
 	runs, err := s.store.ListTemplateSyncRuns(r.Context(), 20)
 	if err != nil {

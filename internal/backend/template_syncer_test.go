@@ -3,12 +3,64 @@ package backend
 import (
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	git "github.com/go-git/go-git/v5"
 )
+
+func TestTemplateSyncStatusRedactsRepositorySecrets(t *testing.T) {
+	s := &TemplateSyncer{config: TemplateSyncerConfig{
+		Interval: 6 * time.Hour,
+		Repo:     "https://user:secret@example.test/catalog.git?token=hidden#fragment",
+		Ref:      "v1.2.3",
+	}}
+	got := s.Status()
+	if got.Repo != "https://example.test/catalog.git" {
+		t.Fatalf("Repo = %q", got.Repo)
+	}
+	if !got.Enabled || got.Interval != "6h0m0s" || got.Ref != "v1.2.3" {
+		t.Fatalf("unexpected status: %+v", got)
+	}
+}
+
+func TestTemplateSyncRequestsCoalesce(t *testing.T) {
+	s := &TemplateSyncer{trigger: make(chan struct{}, 1)}
+	s.RequestSync()
+	s.RequestSync()
+	if got := len(s.trigger); got != 1 {
+		t.Fatalf("queued triggers = %d, want 1", got)
+	}
+}
+
+func TestTemplateSyncHTTPDisabledAndQueued(t *testing.T) {
+	s := &Server{}
+	rr := httptest.NewRecorder()
+	s.handleGetTemplateSync(rr, httptest.NewRequest(http.MethodGet, "/api/templates/sync", nil))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"enabled":false`) {
+		t.Fatalf("disabled status = %d %s", rr.Code, rr.Body.String())
+	}
+	rr = httptest.NewRecorder()
+	s.handleRequestTemplateSync(rr, httptest.NewRequest(http.MethodPost, "/api/templates/sync", nil))
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("disabled request status = %d, want 503", rr.Code)
+	}
+
+	s.templateSyncer = &TemplateSyncer{
+		config:  TemplateSyncerConfig{Interval: time.Hour, Repo: "https://example.test/catalog.git", Ref: "latest"},
+		trigger: make(chan struct{}, 1),
+	}
+	rr = httptest.NewRecorder()
+	s.handleRequestTemplateSync(rr, httptest.NewRequest(http.MethodPost, "/api/templates/sync", nil))
+	if rr.Code != http.StatusAccepted || len(s.templateSyncer.trigger) != 1 {
+		t.Fatalf("queued request = %d %s, trigger count %d", rr.Code, rr.Body.String(), len(s.templateSyncer.trigger))
+	}
+}
 
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))

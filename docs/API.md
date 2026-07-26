@@ -327,6 +327,10 @@ curl -sb jar.txt -X POST localhost:8080/api/templates --data-binary @my-check.ya
 curl -sb jar.txt -X PUT localhost:8080/api/templates/my-custom-check --data-binary @my-check.yaml
 # delete a custom template
 curl -sb jar.txt -X DELETE localhost:8080/api/templates/my-custom-check
+# read safe upstream-sync configuration (viewer)
+curl -sb jar.txt localhost:8080/api/templates/sync
+# queue an upstream refresh now (operator)
+curl -sb jar.txt -X POST localhost:8080/api/templates/sync
 # recent upstream-sync outcomes (for the Sync view)
 curl -sb jar.txt localhost:8080/api/templates/sync-runs
 ```
@@ -343,6 +347,13 @@ delete is `admin`. Mutating an **upstream** row is refused (`409`, it's owned by
 custom `id` that collides with an existing template (custom or upstream) is a `409` — that's how a
 custom template is prevented from shadowing an upstream one. Reads are `viewer`; writes are audited
 as `config_changed` (`template.create` / `template.update` / `template.delete`).
+
+`GET /api/templates/sync` returns whether upstream mirroring is enabled plus its interval, repository,
+and ref. The cache path is not exposed, and credentials/query strings are stripped from repository
+URLs. `POST /api/templates/sync` queues a refresh and returns `202`; requests coalesce behind a
+running or already-queued refresh. It returns `503` when `TEMPLATE_SYNC_REPO` is empty. The request
+is `operator`-only and audited as `config_changed` (`templates.sync_requested`); the eventual
+background outcome remains visible in `/api/templates/sync-runs`.
 
 Custom uploads are sanity-checked at write time (all `400` on failure): the body must be a single
 YAML document with a top-level `id`, a non-empty `info.name`, a severity in Nuclei's set

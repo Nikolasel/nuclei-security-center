@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -41,9 +42,20 @@ type TemplateSyncerConfig struct {
 // mirrors its YAML into the local catalog. It never exposes the clone to
 // scanners; a later bundle-distribution slice will use the stored YAML.
 type TemplateSyncer struct {
-	store  *store.Store
-	config TemplateSyncerConfig
-	log    *slog.Logger
+	store   *store.Store
+	config  TemplateSyncerConfig
+	log     *slog.Logger
+	trigger chan struct{}
+}
+
+// TemplateSyncStatus is the safe, read-only configuration shown in the SPA.
+// The cache directory is intentionally omitted, and credentials/query strings
+// are removed from HTTP(S) repository URLs before they leave the backend.
+type TemplateSyncStatus struct {
+	Enabled  bool   `json:"enabled"`
+	Interval string `json:"interval,omitempty"`
+	Repo     string `json:"repo,omitempty"`
+	Ref      string `json:"ref,omitempty"`
 }
 
 // NewTemplateSyncer validates and wires a catalog synchronizer. "latest" is a
@@ -62,7 +74,10 @@ func NewTemplateSyncer(st *store.Store, cfg TemplateSyncerConfig, log *slog.Logg
 	if strings.TrimSpace(cfg.Dir) == "" {
 		return nil, errors.New("template sync directory is required")
 	}
-	return &TemplateSyncer{store: st, config: cfg, log: log.With("component", "template_syncer")}, nil
+	return &TemplateSyncer{
+		store: st, config: cfg, log: log.With("component", "template_syncer"),
+		trigger: make(chan struct{}, 1),
+	}, nil
 }
 
 // Start runs a refresh immediately, then repeats it on the configured cadence.
@@ -79,9 +94,40 @@ func (s *TemplateSyncer) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				s.sync(ctx)
+			case <-s.trigger:
+				s.sync(ctx)
 			}
 		}
 	}()
+}
+
+// RequestSync queues one on-demand refresh. Repeated requests coalesce while a
+// refresh is running or already queued, keeping the same single-writer behavior
+// as periodic syncs without making the HTTP request wait for a large clone.
+func (s *TemplateSyncer) RequestSync() {
+	select {
+	case s.trigger <- struct{}{}:
+	default:
+	}
+}
+
+// Status returns the non-secret configuration needed by the Sync tab.
+func (s *TemplateSyncer) Status() TemplateSyncStatus {
+	return TemplateSyncStatus{
+		Enabled: true, Interval: s.config.Interval.String(),
+		Repo: safeTemplateRepo(s.config.Repo), Ref: s.config.Ref,
+	}
+}
+
+func safeTemplateRepo(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" {
+		return raw
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
 }
 
 func (s *TemplateSyncer) sync(ctx context.Context) {

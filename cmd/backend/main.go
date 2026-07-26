@@ -101,6 +101,7 @@ func main() {
 			log.Error("configure template sync", "err", err)
 			os.Exit(1)
 		}
+		apiSrv.SetTemplateSyncer(templateSyncer)
 		templateSyncer.Start(ctx)
 		log.Info("template syncer started", "repo", cfg.Repo, "ref", cfg.Ref, "dir", cfg.Dir)
 

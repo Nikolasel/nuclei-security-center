@@ -183,11 +183,21 @@ export function NodesPage() {
   const isAdmin = hasRole(me.data ?? undefined, "admin");
   const qc = useQueryClient();
   const [editing, setEditing] = useState<ScannerNode | "new" | null>(null);
+  const [notice, setNotice] = useState("");
 
   const q = useQuery({ queryKey: ["nodes"], queryFn: () => api.listNodes() });
   const del = useMutation({
     mutationFn: (id: string) => api.deleteNode(id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["nodes"] }),
+  });
+  const syncTemplates = useMutation({
+    mutationFn: (node: ScannerNode) => api.syncNodeTemplates(node.id),
+    onSuccess: (result, node) => {
+      setNotice(
+        `Pushed ${result.template_count} templates to "${node.name}" (${result.templates_commit.slice(0, 12)}).`,
+      );
+      void qc.invalidateQueries({ queryKey: ["nodes"] });
+    },
   });
 
   return (
@@ -207,7 +217,13 @@ export function NodesPage() {
         )}
       </div>
 
+      {notice && (
+        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
+          {notice}
+        </div>
+      )}
       {del.isError && <ErrorText error={del.error} />}
+      {syncTemplates.isError && <ErrorText error={syncTemplates.error} />}
 
       {q.isLoading ? (
         <Spinner />
@@ -224,6 +240,7 @@ export function NodesPage() {
                   <th className="px-3 py-2 font-medium">Endpoint</th>
                   <th className="px-3 py-2 font-medium">CIDRs</th>
                   <th className="px-3 py-2 font-medium">Nuclei</th>
+                  <th className="px-3 py-2 font-medium">Templates</th>
                   <th className="px-3 py-2 font-medium">Last seen</th>
                   <th className="px-3 py-2 font-medium">Tags</th>
                   {isAdmin && <th className="px-3 py-2" />}
@@ -253,10 +270,30 @@ export function NodesPage() {
                       {n.cidrs.length ? n.cidrs.join(", ") : <span className="text-neutral-400">catch-all</span>}
                     </td>
                     <td className="px-3 py-2 text-neutral-500">{n.nuclei_version || "—"}</td>
+                    <td className="px-3 py-2 text-neutral-500">
+                      <div className="font-mono text-xs" title={n.templates_commit}>
+                        {n.templates_commit ? n.templates_commit.slice(0, 12) : "none active"}
+                      </div>
+                      <div className="mt-0.5 text-xs" title={n.templates_synced_at ? new Date(n.templates_synced_at).toLocaleString() : undefined}>
+                        pushed {fmtTime(n.templates_synced_at)}
+                      </div>
+                    </td>
                     <td className="px-3 py-2 text-neutral-500">{fmtTime(n.last_seen)}</td>
                     <td className="px-3 py-2 text-neutral-500">{n.tags.join(", ") || "—"}</td>
                     {isAdmin && (
                       <td className="px-3 py-2 text-right whitespace-nowrap">
+                        <Button
+                          variant="ghost"
+                          disabled={syncTemplates.isPending && syncTemplates.variables?.id === n.id}
+                          onClick={() => {
+                            setNotice("");
+                            syncTemplates.mutate(n);
+                          }}
+                        >
+                          {syncTemplates.isPending && syncTemplates.variables?.id === n.id
+                            ? "Syncing…"
+                            : "Sync templates"}
+                        </Button>
                         <Button variant="ghost" onClick={() => setEditing(n)}>
                           Edit
                         </Button>
@@ -275,7 +312,7 @@ export function NodesPage() {
                 ))}
                 {(q.data ?? []).length === 0 && (
                   <tr>
-                    <td colSpan={isAdmin ? 8 : 7} className="px-3 py-8 text-center text-neutral-400">
+                    <td colSpan={isAdmin ? 9 : 8} className="px-3 py-8 text-center text-neutral-400">
                       No scanner nodes.
                     </td>
                   </tr>

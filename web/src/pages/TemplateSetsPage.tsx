@@ -1,49 +1,186 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { api, type TemplateSet } from "../api";
+import { useEffect, useState } from "react";
+import { api, SEVERITIES, type TemplateSet, type TemplateSource } from "../api";
 import { hasRole, useMe } from "../auth";
-import { Button, Card, ErrorText, Field, Input, Modal, Pill, Spinner } from "../components/ui";
+import { Button, Card, ErrorText, Field, Input, Modal, Pill, Select, SeverityBadge, Spinner } from "../components/ui";
+import { parseList } from "../util";
 
-function TemplateSetModal({ existing, onClose }: { existing?: TemplateSet; onClose: () => void }) {
+const PAGE_SIZE = 20;
+
+function TemplateSetModal({
+  existing,
+  readOnly = false,
+  onClose,
+}: {
+  existing?: TemplateSet;
+  readOnly?: boolean;
+  onClose: () => void;
+}) {
   const qc = useQueryClient();
   const [name, setName] = useState(existing?.name ?? "");
+  const [query, setQuery] = useState("");
+  const [source, setSource] = useState<TemplateSource | "">("");
+  const [severity, setSeverity] = useState("");
+  const [tags, setTags] = useState("");
+  const [offset, setOffset] = useState(0);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [loadedMembers, setLoadedMembers] = useState(existing == null);
+
+  const members = useQuery({
+    queryKey: ["template-set-members", existing?.id],
+    queryFn: () => api.listTemplateSetMembers(existing!.id),
+    enabled: existing != null,
+  });
+  useEffect(() => {
+    if (!loadedMembers && members.data) {
+      setSelected(new Set(members.data.map((template) => template.id)));
+      setLoadedMembers(true);
+    }
+  }, [loadedMembers, members.data]);
+
+  const templates = useQuery({
+    queryKey: ["templates", "set-picker", query, source, severity, tags, offset],
+    queryFn: () =>
+      api.listTemplates({
+        q: query.trim(),
+        source: source || undefined,
+        severities: severity ? [severity] : undefined,
+        tags: parseList(tags),
+        limit: PAGE_SIZE,
+        offset,
+      }),
+  });
+
   const save = useMutation({
-    mutationFn: () =>
-      existing
-        ? api.updateTemplateSet(existing.id, { name: name.trim() })
-        : api.createTemplateSet({ name: name.trim() }),
-    onSuccess: () => {
+    mutationFn: async () => {
+      if (existing) {
+        await api.updateTemplateSet(existing.id, { name: name.trim() });
+        return api.replaceTemplateSetMembers(existing.id, [...selected]);
+      }
+      const created = await api.createTemplateSet({ name: name.trim() });
+      return api.replaceTemplateSetMembers(created.id, [...selected]);
+    },
+    onSuccess: (saved) => {
+      qc.setQueryData(["template-set-members", saved.id], undefined);
       void qc.invalidateQueries({ queryKey: ["template-sets"] });
       onClose();
     },
   });
+  const resetPage = () => setOffset(0);
+  const total = templates.data?.total ?? 0;
 
   return (
-    <Modal open onOpenChange={(open) => !open && onClose()} title={existing ? "Rename template set" : "New template set"}>
+    <Modal
+      open
+      onOpenChange={(open) => !open && onClose()}
+      title={existing ? `${readOnly ? "View" : "Edit"} ${existing.name}` : "New template set"}
+      size="wide"
+    >
       <div className="space-y-4">
         <Field label="Name">
-          <Input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="critical-cves"
-            autoFocus
-          />
+          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="critical-cves" autoFocus disabled={readOnly} />
         </Field>
-        {!existing && (
-          <p className="text-xs text-neutral-500">
-            The new set starts empty. Add exact catalog template IDs through the membership API.
-          </p>
-        )}
+        <div className="rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="font-medium">Exact template selection</h3>
+              <p className="text-xs text-neutral-500">The saved set records these immutable catalog IDs, not the filters below.</p>
+            </div>
+            <Pill tone={selected.size ? "good" : "warn"}>{selected.size} selected</Pill>
+          </div>
+          {selected.size === 0 && (
+            <p className="mb-3 text-xs text-amber-700 dark:text-amber-300">
+              Empty sets can be saved for later curation, but cannot be selected by a scan policy.
+            </p>
+          )}
+          {selected.size > 0 && (
+            <div className="mb-3 max-h-28 overflow-y-auto rounded-md bg-neutral-50 p-2 dark:bg-neutral-950/50">
+              <div className="flex flex-wrap gap-1.5">
+                {[...selected].sort().map((id) => (
+                  <span key={id} className="inline-flex items-center gap-1 rounded border border-neutral-200 bg-white px-2 py-1 font-mono text-[11px] dark:border-neutral-700 dark:bg-neutral-900">
+                    {id}
+                    {!readOnly && (
+                      <button
+                        type="button"
+                        className="text-neutral-400 hover:text-red-600"
+                        aria-label={`Remove ${id}`}
+                        onClick={() => setSelected((current) => {
+                          const next = new Set(current);
+                          next.delete(id);
+                          return next;
+                        })}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <Input value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} placeholder="Search templates" aria-label="Search templates" />
+            <Select value={source} onChange={(event) => { setSource(event.target.value as TemplateSource | ""); resetPage(); }} aria-label="Template source">
+              <option value="">All sources</option>
+              <option value="upstream">Upstream</option>
+              <option value="custom">Custom</option>
+            </Select>
+            <Select value={severity} onChange={(event) => { setSeverity(event.target.value); resetPage(); }} aria-label="Template severity">
+              <option value="">All severities</option>
+              {SEVERITIES.map((value) => <option key={value} value={value}>{value}</option>)}
+            </Select>
+            <Input value={tags} onChange={(event) => { setTags(event.target.value); resetPage(); }} placeholder="Tags: cve, rce" aria-label="Template tags" />
+          </div>
+
+          {members.isLoading && existing ? <Spinner label="Loading current selection…" /> : templates.isError ? <ErrorText error={templates.error} /> : templates.isLoading || !templates.data ? <Spinner /> : (
+            <>
+              <div className="mt-3 max-h-72 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-800">
+                {templates.data.items.map((template) => (
+                  <label key={template.id} className="flex cursor-pointer items-start gap-3 border-b border-neutral-100 px-3 py-2 last:border-0 hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-800/50">
+                    <input
+                      type="checkbox"
+                      className="mt-1"
+                      checked={selected.has(template.id)}
+                      disabled={readOnly}
+                      onChange={() => setSelected((current) => {
+                        const next = new Set(current);
+                        if (next.has(template.id)) next.delete(template.id); else next.add(template.id);
+                        return next;
+                      })}
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">{template.name || template.id}</span>
+                      <span className="block truncate font-mono text-xs text-neutral-500">{template.id}</span>
+                    </span>
+                    <SeverityBadge severity={template.severity} />
+                    <Pill>{template.source}</Pill>
+                  </label>
+                ))}
+                {templates.data.items.length === 0 && <div className="px-3 py-8 text-center text-sm text-neutral-400">No templates match these filters.</div>}
+              </div>
+              <div className="mt-2 flex items-center justify-between text-xs text-neutral-500">
+                <span>{total ? `${offset + 1}–${Math.min(offset + PAGE_SIZE, total)} of ${total}` : "0 templates"}</span>
+                <div className="flex gap-2">
+                  <Button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>Previous</Button>
+                  <Button disabled={offset + PAGE_SIZE >= total} onClick={() => setOffset(offset + PAGE_SIZE)}>Next</Button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+        {members.isError && <ErrorText error={members.error} />}
         {save.isError && <ErrorText error={save.error} />}
         <div className="flex justify-end gap-2">
-          <Button onClick={onClose}>Cancel</Button>
-          <Button
-            variant="primary"
-            disabled={save.isPending || !name.trim()}
-            onClick={() => save.mutate()}
-          >
-            {save.isPending ? "Saving…" : "Save"}
-          </Button>
+          <Button onClick={onClose}>{readOnly ? "Close" : "Cancel"}</Button>
+          {!readOnly && (
+            <Button
+              variant="primary"
+              disabled={save.isPending || !name.trim() || !loadedMembers}
+              onClick={() => save.mutate()}
+            >
+              {save.isPending ? "Saving selection…" : `Save ${selected.size} templates`}
+            </Button>
+          )}
         </div>
       </div>
     </Modal>
@@ -89,29 +226,17 @@ export function TemplateSetsPage() {
         <div>
           <h1 className="text-xl font-semibold">Template Sets</h1>
           <p className="mt-1 text-sm text-neutral-500">
-            Sets now contain exact catalog template IDs. Legacy filter sets must be converted before use.
+            Curate exact template IDs for reproducible scans. Legacy filters must be converted before use.
           </p>
         </div>
-        {canWrite && (
-          <Button variant="primary" onClick={() => setEditing("new")}>
-            New template set
-          </Button>
-        )}
+        {canWrite && <Button variant="primary" onClick={() => setEditing("new")}>New template set</Button>}
       </div>
 
-      {notice && (
-        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
-          {notice}
-        </div>
-      )}
+      {notice && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">{notice}</div>}
       {remove.isError && <ErrorText error={remove.error} />}
       {convert.isError && <ErrorText error={convert.error} />}
 
-      {sets.isLoading ? (
-        <Spinner />
-      ) : sets.isError ? (
-        <ErrorText error={sets.error} />
-      ) : (
+      {sets.isLoading ? <Spinner /> : sets.isError ? <ErrorText error={sets.error} /> : (
         <Card>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -121,49 +246,34 @@ export function TemplateSetsPage() {
                   <th className="px-3 py-2 font-medium">Mode</th>
                   <th className="px-3 py-2 font-medium">Members</th>
                   <th className="px-3 py-2 font-medium">Legacy snapshot</th>
-                  {(canWrite || canDelete) && <th className="px-3 py-2" />}
+                  <th className="px-3 py-2" />
                 </tr>
               </thead>
               <tbody>
                 {(sets.data ?? []).map((set) => (
                   <tr key={set.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
                     <td className="px-3 py-2 font-medium">{set.name}</td>
-                    <td className="px-3 py-2">
-                      <Pill tone={set.legacy_filter ? "warn" : "good"}>
-                        {set.legacy_filter ? "legacy filter" : "explicit"}
-                      </Pill>
-                    </td>
-                    <td className="px-3 py-2 tabular-nums">
-                      {set.legacy_filter ? "—" : set.member_count}
-                    </td>
-                    <td className="max-w-sm truncate px-3 py-2 text-xs text-neutral-500">
-                      {set.legacy_filter ? <LegacySummary set={set} /> : "—"}
-                    </td>
-                    {(canWrite || canDelete) && (
-                      <td className="whitespace-nowrap px-3 py-2 text-right">
+                    <td className="px-3 py-2"><Pill tone={set.legacy_filter ? "warn" : "good"}>{set.legacy_filter ? "legacy filter" : "explicit"}</Pill></td>
+                    <td className="px-3 py-2 tabular-nums">{set.legacy_filter ? "—" : set.member_count}</td>
+                    <td className="max-w-sm truncate px-3 py-2 text-xs text-neutral-500">{set.legacy_filter ? <LegacySummary set={set} /> : "—"}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-right">
                         {canWrite && set.legacy_filter && (
                           <Button
                             variant="primary"
                             disabled={convert.isPending && convert.variables?.id === set.id}
                             onClick={() => {
-                              const confirmed = confirm(
-                                `Convert "${set.name}" against the current active upstream catalog? ` +
-                                  "This replaces its old filter with the exact IDs matched now.",
-                              );
-                              if (confirmed) {
+                              if (confirm(`Convert "${set.name}" against the current active upstream catalog? This freezes the exact IDs matched now.`)) {
                                 setNotice("");
                                 convert.mutate(set);
                               }
                             }}
                           >
-                            {convert.isPending && convert.variables?.id === set.id
-                              ? "Converting…"
-                              : "Convert to selection"}
+                            {convert.isPending && convert.variables?.id === set.id ? "Converting…" : "Convert to selection"}
                           </Button>
                         )}
-                        {canWrite && !set.legacy_filter && (
+                        {!set.legacy_filter && (
                           <Button variant="ghost" onClick={() => setEditing(set)}>
-                            Rename
+                            {canWrite ? "Edit selection" : "View selection"}
                           </Button>
                         )}
                         {canDelete && (
@@ -171,25 +281,16 @@ export function TemplateSetsPage() {
                             variant="ghost"
                             className="text-red-600 dark:text-red-400"
                             onClick={() => {
-                              if (confirm(`Delete template set "${set.name}"?`)) {
-                                remove.mutate(set.id);
-                              }
+                              if (confirm(`Delete template set "${set.name}"?`)) remove.mutate(set.id);
                             }}
                           >
                             Delete
                           </Button>
                         )}
-                      </td>
-                    )}
-                  </tr>
-                ))}
-                {(sets.data ?? []).length === 0 && (
-                  <tr>
-                    <td colSpan={5} className="px-3 py-8 text-center text-neutral-400">
-                      No template sets yet.
                     </td>
                   </tr>
-                )}
+                ))}
+                {(sets.data ?? []).length === 0 && <tr><td colSpan={5} className="px-3 py-8 text-center text-neutral-400">No template sets yet.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -199,6 +300,7 @@ export function TemplateSetsPage() {
       {editing && (
         <TemplateSetModal
           existing={editing === "new" ? undefined : editing}
+          readOnly={editing !== "new" && !canWrite}
           onClose={() => setEditing(null)}
         />
       )}

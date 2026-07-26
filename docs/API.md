@@ -155,16 +155,17 @@ via `GET /api/findings/export?format=…`. The export takes the *same* filter pa
 table for spreadsheets; SARIF is a valid 2.1.0 document (deduped rules + per-finding results,
 severity→level) for code-scanning / CI ingestion. The projected formats carry the lifecycle
 overlay — detection state, disposition, `times_mitigated`. **Raw JSONL** instead emits the
-*verbatim Nuclei output* of each finding's latest occurrence, one JSON object per line (Nuclei's
+preserved Nuclei output of each finding's latest occurrence, one JSON object per line (Nuclei's
 native `out.jsonl` shape) — the full request/response, curl reproducer, and classification that
-the projected formats drop.
+the projected formats drop. PostgreSQL-backed exports replace invalid UTF-8 with U+FFFD; the
+per-scan object-storage archive remains the byte-exact scanner output.
 
 ```sh
 # every critical/high finding still active, as CSV
 curl -sb jar.txt "localhost:8080/api/findings/export?format=csv&severity=critical,high&state=active" -o findings.csv
 # the same filter as SARIF, e.g. to upload to GitHub code scanning
 curl -sb jar.txt "localhost:8080/api/findings/export?format=sarif&severity=critical,high" -o findings.sarif
-# raw Nuclei JSONL (verbatim scanner output) for the current view
+# raw Nuclei JSONL for the current lifecycle view
 curl -sb jar.txt "localhost:8080/api/findings/export?format=raw&severity=critical,high" -o findings.jsonl
 ```
 

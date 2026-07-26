@@ -17,7 +17,7 @@ import (
 // Findings export (Phase 2, slice 3). The deduplicated lifecycle list is
 // exportable in four formats: JSON (the API row shape), CSV (a flat table for
 // spreadsheets), SARIF 2.1.0 (for code-scanning / CI ingestion), and raw JSONL
-// (the verbatim Nuclei output of each finding's latest occurrence — Nuclei's
+// (the preserved Nuclei output of each finding's latest occurrence — Nuclei's
 // native out.jsonl shape, for tools that consume it). All honor the same filters
 // as GET /api/findings, so "export what I'm looking at" works. SARIF is emitted
 // as a small, stable struct via encoding/json rather than a dependency — it's a

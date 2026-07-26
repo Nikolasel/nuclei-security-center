@@ -1,9 +1,10 @@
 -- PostgreSQL JSONB rejects the otherwise-valid JSON string escape \u0000. Keep
--- the original Nuclei JSONL line in TEXT (where its printable escape is safe)
--- and use findings.raw only as a queryable, NUL-sanitized JSONB projection.
--- Historical JSONB rows cannot be restored byte-for-byte, so seed their raw
--- line with PostgreSQL's normalized JSON text.
+-- new Nuclei JSONL lines in TEXT (with invalid UTF-8 normalized by the ingest
+-- path) and use findings.raw as a queryable, NUL-sanitized JSONB projection.
+--
+-- This column deliberately stays nullable and historical rows are not
+-- backfilled. Avoiding a full findings-table rewrite keeps startup migration
+-- bounded, and an old binary remains safe to roll back because it may still
+-- insert rows without raw_line. Readers fall back to raw::text for such rows.
 
 ALTER TABLE findings ADD COLUMN raw_line TEXT;
-UPDATE findings SET raw_line = raw::text;
-ALTER TABLE findings ALTER COLUMN raw_line SET NOT NULL;

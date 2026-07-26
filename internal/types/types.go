@@ -238,8 +238,9 @@ type StartScanResponse struct {
 }
 
 // NucleiFinding is the stable subset of a Nuclei JSONL result line that we parse
-// for indexing. The full line is preserved verbatim as raw JSON alongside this,
-// so unparsed fields are never lost. We intentionally keep only rock-stable
+// for indexing. The full line is retained as raw JSON alongside this (and
+// byte-exact in the per-scan archive), so unparsed fields are never lost here.
+// We intentionally keep only rock-stable
 // scalar fields here to avoid unmarshal fragility across Nuclei versions.
 type NucleiFinding struct {
 	TemplateID string     `json:"template-id"`
@@ -252,7 +253,7 @@ type NucleiFinding struct {
 
 // NucleiInfo is the nested "info" object. We read the rock-stable scalar fields
 // plus tags and CVE classification, which we promote to indexed columns for
-// filtering (the full line is still preserved verbatim as raw).
+// filtering (the full line is still retained as raw).
 type NucleiInfo struct {
 	Name           string                `json:"name"`
 	Severity       string                `json:"severity"`

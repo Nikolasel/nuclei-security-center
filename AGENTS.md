@@ -147,8 +147,10 @@ logic in SQL or long-lived in-memory schedulers. Endpoints: `GET/POST /api/sched
 `POST /api/schedules/{id}/run` (operator, off-cycle dispatch, leaves cadence untouched).
 
 **Findings are two tables:** `findings` is the immutable per-scan
-**occurrence** log (holds the verbatim raw JSONL in `raw_line` plus a NUL-safe JSONB
-projection in `raw`; answers "what did scan X observe");
+**occurrence** log (holds source JSONL in nullable `raw_line`, normalizing invalid UTF-8
+because PostgreSQL TEXT requires valid UTF-8, plus a NUL-safe JSONB projection in `raw` for
+ad-hoc operator SQL; readers fall back to `raw::text` for historical rows; the object archive
+remains byte-exact; answers "what did scan X observe");
 `finding_lifecycle` is the **deduplicated** entity keyed on `(target_id, template_id,
 matched_at)` that users triage. Ingest inserts an occurrence and upserts the lifecycle row
 (`store.IngestFinding`). The lifecycle follows **Tenable Security Center's model**, two
@@ -168,7 +170,7 @@ dimensions:
 `GET /api/scans/{id}/findings` = occurrences; `PATCH /api/findings/{id}/disposition` and
 `PATCH /api/findings/{id}/severity` = analyst overlays (operator);
 `GET /api/findings/export?format=json|csv|sarif|raw` = the lifecycle list exported in the same
-filters (SARIF is a hand-built 2.1.0 doc via `encoding/json`; `raw` emits the verbatim Nuclei
+filters (SARIF is a hand-built 2.1.0 doc via `encoding/json`; `raw` emits the preserved Nuclei
 JSONL of each finding's latest occurrence — Nuclei's native `out.jsonl`; see `internal/backend/export.go`).
 All four formats carry the lifecycle finding `id` as a shared join key (CSV column, JSON `id`,
 SARIF `properties.nsc_lifecycle_id`, raw `_nsc_lifecycle_id`) so raw joins back to the projected data.
@@ -194,7 +196,7 @@ Three services, split so the scanner is a disposable, credential-less execution 
 - **scanner node** (`cmd/scanner`) — runs the `nuclei` **binary** (not the SDK) against a
   scan spec and serves results over HTTP. **Holds no DB credentials.** Bearer-token auth.
 - **Postgres** — data + (later) the dispatch queue/schedules. Findings stored as `JSONB`
-  plus the verbatim raw line; raw output also archived to S3-compatible storage.
+  plus the preserved raw line; byte-exact raw output is also archived to S3-compatible storage.
 
 Traffic is strictly **backend → scanner** (dispatch, poll, pull). The node never calls back.
 

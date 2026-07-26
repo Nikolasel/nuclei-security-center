@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
@@ -148,13 +149,33 @@ func TestFindingJSONBProjectionEscapesNULWithoutChangingRaw(t *testing.T) {
 	}
 }
 
+func TestFindingRawLineNormalizesInvalidUTF8(t *testing.T) {
+	raw := append([]byte(`{"template-id":"invalid-utf8","matcher":"a`), 0xff)
+	raw = append(raw, []byte(`b"}`)...)
+
+	got := findingRawLine(raw)
+	if !utf8.ValidString(got) {
+		t.Fatalf("findingRawLine returned invalid UTF-8: %q", got)
+	}
+	if want := `{"template-id":"invalid-utf8","matcher":"a�b"}`; got != want {
+		t.Errorf("findingRawLine = %q, want %q", got, want)
+	}
+
+	projected, err := findingJSONBProjection(raw)
+	if err != nil {
+		t.Fatalf("findingJSONBProjection: %v", err)
+	}
+	if !utf8.Valid(projected) {
+		t.Fatalf("JSONB projection contains invalid UTF-8: %q", projected)
+	}
+}
+
 func TestFindingTextProjectionEscapesIndexedNUL(t *testing.T) {
 	f := types.NucleiFinding{
 		TemplateID: "id\x00suffix",
 		Type:       "http\x00type",
 		Host:       "host\x00name",
 		MatchedAt:  "https://host/\x00",
-		Timestamp:  "time\x00stamp",
 		Info: types.NucleiInfo{
 			Name:     "name\x00suffix",
 			Severity: "high\x00suffix",
@@ -172,7 +193,6 @@ func TestFindingTextProjectionEscapesIndexedNUL(t *testing.T) {
 		"type":        got.Type,
 		"host":        got.Host,
 		"matched at":  got.MatchedAt,
-		"timestamp":   got.Timestamp,
 		"name":        got.Info.Name,
 		"severity":    got.Info.Severity,
 		"tag":         got.Info.Tags[0],

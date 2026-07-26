@@ -106,10 +106,11 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   history survives `scan_policy_id` being nulled on policy delete — `ON DELETE SET NULL`).
 - **findings** (occurrences) — the immutable per-scan observation log: `id, scan_id,
   target_id, dedup_key, template_id, name, severity, host, matched_at, raw_line, raw`.
-  `raw_line` preserves the original Nuclei JSONL bytes; `raw` is a queryable JSONB
-  projection where U+0000 is rendered as a printable marker because PostgreSQL JSONB rejects
-  JSON's otherwise-valid `\u0000` escape. Answers "what did scan X observe"; feeds the raw
-  archive in object storage.
+  `raw_line` preserves valid Nuclei JSONL text (invalid UTF-8 becomes U+FFFD; the object
+  archive remains byte-exact); `raw` is a NUL-safe JSONB projection retained for ad-hoc
+  operator SQL because affected source lines cannot be cast to JSONB. Historical rows may
+  leave `raw_line` NULL and readers fall back to `raw::text`, avoiding a blocking backfill.
+  Answers "what did scan X observe"; feeds the raw archive in object storage.
 - **finding_lifecycle** — the **deduplicated, triageable** entity keyed on
   `(target_id, template_id, matched_at)` so lifecycle survives across scans. Models a
   **Tenable Security Center-style** two-dimensional lifecycle:

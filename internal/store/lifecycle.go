@@ -75,18 +75,22 @@ func sanitizeKeyComponent(s string) string {
 }
 
 // IngestFinding records one finding observation: it inserts an immutable
-// occurrence row (with the verbatim raw line) and upserts the deduplicated
+// occurrence row (with the preserved raw line) and upserts the deduplicated
 // lifecycle entity. On a re-observation it advances last-seen and, if the finding
 // had been Mitigated (absent from the target's previous scan) and is now back, it
 // bumps times_mitigated — which drives the Resurfaced / Previously-Mitigated
 // detection states. Analyst dispositions are left untouched (an accepted risk stays
 // accepted until it expires). All writes run in one transaction.
 func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f types.NucleiFinding, raw []byte) error {
+	// DedupKey intentionally sees the parsed source fields before their database
+	// projection: it drops C0 controls (including NUL) to retain the established
+	// key semantics, while display columns render NUL visibly as "\0".
 	key := DedupKey(targetID, f.TemplateID, f.MatchedAt)
 	rawProjection, err := findingJSONBProjection(raw)
 	if err != nil {
 		return fmt.Errorf("project raw finding JSON: %w", err)
 	}
+	rawLine := findingRawLine(raw)
 	f = findingTextProjection(f)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -115,7 +119,7 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 		`INSERT INTO findings (scan_id, target_id, dedup_key, template_id, name, severity, host, matched_at, type, cve, tags, raw, raw_line)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
 		scanID, nullStr(targetID), key, f.TemplateID, f.Info.Name, f.Info.Severity, f.Host, f.MatchedAt, f.Type,
-		orEmpty(f.CVEs()), orEmpty(f.Info.Tags), rawProjection, string(raw),
+		orEmpty(f.CVEs()), orEmpty(f.Info.Tags), rawProjection, rawLine,
 	).Scan(&occID); err != nil {
 		return fmt.Errorf("insert occurrence: %w", err)
 	}
@@ -196,6 +200,13 @@ func sanitizeJSONNUL(value any) any {
 	}
 }
 
+// findingRawLine keeps valid Nuclei JSONL text unchanged while replacing invalid
+// UTF-8 with U+FFFD so PostgreSQL TEXT cannot reject the occurrence. The
+// byte-exact scanner stream remains available in the per-scan object archive.
+func findingRawLine(raw []byte) string {
+	return strings.ToValidUTF8(string(raw), "\uFFFD")
+}
+
 // findingTextProjection protects every indexed TEXT/TEXT[] field too. A NUL in
 // one of these stable fields would otherwise fail before the safe JSONB
 // projection is useful.
@@ -204,7 +215,6 @@ func findingTextProjection(f types.NucleiFinding) types.NucleiFinding {
 	f.Type = postgresText(f.Type)
 	f.Host = postgresText(f.Host)
 	f.MatchedAt = postgresText(f.MatchedAt)
-	f.Timestamp = postgresText(f.Timestamp)
 	f.Info.Name = postgresText(f.Info.Name)
 	f.Info.Severity = postgresText(f.Info.Severity)
 	f.Info.Tags = postgresTexts(f.Info.Tags)
@@ -402,7 +412,7 @@ func (s *Store) ExportLifecycleFindings(ctx context.Context, q FindingQuery) ([]
 	return out, rows.Err()
 }
 
-// RawExportRow pairs a lifecycle finding's id with the verbatim Nuclei JSON of
+// RawExportRow pairs a lifecycle finding's id with the preserved Nuclei JSON of
 // its latest occurrence, so a raw JSONL export stays joinable to the projected
 // (JSON/CSV/SARIF) exports on that id.
 type RawExportRow struct {
@@ -410,7 +420,7 @@ type RawExportRow struct {
 	Raw json.RawMessage
 }
 
-// ExportLifecycleRaw returns each matching finding's lifecycle id + the verbatim
+// ExportLifecycleRaw returns each matching finding's lifecycle id + the preserved
 // Nuclei JSON of its latest occurrence (same filter + order as the list), for a
 // raw JSONL export. Findings whose latest occurrence is missing are skipped
 // (INNER JOIN).
@@ -422,7 +432,7 @@ func (s *Store) ExportLifecycleRaw(ctx context.Context, q FindingQuery) ([]RawEx
 	}
 	args = append(args, exportMaxRows)
 	limitPH := len(args)
-	query := fmt.Sprintf(`SELECT l.id, o.raw_line %s JOIN findings o ON o.id = l.latest_occurrence_id %s%s LIMIT $%d`,
+	query := fmt.Sprintf(`SELECT l.id, COALESCE(o.raw_line, o.raw::text) %s JOIN findings o ON o.id = l.latest_occurrence_id %s%s LIMIT $%d`,
 		lifecycleFrom, where, lcOrderBy, limitPH)
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
@@ -450,7 +460,7 @@ func (s *Store) GetLifecycleFinding(ctx context.Context, id int64) (LifecycleDet
 	var dNote, dBy, rNote, rBy, rawLine *string
 	query := fmt.Sprintf(
 		`SELECT %s, l.disposition_note, l.disposition_by, l.disposition_at,
-		        l.recast_note, l.recast_by, l.recast_at, o.raw_line
+		        l.recast_note, l.recast_by, l.recast_at, COALESCE(o.raw_line, o.raw::text)
 		 %s
 		 LEFT JOIN findings o ON o.id = l.latest_occurrence_id
 		 WHERE l.id = $1`, lcSelectCols, lifecycleFrom)

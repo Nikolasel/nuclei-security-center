@@ -45,18 +45,20 @@ func (s *Server) applyPortableImport(
 	if requireSet {
 		setDoc := archive.Set
 		memberIDs := make([]string, 0, len(setDoc.TemplateIDs))
-		for _, originalID := range setDoc.TemplateIDs {
-			id := originalID
-			if replacement := renamed[originalID]; replacement != "" {
-				id = replacement
+		if !setDoc.DynamicAll {
+			for _, originalID := range setDoc.TemplateIDs {
+				id := originalID
+				if replacement := renamed[originalID]; replacement != "" {
+					id = replacement
+				}
+				if _, ok := occupied[id]; !ok {
+					return portableImportResponse{}, fmt.Errorf(
+						"%w: template %q is not present in the destination catalog",
+						store.ErrInvalidRef, id,
+					)
+				}
+				memberIDs = append(memberIDs, id)
 			}
-			if _, ok := occupied[id]; !ok {
-				return portableImportResponse{}, fmt.Errorf(
-					"%w: template %q is not present in the destination catalog",
-					store.ErrInvalidRef, id,
-				)
-			}
-			memberIDs = append(memberIDs, id)
 		}
 		memberIDs = uniqueStrings(memberIDs)
 
@@ -73,19 +75,24 @@ func (s *Server) applyPortableImport(
 		}
 		switch {
 		case existingSet == nil:
-			setWrite = &store.TemplateSetImportWrite{Name: name, TemplateIDs: memberIDs}
+			setWrite = &store.TemplateSetImportWrite{
+				Name: name, DynamicAll: setDoc.DynamicAll, TemplateIDs: memberIDs,
+			}
 			response.SetStatus = "created"
 		case strategy == "skip":
 			response.Set = existingSet
 			response.SetStatus = "skipped"
 		case strategy == "overwrite":
 			setWrite = &store.TemplateSetImportWrite{
-				ExistingID: existingSet.ID, Name: existingSet.Name, TemplateIDs: memberIDs,
+				ExistingID: existingSet.ID, Name: existingSet.Name,
+				DynamicAll: setDoc.DynamicAll, TemplateIDs: memberIDs,
 			}
 			response.SetStatus = "updated"
 		case strategy == "rename":
 			name = nextImportedSetName(name, sets)
-			setWrite = &store.TemplateSetImportWrite{Name: name, TemplateIDs: memberIDs}
+			setWrite = &store.TemplateSetImportWrite{
+				Name: name, DynamicAll: setDoc.DynamicAll, TemplateIDs: memberIDs,
+			}
 			response.SetStatus = "renamed"
 		}
 	}

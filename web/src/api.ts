@@ -70,13 +70,7 @@ export interface ScannerNodeInput {
 export interface TemplateSet {
   id: string;
   name: string;
-  legacy_filter: boolean;
-  legacy_filter_snapshot?: {
-    git_ref?: string;
-    severities: string[];
-    tags: string[];
-    paths: string[];
-  };
+  dynamic_all: boolean;
   member_count: number;
   created_by?: string;
   created_at: string;
@@ -138,7 +132,9 @@ export interface TemplatesQuery {
   source?: TemplateSource;
   severities?: string[];
   tags?: string[];
+  cve_only?: boolean;
   q?: string;
+  sort?: "name" | "inserted";
   include_unavailable?: boolean;
   limit?: number;
   offset?: number;
@@ -163,11 +159,13 @@ export interface TemplateSyncStatus {
   interval?: string;
   repo?: string;
   ref?: string;
+  templates_commit?: string;
+  template_count: number;
 }
 
 // ScanPolicy (#87) is the central, reusable scan configuration: it bundles
 // EVERYTHING a scan needs — the target to scan (target_id, required — the scope),
-// an optional template set (template_set_id, empty = all templates), and Nuclei's
+// a required template set (including the dynamic all-active mode), and Nuclei's
 // execution knobs. Every scan (ad-hoc or scheduled) is launched by selecting a
 // policy. Each knob is optional: a null field means "use the built-in default"
 // (rate 150 / concurrency 25 / timeout 600s / max-host-error Nuclei's own 30).
@@ -175,7 +173,7 @@ export interface ScanPolicy {
   id: string;
   name: string;
   target_id: string;
-  template_set_id?: string;
+  template_set_id: string;
   rate_limit?: number | null;
   concurrency?: number | null;
   timeout_sec?: number | null;
@@ -636,12 +634,29 @@ export const api = {
     if (q.source) p.set("source", q.source);
     if (q.severities?.length) p.set("severity", q.severities.join(","));
     if (q.tags?.length) p.set("tag", q.tags.join(","));
+    if (q.cve_only) p.set("cve", "true");
     if (q.q) p.set("q", q.q);
+    if (q.sort) p.set("sort", q.sort);
     if (q.include_unavailable) p.set("include_unavailable", "true");
     if (q.limit != null) p.set("limit", String(q.limit));
     if (q.offset != null) p.set("offset", String(q.offset));
     const qs = p.toString();
     return request<Page<Template>>("GET", qs ? `/api/templates?${qs}` : "/api/templates");
+  },
+  listTemplateIDs: (q: TemplatesQuery = {}) => {
+    const p = new URLSearchParams();
+    if (q.source) p.set("source", q.source);
+    if (q.severities?.length) p.set("severity", q.severities.join(","));
+    if (q.tags?.length) p.set("tag", q.tags.join(","));
+    if (q.cve_only) p.set("cve", "true");
+    if (q.q) p.set("q", q.q);
+    if (q.sort) p.set("sort", q.sort);
+    if (q.include_unavailable) p.set("include_unavailable", "true");
+    const qs = p.toString();
+    return request<{ ids: string[] }>(
+      "GET",
+      qs ? `/api/templates/ids?${qs}` : "/api/templates/ids",
+    );
   },
   getTemplate: (id: string) =>
     request<TemplateDetail>("GET", `/api/templates/${encodeURIComponent(id)}`),
@@ -669,8 +684,6 @@ export const api = {
     request<TemplateSet>("POST", "/api/template-sets", t),
   updateTemplateSet: (id: string, t: Partial<TemplateSet>) =>
     request<TemplateSet>("PUT", `/api/template-sets/${id}`, t),
-  convertTemplateSet: (id: string) =>
-    request<TemplateSet>("POST", `/api/template-sets/${id}/convert`),
   deleteTemplateSet: (id: string) => request<void>("DELETE", `/api/template-sets/${id}`),
   listTemplateSetMembers: (id: string) =>
     request<Template[]>("GET", `/api/template-sets/${id}/members`),

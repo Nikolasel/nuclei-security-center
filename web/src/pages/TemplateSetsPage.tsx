@@ -7,6 +7,7 @@ import {
   type TemplateImportResponse,
   type TemplateSet,
   type TemplateSource,
+  type TemplatesQuery,
 } from "../api";
 import { hasRole, useMe } from "../auth";
 import { TemplateArchiveImportModal } from "../components/TemplateArchiveImportModal";
@@ -26,18 +27,27 @@ function TemplateSetModal({
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState(existing?.name ?? "");
+  const [dynamicAll, setDynamicAll] = useState(existing?.dynamic_all ?? false);
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<TemplateSource | "">("");
   const [severity, setSeverity] = useState("");
   const [tags, setTags] = useState("");
+  const [cveOnly, setCVEOnly] = useState(false);
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [loadedMembers, setLoadedMembers] = useState(existing == null);
+  const [loadedMembers, setLoadedMembers] = useState(existing == null || existing.dynamic_all);
+  const filters: TemplatesQuery = {
+    q: query.trim(),
+    source: source || undefined,
+    severities: severity ? [severity] : undefined,
+    tags: parseList(tags),
+    cve_only: cveOnly,
+  };
 
   const members = useQuery({
     queryKey: ["template-set-members", existing?.id],
     queryFn: () => api.listTemplateSetMembers(existing!.id),
-    enabled: existing != null,
+    enabled: existing != null && !existing.dynamic_all,
   });
   useEffect(() => {
     if (!loadedMembers && members.data) {
@@ -47,26 +57,35 @@ function TemplateSetModal({
   }, [loadedMembers, members.data]);
 
   const templates = useQuery({
-    queryKey: ["templates", "set-picker", query, source, severity, tags, offset],
+    queryKey: ["templates", "set-picker", query, source, severity, tags, cveOnly, offset],
     queryFn: () =>
       api.listTemplates({
-        q: query.trim(),
-        source: source || undefined,
-        severities: severity ? [severity] : undefined,
-        tags: parseList(tags),
+        ...filters,
         limit: PAGE_SIZE,
         offset,
       }),
   });
+  const selectMatching = useMutation({
+    mutationFn: () => api.listTemplateIDs(filters),
+    onSuccess: ({ ids }) => setSelected(new Set(ids)),
+  });
 
   const save = useMutation({
     mutationFn: async () => {
+      let saved: TemplateSet;
       if (existing) {
-        await api.updateTemplateSet(existing.id, { name: name.trim() });
-        return api.replaceTemplateSetMembers(existing.id, [...selected]);
+        saved = await api.updateTemplateSet(existing.id, {
+          name: name.trim(),
+          dynamic_all: dynamicAll,
+        });
+      } else {
+        saved = await api.createTemplateSet({
+          name: name.trim(),
+          dynamic_all: dynamicAll,
+        });
       }
-      const created = await api.createTemplateSet({ name: name.trim() });
-      return api.replaceTemplateSetMembers(created.id, [...selected]);
+      if (dynamicAll) return saved;
+      return api.replaceTemplateSetMembers(saved.id, [...selected]);
     },
     onSuccess: (saved) => {
       qc.setQueryData(["template-set-members", saved.id], undefined);
@@ -76,6 +95,7 @@ function TemplateSetModal({
   });
   const resetPage = () => setOffset(0);
   const total = templates.data?.total ?? 0;
+  const selectedPreview = [...selected].sort().slice(0, 100);
 
   return (
     <Modal
@@ -88,13 +108,52 @@ function TemplateSetModal({
         <Field label="Name">
           <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="critical-cves" autoFocus disabled={readOnly} />
         </Field>
-        <div className="rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
+        <Field label="Membership mode">
+          <Select
+            value={dynamicAll ? "dynamic" : "exact"}
+            disabled={readOnly}
+            onChange={(event) => setDynamicAll(event.target.value === "dynamic")}
+            className="w-full"
+          >
+            <option value="exact">Exact selection</option>
+            <option value="dynamic">All active templates (dynamic)</option>
+          </Select>
+        </Field>
+        {dynamicAll ? (
+          <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-800 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-300">
+            This set always resolves to every active template at scan time. New templates from a
+            later upstream sync are included automatically.
+          </div>
+        ) : (
+          <div className="rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
           <div className="mb-3 flex items-center justify-between gap-3">
             <div>
               <h3 className="font-medium">Exact template selection</h3>
               <p className="text-xs text-neutral-500">The saved set records these immutable catalog IDs, not the filters below.</p>
             </div>
-            <Pill tone={selected.size ? "good" : "warn"}>{selected.size} selected</Pill>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <Pill tone={selected.size ? "good" : "warn"}>{selected.size} selected</Pill>
+              {!readOnly && (
+                <>
+                  <Button
+                    disabled={!templates.data?.items.length}
+                    onClick={() => setSelected((current) => {
+                      const next = new Set(current);
+                      templates.data?.items.forEach((template) => next.add(template.id));
+                      return next;
+                    })}
+                  >
+                    Select page
+                  </Button>
+                  <Button
+                    disabled={selectMatching.isPending || total === 0}
+                    onClick={() => selectMatching.mutate()}
+                  >
+                    {selectMatching.isPending ? "Selecting…" : `Select all ${total} matching`}
+                  </Button>
+                </>
+              )}
+            </div>
           </div>
           {selected.size === 0 && (
             <p className="mb-3 text-xs text-amber-700 dark:text-amber-300">
@@ -104,7 +163,7 @@ function TemplateSetModal({
           {selected.size > 0 && (
             <div className="mb-3 max-h-28 overflow-y-auto rounded-md bg-neutral-50 p-2 dark:bg-neutral-950/50">
               <div className="flex flex-wrap gap-1.5">
-                {[...selected].sort().map((id) => (
+                {selectedPreview.map((id) => (
                   <span key={id} className="inline-flex items-center gap-1 rounded border border-neutral-200 bg-white px-2 py-1 font-mono text-[11px] dark:border-neutral-700 dark:bg-neutral-900">
                     {id}
                     {!readOnly && (
@@ -123,10 +182,15 @@ function TemplateSetModal({
                     )}
                   </span>
                 ))}
+                {selected.size > selectedPreview.length && (
+                  <span className="px-2 py-1 text-xs text-neutral-500">
+                    +{selected.size - selectedPreview.length} more
+                  </span>
+                )}
               </div>
             </div>
           )}
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
             <Input value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} placeholder="Search templates" aria-label="Search templates" />
             <Select value={source} onChange={(event) => { setSource(event.target.value as TemplateSource | ""); resetPage(); }} aria-label="Template source">
               <option value="">All sources</option>
@@ -138,8 +202,13 @@ function TemplateSetModal({
               {SEVERITIES.map((value) => <option key={value} value={value}>{value}</option>)}
             </Select>
             <Input value={tags} onChange={(event) => { setTags(event.target.value); resetPage(); }} placeholder="Tags: cve, rce" aria-label="Template tags" />
+            <Select value={cveOnly ? "cve" : ""} onChange={(event) => { setCVEOnly(event.target.value === "cve"); resetPage(); }} aria-label="CVE templates">
+              <option value="">All templates</option>
+              <option value="cve">CVE templates only</option>
+            </Select>
           </div>
 
+          {selectMatching.isError && <ErrorText error={selectMatching.error} />}
           {members.isLoading && existing ? <Spinner label="Loading current selection…" /> : templates.isError ? <ErrorText error={templates.error} /> : templates.isLoading || !templates.data ? <Spinner /> : (
             <>
               <div className="mt-3 max-h-72 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-800">
@@ -175,7 +244,8 @@ function TemplateSetModal({
               </div>
             </>
           )}
-        </div>
+          </div>
+        )}
         {members.isError && <ErrorText error={members.error} />}
         {save.isError && <ErrorText error={save.error} />}
         <div className="flex justify-end gap-2">
@@ -183,28 +253,20 @@ function TemplateSetModal({
           {!readOnly && (
             <Button
               variant="primary"
-              disabled={save.isPending || !name.trim() || !loadedMembers}
+              disabled={save.isPending || !name.trim() || (!dynamicAll && !loadedMembers)}
               onClick={() => save.mutate()}
             >
-              {save.isPending ? "Saving selection…" : `Save ${selected.size} templates`}
+              {save.isPending
+                ? "Saving…"
+                : dynamicAll
+                  ? "Save dynamic set"
+                  : `Save ${selected.size} templates`}
             </Button>
           )}
         </div>
       </div>
     </Modal>
   );
-}
-
-function LegacySummary({ set }: { set: TemplateSet }) {
-  const snapshot = set.legacy_filter_snapshot;
-  if (!snapshot) return <span className="text-neutral-400">snapshot unavailable</span>;
-  const parts = [
-    snapshot.severities.length ? `severity: ${snapshot.severities.join(", ")}` : "",
-    snapshot.tags.length ? `tags: ${snapshot.tags.join(", ")}` : "",
-    snapshot.paths.length ? `paths: ${snapshot.paths.join(", ")}` : "",
-    snapshot.git_ref ? `old ref: ${snapshot.git_ref}` : "",
-  ].filter(Boolean);
-  return <span title={parts.join(" · ")}>{parts.join(" · ") || "all templates"}</span>;
 }
 
 export function TemplateSetsPage() {
@@ -221,13 +283,6 @@ export function TemplateSetsPage() {
   const remove = useMutation({
     mutationFn: (id: string) => api.deleteTemplateSet(id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["template-sets"] }),
-  });
-  const convert = useMutation({
-    mutationFn: (set: TemplateSet) => api.convertTemplateSet(set.id),
-    onSuccess: (converted) => {
-      setNotice(`Converted "${converted.name}" to ${converted.member_count} explicit template IDs.`);
-      void qc.invalidateQueries({ queryKey: ["template-sets"] });
-    },
   });
   const download = useMutation({
     mutationFn: ({ id }: { id: string }) => api.downloadTemplateSet(id, exportFormat),
@@ -254,10 +309,10 @@ export function TemplateSetsPage() {
         <div>
           <h1 className="text-xl font-semibold">Template Sets</h1>
           <p className="mt-1 text-sm text-neutral-500">
-            Curate exact template IDs for reproducible scans. Legacy filters must be converted before use.
+            Curate exact template IDs, or explicitly choose a dynamic set containing every active template.
           </p>
         </div>
-        <div className="flex flex-wrap items-end gap-2">
+        <div className="flex flex-wrap items-end gap-4">
           <Field label="Export format">
             <Select value={exportFormat} onChange={(event) => setExportFormat(event.target.value as TemplateArchiveFormat)}>
               <option value="yaml">YAML archive</option>
@@ -271,7 +326,6 @@ export function TemplateSetsPage() {
 
       {notice && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">{notice}</div>}
       {remove.isError && <ErrorText error={remove.error} />}
-      {convert.isError && <ErrorText error={convert.error} />}
       {download.isError && <ErrorText error={download.error} />}
 
       {sets.isLoading ? <Spinner /> : sets.isError ? <ErrorText error={sets.error} /> : (
@@ -283,7 +337,6 @@ export function TemplateSetsPage() {
                   <th className="px-3 py-2 font-medium">Name</th>
                   <th className="px-3 py-2 font-medium">Mode</th>
                   <th className="px-3 py-2 font-medium">Members</th>
-                  <th className="px-3 py-2 font-medium">Legacy snapshot</th>
                   <th className="px-3 py-2" />
                 </tr>
               </thead>
@@ -291,38 +344,21 @@ export function TemplateSetsPage() {
                 {(sets.data ?? []).map((set) => (
                   <tr key={set.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
                     <td className="px-3 py-2 font-medium">{set.name}</td>
-                    <td className="px-3 py-2"><Pill tone={set.legacy_filter ? "warn" : "good"}>{set.legacy_filter ? "legacy filter" : "explicit"}</Pill></td>
-                    <td className="px-3 py-2 tabular-nums">{set.legacy_filter ? "—" : set.member_count}</td>
-                    <td className="max-w-sm truncate px-3 py-2 text-xs text-neutral-500">{set.legacy_filter ? <LegacySummary set={set} /> : "—"}</td>
+                    <td className="px-3 py-2"><Pill tone={set.dynamic_all ? "neutral" : "good"}>{set.dynamic_all ? "dynamic all" : "exact"}</Pill></td>
+                    <td className="px-3 py-2 tabular-nums">
+                      {set.member_count}{set.dynamic_all ? " active" : ""}
+                    </td>
                     <td className="whitespace-nowrap px-3 py-2 text-right">
-                        {canWrite && set.legacy_filter && (
-                          <Button
-                            variant="primary"
-                            disabled={convert.isPending && convert.variables?.id === set.id}
-                            onClick={() => {
-                              if (confirm(`Convert "${set.name}" against the current active upstream catalog? This freezes the exact IDs matched now.`)) {
-                                setNotice("");
-                                convert.mutate(set);
-                              }
-                            }}
-                          >
-                            {convert.isPending && convert.variables?.id === set.id ? "Converting…" : "Convert to selection"}
-                          </Button>
-                        )}
-                        {!set.legacy_filter && (
-                          <>
-                            <Button
-                              variant="ghost"
-                              disabled={download.isPending}
-                              onClick={() => download.mutate({ id: set.id })}
-                            >
-                              {download.isPending && download.variables?.id === set.id ? "Exporting…" : "Export"}
-                            </Button>
-                            <Button variant="ghost" onClick={() => setEditing(set)}>
-                              {canWrite ? "Edit selection" : "View selection"}
-                            </Button>
-                          </>
-                        )}
+                        <Button
+                          variant="ghost"
+                          disabled={download.isPending}
+                          onClick={() => download.mutate({ id: set.id })}
+                        >
+                          {download.isPending && download.variables?.id === set.id ? "Exporting…" : "Export"}
+                        </Button>
+                        <Button variant="ghost" onClick={() => setEditing(set)}>
+                          {canWrite ? "Edit" : "View"}
+                        </Button>
                         {canDelete && (
                           <Button
                             variant="ghost"
@@ -337,7 +373,7 @@ export function TemplateSetsPage() {
                     </td>
                   </tr>
                 ))}
-                {(sets.data ?? []).length === 0 && <tr><td colSpan={5} className="px-3 py-8 text-center text-neutral-400">No template sets yet.</td></tr>}
+                {(sets.data ?? []).length === 0 && <tr><td colSpan={4} className="px-3 py-8 text-center text-neutral-400">No template sets yet.</td></tr>}
               </tbody>
             </table>
           </div>

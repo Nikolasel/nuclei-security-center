@@ -16,30 +16,29 @@ func TestValidateScanPolicy(t *testing.T) {
 	if err := validateScanPolicy(&store.ScanPolicy{Name: "p"}); err == nil {
 		t.Error("expected error for missing target_id")
 	}
-	// A target + all knobs nil (every knob "use the default", no template set) is
-	// valid — the leanest complete policy.
-	if err := validateScanPolicy(&store.ScanPolicy{Name: "lean", TargetID: "t1"}); err != nil {
-		t.Errorf("target-only policy rejected: %v", err)
+	// A policy without an explicit template set is incomplete.
+	if err := validateScanPolicy(&store.ScanPolicy{Name: "lean", TargetID: "t1"}); err == nil {
+		t.Error("target-only policy accepted without template_set_id")
 	}
 	// A set-but-non-positive knob is rejected (buildArgs would silently drop it).
 	for _, p := range []*store.ScanPolicy{
-		{Name: "p", TargetID: "t1", RateLimit: ptr(0)},
-		{Name: "p", TargetID: "t1", Concurrency: ptr(-5)},
-		{Name: "p", TargetID: "t1", TimeoutSec: ptr(0)},
-		{Name: "p", TargetID: "t1", MaxHostError: ptr(-1)},
-		{Name: "p", TargetID: "t1", DiscoveryTimeoutSec: ptr(0)},
-		{Name: "p", TargetID: "t1", DiscoveryPorts: "80,notaport"},
-		{Name: "p", TargetID: "t1", DiscoveryPorts: "0"},
-		{Name: "p", TargetID: "t1", DiscoveryPorts: "70000"},
-		{Name: "p", TargetID: "t1", DiscoveryPorts: "9000-8000"}, // inverted range
-		{Name: "p", TargetID: "t1", DiscoveryPorts: "80,,443"},   // empty entry
+		{Name: "p", TargetID: "t1", TemplateSetID: "ts1", RateLimit: ptr(0)},
+		{Name: "p", TargetID: "t1", TemplateSetID: "ts1", Concurrency: ptr(-5)},
+		{Name: "p", TargetID: "t1", TemplateSetID: "ts1", TimeoutSec: ptr(0)},
+		{Name: "p", TargetID: "t1", TemplateSetID: "ts1", MaxHostError: ptr(-1)},
+		{Name: "p", TargetID: "t1", TemplateSetID: "ts1", DiscoveryTimeoutSec: ptr(0)},
+		{Name: "p", TargetID: "t1", TemplateSetID: "ts1", DiscoveryPorts: "80,notaport"},
+		{Name: "p", TargetID: "t1", TemplateSetID: "ts1", DiscoveryPorts: "0"},
+		{Name: "p", TargetID: "t1", TemplateSetID: "ts1", DiscoveryPorts: "70000"},
+		{Name: "p", TargetID: "t1", TemplateSetID: "ts1", DiscoveryPorts: "9000-8000"}, // inverted range
+		{Name: "p", TargetID: "t1", TemplateSetID: "ts1", DiscoveryPorts: "80,,443"},   // empty entry
 	} {
 		if err := validateScanPolicy(p); err == nil {
 			t.Errorf("invalid field accepted: %+v", p)
 		}
 	}
 	// Valid discovery config (single ports + multiple ranges) is accepted + trimmed.
-	dp := &store.ScanPolicy{Name: "disc", TargetID: "t1", DiscoveryPorts: " 80, 443, 8000-9000 ", DiscoveryTimeoutSec: ptr(120)}
+	dp := &store.ScanPolicy{Name: "disc", TargetID: "t1", TemplateSetID: "ts1", DiscoveryPorts: " 80, 443, 8000-9000 ", DiscoveryTimeoutSec: ptr(120)}
 	if err := validateScanPolicy(dp); err != nil {
 		t.Errorf("valid discovery policy rejected: %v", err)
 	}

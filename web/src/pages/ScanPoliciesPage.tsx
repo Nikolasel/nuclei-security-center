@@ -100,14 +100,14 @@ function ScanPolicyModal({ existing, onClose }: { existing?: ScanPolicy; onClose
         knobInvalid(discoveryRate) ||
         knobInvalid(discoveryProbeTimeoutMs) ||
         knobInvalid(discoveryRetries)));
-  const canSave = name.trim() !== "" && targetId !== "" && !anyInvalid;
+  const canSave = name.trim() !== "" && targetId !== "" && templateSetId !== "" && !anyInvalid;
 
   const save = useMutation({
     mutationFn: () => {
       const body: Partial<ScanPolicy> = {
         name: name.trim(),
         target_id: targetId,
-        template_set_id: templateSetId || undefined,
+        template_set_id: templateSetId,
         rate_limit: parseKnob(rateLimit),
         concurrency: parseKnob(concurrency),
         timeout_sec: parseKnob(timeoutSec),
@@ -149,14 +149,14 @@ function ScanPolicyModal({ existing, onClose }: { existing?: ScanPolicy; onClose
             ))}
           </Select>
         </Field>
-        <Field label="Template set (optional — all templates if unset)">
+        <Field label="Template set">
           <Select value={templateSetId} onChange={(e) => setTemplateSetId(e.target.value)} className="w-full">
-            <option value="">All templates</option>
+            <option value="">Select a template set…</option>
             {(templateSets.data ?? []).map((t) => (
-              <option key={t.id} value={t.id} disabled={t.legacy_filter || t.member_count === 0}>
+              <option key={t.id} value={t.id} disabled={!t.dynamic_all && t.member_count === 0}>
                 {t.name}
-                {t.legacy_filter
-                  ? " (legacy — convert first)"
+                {t.dynamic_all
+                  ? ` (all ${t.member_count} active · dynamic)`
                   : t.member_count === 0
                     ? " (empty)"
                     : ` (${t.member_count} templates)`}
@@ -354,7 +354,7 @@ export function ScanPoliciesPage() {
   const templateSets = useQuery({ queryKey: ["template-sets"], queryFn: () => api.listTemplateSets() });
   const targetName = (id: string) => targets.data?.find((t) => t.id === id)?.name ?? id.slice(0, 8);
   const templateSetName = (id?: string) =>
-    id ? (templateSets.data?.find((t) => t.id === id)?.name ?? id.slice(0, 8)) : null;
+    id ? (templateSets.data?.find((t) => t.id === id)?.name ?? id.slice(0, 8)) : "missing";
   const del = useMutation({
     mutationFn: (id: string) => api.deleteScanPolicy(id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["scan-policies"] }),
@@ -404,7 +404,7 @@ export function ScanPoliciesPage() {
                     <td className="px-3 py-2 font-medium">{p.name}</td>
                     <td className="px-3 py-2 text-neutral-600 dark:text-neutral-400">{targetName(p.target_id)}</td>
                     <td className="px-3 py-2 text-neutral-600 dark:text-neutral-400">
-                      {templateSetName(p.template_set_id) ?? <span className="text-neutral-400">all templates</span>}
+                      {templateSetName(p.template_set_id)}
                     </td>
                     <td className="px-3 py-2">{knob(p.rate_limit)}</td>
                     <td className="px-3 py-2">{knob(p.concurrency)}</td>

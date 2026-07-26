@@ -49,6 +49,7 @@ type portableTemplateJSON struct {
 
 type portableSet struct {
 	Name        string   `json:"name"`
+	DynamicAll  bool     `json:"dynamic_all,omitempty"`
 	TemplateIDs []string `json:"template_ids"`
 }
 
@@ -107,25 +108,27 @@ func (s *Server) handleExportTemplateSet(w http.ResponseWriter, r *http.Request)
 		s.writeStoreErr(w, err)
 		return
 	}
-	if set.LegacyFilter {
-		http.Error(w, "legacy filter set must be converted before export", http.StatusConflict)
-		return
+	var (
+		ids       []string
+		templates []store.Template
+	)
+	if !set.DynamicAll {
+		members, err := s.store.ListTemplateSetMembers(r.Context(), set.ID)
+		if err != nil {
+			s.writeStoreErr(w, err)
+			return
+		}
+		ids = make([]string, len(members))
+		for i, member := range members {
+			ids[i] = member.ID
+		}
+		templates, err = s.store.GetTemplatesByIDs(r.Context(), ids)
+		if err != nil {
+			s.serverError(w, "load template set export", err)
+			return
+		}
 	}
-	members, err := s.store.ListTemplateSetMembers(r.Context(), set.ID)
-	if err != nil {
-		s.writeStoreErr(w, err)
-		return
-	}
-	ids := make([]string, len(members))
-	for i, member := range members {
-		ids[i] = member.ID
-	}
-	templates, err := s.store.GetTemplatesByIDs(r.Context(), ids)
-	if err != nil {
-		s.serverError(w, "load template set export", err)
-		return
-	}
-	setDoc := &portableSet{Name: set.Name, TemplateIDs: ids}
+	setDoc := &portableSet{Name: set.Name, DynamicAll: set.DynamicAll, TemplateIDs: ids}
 	s.writePortableExport(w, r, safeDownloadName(set.Name), templates, setDoc)
 }
 
@@ -297,7 +300,7 @@ func (s *Server) handlePortableImport(w http.ResponseWriter, r *http.Request, re
 			http.Error(w, formatTemplateImportValidationError(validationErr.Result), http.StatusBadRequest)
 		case errors.Is(err, errTemplateValidatorUnavailable):
 			s.serviceUnavailable(w, "validate template import", err)
-		case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrTemplateSetLegacy):
+		case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrTemplateSetDynamic):
 			http.Error(w, err.Error(), http.StatusConflict)
 		case errors.Is(err, store.ErrInvalidRef):
 			http.Error(w, "archive references template ids unavailable in this catalog", http.StatusBadRequest)
@@ -543,6 +546,10 @@ func validatePortableEntries(
 			return parsedPortableArchive{}, errors.New("set name is required")
 		}
 		set.TemplateIDs = uniqueStrings(set.TemplateIDs)
+		if set.DynamicAll && len(set.TemplateIDs) > 0 {
+			return parsedPortableArchive{}, errors.New(
+				"dynamic set must not contain template_ids")
+		}
 		for _, id := range set.TemplateIDs {
 			if _, ok := seen[id]; !ok {
 				return parsedPortableArchive{}, fmt.Errorf(

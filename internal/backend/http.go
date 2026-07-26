@@ -141,6 +141,7 @@ func (s *Server) Handler() http.Handler {
 	// Literal sync routes are more specific than /{id}, so ServeMux routes them
 	// first — no real Nuclei template id collides with them.
 	mux.HandleFunc("GET /api/templates", s.requireRole(RoleViewer, s.handleListTemplates))
+	mux.HandleFunc("GET /api/templates/ids", s.requireRole(RoleViewer, s.handleListTemplateIDs))
 	mux.HandleFunc("GET /api/templates/export", s.requireRole(RoleViewer, s.handleExportTemplates))
 	mux.HandleFunc("POST /api/templates/import", s.mutation(eventConfigChanged, "templates.import", "template_archive", RoleOperator, s.handleImportTemplates))
 	mux.HandleFunc("GET /api/templates/sync", s.requireRole(RoleViewer, s.handleGetTemplateSync))
@@ -158,7 +159,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/template-sets/{id}", s.requireRole(RoleViewer, s.handleGetTemplateSet))
 	mux.HandleFunc("GET /api/template-sets/{id}/export", s.requireRole(RoleViewer, s.handleExportTemplateSet))
 	mux.HandleFunc("PUT /api/template-sets/{id}", s.mutation(eventConfigChanged, "template_set.update", "template_set", RoleOperator, s.handleUpdateTemplateSet))
-	mux.HandleFunc("POST /api/template-sets/{id}/convert", s.mutation(eventConfigChanged, "template_set.convert", "template_set", RoleOperator, s.handleConvertTemplateSet))
 	mux.HandleFunc("DELETE /api/template-sets/{id}", s.mutation(eventConfigChanged, "template_set.delete", "template_set", RoleAdmin, s.handleDeleteTemplateSet))
 
 	// Explicit membership (#85): a set curated as a list of catalog templates.
@@ -247,7 +247,7 @@ func (s *Server) buildScanSpec(ctx context.Context, req createScanRequest) (type
 }
 
 // resolvePolicySpec builds a scan spec + config link from a scan policy: it
-// resolves the policy's target (+ optional template set) exactly like a
+// resolves the policy's target + required template set exactly like a
 // config-driven scan, then overlays the policy's execution knobs. Shared by the
 // ad-hoc dispatch and the scheduler, so both dispatch identical scans from the
 // same policy. The scope guardrail (§6) holds by construction — the policy always
@@ -270,9 +270,9 @@ func (s *Server) resolvePolicySpec(ctx context.Context, policyID string) (types.
 }
 
 // resolveConfigSpec builds a scan spec + config link from a stored target and an
-// optional explicit template set. The scan carries concrete ids plus the digest
-// of the full active catalog bundle already distributed to the node. A nil set
-// means every active catalog template; legacy/empty sets fail closed.
+// required template set. The scan carries concrete ids plus the digest of the
+// full active catalog bundle already distributed to the node. A dynamic set
+// resolves to every active catalog template; an empty exact set fails closed.
 func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID string) (types.ScanSpec, store.ScanLink, error) {
 	target, err := s.store.GetTarget(ctx, targetID)
 	if err != nil {
@@ -282,32 +282,26 @@ func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID 
 		return types.ScanSpec{}, store.ScanLink{}, err
 	}
 	spec := types.ScanSpec{Targets: target.Hosts, Options: defaultOptions()}
-	link := store.ScanLink{TargetID: target.ID}
+	ts, err := s.store.GetTemplateSet(ctx, templateSetID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("unknown template_set_id %q", templateSetID)
+		}
+		return types.ScanSpec{}, store.ScanLink{}, err
+	}
+	if !ts.DynamicAll && ts.MemberCount == 0 {
+		return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("template set %q is empty", ts.Name)
+	}
+	link := store.ScanLink{TargetID: target.ID, TemplateSetID: ts.ID}
 
 	var selectedIDs []string
-	if templateSetID != "" {
-		ts, err := s.store.GetTemplateSet(ctx, templateSetID)
-		if err != nil {
-			if errors.Is(err, store.ErrNotFound) {
-				return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("unknown template_set_id %q", templateSetID)
-			}
-			return types.ScanSpec{}, store.ScanLink{}, err
-		}
-		if ts.LegacyFilter || ts.MemberCount == 0 {
-			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf(
-				"template set %q is a legacy filter set — convert to an explicit selection first",
-				ts.Name,
-			)
-		}
+	if !ts.DynamicAll {
 		members, err := s.store.ListTemplateSetMembers(ctx, ts.ID)
 		if err != nil {
 			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("list template set members: %w", err)
 		}
 		if len(members) == 0 {
-			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf(
-				"template set %q is a legacy filter set — convert to an explicit selection first",
-				ts.Name,
-			)
+			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("template set %q is empty", ts.Name)
 		}
 		var unavailable []string
 		for _, member := range members {
@@ -323,7 +317,6 @@ func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID 
 				ts.Name, strings.Join(unavailable, ", "),
 			)
 		}
-		link.TemplateSetID = ts.ID
 	}
 
 	entries, err := s.store.ActiveTemplateBundleEntries(ctx)
@@ -333,7 +326,7 @@ func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID 
 	if len(entries) == 0 {
 		return types.ScanSpec{}, store.ScanLink{}, errors.New("active template catalog is empty")
 	}
-	if templateSetID == "" {
+	if ts.DynamicAll {
 		selectedIDs = make([]string, 0, len(entries))
 		for _, entry := range entries {
 			selectedIDs = append(selectedIDs, entry.ID)

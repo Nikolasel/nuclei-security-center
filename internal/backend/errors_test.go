@@ -53,8 +53,14 @@ func TestWriteStoreErrSentinelsUnchanged(t *testing.T) {
 	}
 
 	rr = httptest.NewRecorder()
-	s.writeStoreErr(rr, fmt.Errorf("wrap: %w", store.ErrTemplateSetLegacy))
+	s.writeStoreErr(rr, fmt.Errorf("wrap: %w", store.ErrTemplateSetDynamic))
 	if rr.Code != 409 {
-		t.Errorf("ErrTemplateSetLegacy -> %d, want 409", rr.Code)
+		t.Errorf("ErrTemplateSetDynamic -> %d, want 409", rr.Code)
+	}
+
+	rr = httptest.NewRecorder()
+	s.writeStoreErr(rr, fmt.Errorf("wrap: %w", store.ErrTemplateSetInUse))
+	if rr.Code != 409 {
+		t.Errorf("ErrTemplateSetInUse -> %d, want 409", rr.Code)
 	}
 }

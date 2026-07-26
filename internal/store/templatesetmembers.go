@@ -8,49 +8,51 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// setExists returns ErrNotFound if the template set id is unknown, so member
-// operations report a clean 404 on the set itself (distinct from a bad member
-// id, which surfaces as ErrInvalidRef via the foreign key).
-func (s *Store) setExists(ctx context.Context, setID string) error {
-	var one int
-	err := s.pool.QueryRow(ctx, `SELECT 1 FROM template_sets WHERE id = $1`, setID).Scan(&one)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
-	return err
-}
-
-// requireExplicitTemplateSet locks the set row for the caller's transaction and
-// rejects legacy rows. Holding the lock through the write keeps conversion and
-// membership edits from interleaving.
-func requireExplicitTemplateSet(ctx context.Context, tx pgx.Tx, setID string) error {
-	var legacy bool
+// requireStaticTemplateSet locks the set row and rejects dynamic membership
+// edits. A dynamic set always resolves from the active catalog.
+func requireStaticTemplateSet(ctx context.Context, tx pgx.Tx, setID string) error {
+	var dynamic bool
 	err := tx.QueryRow(ctx,
-		`SELECT legacy_filter FROM template_sets WHERE id = $1 FOR UPDATE`, setID,
-	).Scan(&legacy)
+		`SELECT dynamic_all FROM template_sets WHERE id = $1 FOR UPDATE`, setID,
+	).Scan(&dynamic)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
-	if legacy {
-		return ErrTemplateSetLegacy
+	if dynamic {
+		return ErrTemplateSetDynamic
 	}
 	return nil
 }
 
 // ListTemplateSetMembers returns the catalog rows for a set's members, ordered
-// like the catalog list (yaml omitted). ErrNotFound if the set is unknown.
+// like the catalog list (yaml omitted). Dynamic sets resolve to every active
+// template. ErrNotFound if the set is unknown.
 func (s *Store) ListTemplateSetMembers(ctx context.Context, setID string) ([]Template, error) {
-	if err := s.setExists(ctx, setID); err != nil {
+	var dynamic bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT dynamic_all FROM template_sets WHERE id = $1`, setID,
+	).Scan(&dynamic)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
 		return nil, err
 	}
-	rows, err := s.pool.Query(ctx,
-		`SELECT `+tmplListCols+` FROM templates
-		 JOIN template_set_members m ON m.template_id = templates.id
-		 WHERE m.template_set_id = $1
-		 ORDER BY lower(name), id`, setID)
+	query := `SELECT ` + tmplListCols + ` FROM templates
+		JOIN template_set_members m ON m.template_id = templates.id
+		WHERE m.template_set_id = $1
+		ORDER BY lower(name), id`
+	args := []any{setID}
+	if dynamic {
+		query = `SELECT ` + tmplListCols + ` FROM templates
+			WHERE availability = 'active'
+			ORDER BY lower(name), id`
+		args = nil
+	}
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list template set members: %w", err)
 	}
@@ -76,7 +78,7 @@ func (s *Store) ReplaceTemplateSetMembers(ctx context.Context, setID string, ids
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := requireExplicitTemplateSet(ctx, tx, setID); err != nil {
+	if err := requireStaticTemplateSet(ctx, tx, setID); err != nil {
 		return 0, err
 	}
 
@@ -84,26 +86,30 @@ func (s *Store) ReplaceTemplateSetMembers(ctx context.Context, setID string, ids
 		return 0, fmt.Errorf("clear template set members: %w", err)
 	}
 	seen := make(map[string]struct{}, len(ids))
-	count := 0
+	unique := make([]string, 0, len(ids))
 	for _, id := range ids {
 		if _, dup := seen[id]; dup {
 			continue
 		}
 		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	if len(unique) > 0 {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO template_set_members (template_set_id, template_id, added_by)
-			 VALUES ($1, $2, $3)`, setID, id, nullStr(addedBy)); err != nil {
+			 SELECT $1, template_id, $3
+			 FROM unnest($2::text[]) AS selected(template_id)`,
+			setID, unique, nullStr(addedBy)); err != nil {
 			if isForeignKeyViolation(err) {
 				return 0, ErrInvalidRef
 			}
 			return 0, fmt.Errorf("insert template set member: %w", err)
 		}
-		count++
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
-	return count, nil
+	return len(unique), nil
 }
 
 // AddTemplateSetMembers adds ids to a set, ignoring ones already present
@@ -114,7 +120,7 @@ func (s *Store) AddTemplateSetMembers(ctx context.Context, setID string, ids []s
 		return fmt.Errorf("begin add template set members: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := requireExplicitTemplateSet(ctx, tx, setID); err != nil {
+	if err := requireStaticTemplateSet(ctx, tx, setID); err != nil {
 		return err
 	}
 	for _, id := range ids {
@@ -141,7 +147,7 @@ func (s *Store) RemoveTemplateSetMember(ctx context.Context, setID, templateID s
 		return fmt.Errorf("begin remove template set member: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := requireExplicitTemplateSet(ctx, tx, setID); err != nil {
+	if err := requireStaticTemplateSet(ctx, tx, setID); err != nil {
 		return err
 	}
 	tag, err := tx.Exec(ctx,

@@ -65,7 +65,9 @@ type TemplateFilter struct {
 	Source             string   // "upstream" | "custom" | "" (any)
 	Severities         []string // any-of, case-insensitive
 	Tags               []string // any-of (array overlap on tags[])
+	CVEOnly            bool     // true ⇒ templates carrying the canonical "cve" tag
 	Query              string   // case-insensitive substring over id/name/description
+	Sort               string   // "name" (default) | "inserted" (newest first)
 	IncludeUnavailable bool     // false (default) ⇒ only availability='active'
 }
 
@@ -85,6 +87,58 @@ func (s *Store) ListTemplates(ctx context.Context, f TemplateFilter, limit, offs
 		offset = 0
 	}
 
+	where, args := templateFilterWhere(f)
+
+	var total int
+	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM templates "+where, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count templates: %w", err)
+	}
+
+	args = append(args, limit)
+	limitPH := fmt.Sprintf("$%d", len(args))
+	args = append(args, offset)
+	offsetPH := fmt.Sprintf("$%d", len(args))
+	rows, err := s.pool.Query(ctx,
+		"SELECT "+tmplListCols+" FROM templates "+where+
+			" ORDER BY "+templateSortOrder(f.Sort)+" LIMIT "+limitPH+" OFFSET "+offsetPH, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list templates: %w", err)
+	}
+	defer rows.Close()
+	var out []Template
+	for rows.Next() {
+		t, err := scanTemplateList(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, t)
+	}
+	return out, total, rows.Err()
+}
+
+// ListTemplateIDs returns every id matching the same catalog filter used by the
+// paginated list. The set editor uses this lightweight projection for "select
+// all matching" without downloading every template row.
+func (s *Store) ListTemplateIDs(ctx context.Context, f TemplateFilter) ([]string, error) {
+	where, args := templateFilterWhere(f)
+	rows, err := s.pool.Query(ctx,
+		"SELECT id FROM templates "+where+" ORDER BY "+templateSortOrder(f.Sort), args...)
+	if err != nil {
+		return nil, fmt.Errorf("list template ids: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+func templateFilterWhere(f TemplateFilter) (string, []any) {
 	var conds []string
 	var args []any
 	push := func(v any) string {
@@ -107,40 +161,24 @@ func (s *Store) ListTemplates(ctx context.Context, f TemplateFilter, limit, offs
 	if len(f.Tags) > 0 {
 		conds = append(conds, "tags && "+push(f.Tags))
 	}
+	if f.CVEOnly {
+		conds = append(conds, "'cve' = ANY(tags)")
+	}
 	if q := strings.TrimSpace(f.Query); q != "" {
 		p := push("%" + q + "%")
 		conds = append(conds, "(id ILIKE "+p+" OR name ILIKE "+p+" OR description ILIKE "+p+")")
 	}
-	where := ""
-	if len(conds) > 0 {
-		where = "WHERE " + strings.Join(conds, " AND ")
+	if len(conds) == 0 {
+		return "", args
 	}
+	return "WHERE " + strings.Join(conds, " AND "), args
+}
 
-	var total int
-	if err := s.pool.QueryRow(ctx, "SELECT count(*) FROM templates "+where, args...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("count templates: %w", err)
+func templateSortOrder(sortBy string) string {
+	if sortBy == "inserted" {
+		return "created_at DESC, lower(name), id"
 	}
-
-	args = append(args, limit)
-	limitPH := fmt.Sprintf("$%d", len(args))
-	args = append(args, offset)
-	offsetPH := fmt.Sprintf("$%d", len(args))
-	rows, err := s.pool.Query(ctx,
-		"SELECT "+tmplListCols+" FROM templates "+where+
-			" ORDER BY lower(name), id LIMIT "+limitPH+" OFFSET "+offsetPH, args...)
-	if err != nil {
-		return nil, 0, fmt.Errorf("list templates: %w", err)
-	}
-	defer rows.Close()
-	var out []Template
-	for rows.Next() {
-		t, err := scanTemplateList(rows)
-		if err != nil {
-			return nil, 0, err
-		}
-		out = append(out, t)
-	}
-	return out, total, rows.Err()
+	return "lower(name), id"
 }
 
 // GetTemplate returns one template by id including its yaml body, or ErrNotFound.

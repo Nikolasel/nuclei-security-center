@@ -49,9 +49,10 @@ func validateTemplateSet(t *store.TemplateSet) error {
 }
 
 // validateScanPolicy trims and checks a scan policy in place. A policy is the
-// full scan config, so it must name a target (the scope); the template set is
-// optional (empty = all templates), and its existence — like the target's — is
-// enforced by the store (FK → ErrInvalidRef). Every execution knob is optional
+// full scan config, so it must name a target (the scope) and a template set.
+// "All templates" is represented by an explicit dynamic set, never an omitted
+// reference. Their existence is enforced by the store (FK → ErrInvalidRef).
+// Every execution knob is optional
 // (nil = built-in default), but any knob that IS set must be positive — a
 // zero/negative value is meaningless and would either be silently dropped by
 // buildArgs (<= 0 omits the flag) or produce a nonsensical scan.
@@ -65,6 +66,9 @@ func validateScanPolicy(p *store.ScanPolicy) error {
 		return errors.New("target_id is required")
 	}
 	p.TemplateSetID = strings.TrimSpace(p.TemplateSetID)
+	if p.TemplateSetID == "" {
+		return errors.New("template_set_id is required")
+	}
 	for _, f := range []struct {
 		name string
 		val  *int

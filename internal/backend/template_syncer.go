@@ -52,10 +52,12 @@ type TemplateSyncer struct {
 // The cache directory is intentionally omitted, and credentials/query strings
 // are removed from HTTP(S) repository URLs before they leave the backend.
 type TemplateSyncStatus struct {
-	Enabled  bool   `json:"enabled"`
-	Interval string `json:"interval,omitempty"`
-	Repo     string `json:"repo,omitempty"`
-	Ref      string `json:"ref,omitempty"`
+	Enabled         bool   `json:"enabled"`
+	Interval        string `json:"interval,omitempty"`
+	Repo            string `json:"repo,omitempty"`
+	Ref             string `json:"ref,omitempty"`
+	TemplatesCommit string `json:"templates_commit,omitempty"`
+	TemplateCount   int    `json:"template_count"`
 }
 
 // NewTemplateSyncer validates and wires a catalog synchronizer. "latest" is a

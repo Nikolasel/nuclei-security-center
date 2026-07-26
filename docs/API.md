@@ -364,6 +364,52 @@ cheap first line of defense; the upstream sync is intentionally *not* held to th
 tree is authoritative). An authoritative `nuclei -validate` check on the scanner node is planned for
 a later slice.
 
+### Template portability
+
+Viewer-role users can export selected templates or one explicit template set; operators can import
+those files into another NSC instance:
+
+```sh
+# export selected templates as a lossless YAML tarball
+curl -sb jar.txt -o templates.tar.gz \
+  'localhost:8080/api/templates/export?ids=custom-one,custom-two&format=yaml'
+# or as one JSON portability document (the raw YAML is retained as a string)
+curl -sb jar.txt -o templates.json \
+  'localhost:8080/api/templates/export?ids=custom-one&format=json'
+# an explicit set export also contains its name and exact member ids
+curl -sb jar.txt -o portable-set.tar.gz \
+  'localhost:8080/api/template-sets/<set_id>/export?format=yaml'
+
+# import templates, or atomically restore a set plus its custom members
+curl -sb jar.txt -X POST -F file=@templates.tar.gz \
+  'localhost:8080/api/templates/import?on_conflict=skip'
+curl -sb jar.txt -X POST -F file=@portable-set.tar.gz \
+  'localhost:8080/api/template-sets/import?on_conflict=rename'
+```
+
+`format=yaml` is a gzip-compressed tar with `manifest.json`, the verbatim files under
+`templates/<source>/<path>`, and (for set exports) `set.json`. `format=json` is one JSON document
+carrying the same manifest fields and each template's verbatim YAML string; a set export includes a
+`set` object. Both forms carry SHA-256 digests and round-trip custom YAML byte-for-byte. A legacy set
+returns `409` until it is converted to explicit membership.
+
+The optional `on_conflict` strategy defaults to `skip`:
+
+- `skip` leaves existing custom templates and an existing same-name set unchanged.
+- `overwrite` replaces existing **custom** YAML and membership; it never overwrites sync-owned
+  upstream rows.
+- `rename` creates deterministic `-imported[-N]` template ids (rewriting the YAML `id`) and an
+  `(imported [N])` set name, then maps membership to the renamed ids.
+
+Upstream entries are verified but ignored on write because the syncer owns them. A set import
+therefore requires each referenced upstream id to exist in the destination catalog; this preserves
+the exact member-id contract instead of silently producing a partial set. Import is one database
+transaction and returns template counts plus the resulting set/status. The upload boundary accepts
+one multipart `file`, caps the request at 64 MiB, caps expanded tar content at 256 MiB / 25,000
+files, rejects traversal, links, duplicate/unreferenced files, unknown JSON fields, digest mismatch,
+invalid YAML, and incomplete sets. Imports are audited as `config_changed` with action
+`templates.import`.
+
 ## Config: scan policies
 
 A **scan policy** is the central, reusable **scan configuration** — it bundles *everything* a

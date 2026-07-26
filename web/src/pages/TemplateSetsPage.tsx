@@ -1,7 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api, SEVERITIES, type TemplateSet, type TemplateSource } from "../api";
+import {
+  api,
+  SEVERITIES,
+  type TemplateArchiveFormat,
+  type TemplateImportResponse,
+  type TemplateSet,
+  type TemplateSource,
+} from "../api";
 import { hasRole, useMe } from "../auth";
+import { TemplateArchiveImportModal } from "../components/TemplateArchiveImportModal";
 import { Button, Card, ErrorText, Field, Input, Modal, Pill, Select, SeverityBadge, Spinner } from "../components/ui";
 import { parseList } from "../util";
 
@@ -206,6 +214,8 @@ export function TemplateSetsPage() {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<TemplateSet | "new" | null>(null);
   const [notice, setNotice] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [exportFormat, setExportFormat] = useState<TemplateArchiveFormat>("yaml");
 
   const sets = useQuery({ queryKey: ["template-sets"], queryFn: () => api.listTemplateSets() });
   const remove = useMutation({
@@ -219,17 +229,38 @@ export function TemplateSetsPage() {
       void qc.invalidateQueries({ queryKey: ["template-sets"] });
     },
   });
+  const imported = (result: TemplateImportResponse) => {
+    const summary = result.templates;
+    const setResult = result.set
+      ? ` Set "${result.set.name}" was ${result.set_status}.`
+      : "";
+    setNotice(
+      `Import complete: ${summary.created} templates created, ${summary.updated} updated, ${summary.skipped} skipped, ${summary.upstream_ignored} upstream ignored.${setResult}`,
+    );
+    setImporting(false);
+    void qc.invalidateQueries({ queryKey: ["templates"] });
+    void qc.invalidateQueries({ queryKey: ["template-sets"] });
+  };
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Template Sets</h1>
           <p className="mt-1 text-sm text-neutral-500">
             Curate exact template IDs for reproducible scans. Legacy filters must be converted before use.
           </p>
         </div>
-        {canWrite && <Button variant="primary" onClick={() => setEditing("new")}>New template set</Button>}
+        <div className="flex flex-wrap items-end gap-2">
+          <Field label="Export format">
+            <Select value={exportFormat} onChange={(event) => setExportFormat(event.target.value as TemplateArchiveFormat)}>
+              <option value="yaml">YAML archive</option>
+              <option value="json">JSON</option>
+            </Select>
+          </Field>
+          {canWrite && <Button onClick={() => setImporting(true)}>Import set</Button>}
+          {canWrite && <Button variant="primary" onClick={() => setEditing("new")}>New template set</Button>}
+        </div>
       </div>
 
       {notice && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">{notice}</div>}
@@ -272,9 +303,17 @@ export function TemplateSetsPage() {
                           </Button>
                         )}
                         {!set.legacy_filter && (
-                          <Button variant="ghost" onClick={() => setEditing(set)}>
-                            {canWrite ? "Edit selection" : "View selection"}
-                          </Button>
+                          <>
+                            <Button
+                              variant="ghost"
+                              onClick={() => window.location.assign(api.templateSetExportURL(set.id, exportFormat))}
+                            >
+                              Export
+                            </Button>
+                            <Button variant="ghost" onClick={() => setEditing(set)}>
+                              {canWrite ? "Edit selection" : "View selection"}
+                            </Button>
+                          </>
                         )}
                         {canDelete && (
                           <Button
@@ -302,6 +341,15 @@ export function TemplateSetsPage() {
           existing={editing === "new" ? undefined : editing}
           readOnly={editing !== "new" && !canWrite}
           onClose={() => setEditing(null)}
+        />
+      )}
+      {importing && (
+        <TemplateArchiveImportModal
+          title="Import template set"
+          description="Upload a template-set export to restore its name, exact member IDs, and custom member YAML in one transaction."
+          importArchive={api.importTemplateSet}
+          onImported={imported}
+          onClose={() => setImporting(false)}
         />
       )}
     </div>

@@ -2,6 +2,7 @@ package backend
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"regexp"
@@ -173,26 +174,32 @@ func readTemplateBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 // uses, then builds a store.Template with a synthesized custom/<id>.yaml path.
 // It writes the 400 itself and returns ok=false on any validation failure.
 func (s *Server) parseCustomTemplate(w http.ResponseWriter, body []byte) (store.Template, bool) {
+	template, err := customTemplateFromYAML(body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return store.Template{}, false
+	}
+	return template, true
+}
+
+func customTemplateFromYAML(body []byte) (store.Template, error) {
 	// The path passed to Parse is only used for metadata; the authoritative
 	// custom path is derived from the parsed id below, so a placeholder is fine.
 	// ParseCustom (not Parse) applies the stricter upload checks — known
 	// severity + an executable section — that the upstream sync doesn't.
 	meta, err := templates.ParseCustom("custom/placeholder.yaml", body)
 	if errors.Is(err, templates.ErrNotTemplate) {
-		http.Error(w, "not a Nuclei template: missing top-level id", http.StatusBadRequest)
-		return store.Template{}, false
+		return store.Template{}, errors.New("not a Nuclei template: missing top-level id")
 	}
 	if err != nil {
-		http.Error(w, "invalid template: "+err.Error(), http.StatusBadRequest)
-		return store.Template{}, false
+		return store.Template{}, fmt.Errorf("invalid template: %w", err)
 	}
 	if !customIDPattern.MatchString(meta.ID) {
-		http.Error(w, "template id must be a slug (letters, digits, dot, dash, underscore; no slashes)", http.StatusBadRequest)
-		return store.Template{}, false
+		return store.Template{}, errors.New("template id must be a slug (letters, digits, dot, dash, underscore; no slashes)")
 	}
 	return store.Template{
 		ID: meta.ID, Path: "custom/" + meta.ID + ".yaml", YAML: meta.YAML,
 		ContentSHA256: meta.ContentSHA256, Name: meta.Name, Author: meta.Author,
 		Severity: meta.Severity, Description: meta.Description, Tags: meta.Tags,
-	}, true
+	}, nil
 }

@@ -107,6 +107,21 @@ export interface TemplateDetail extends Template {
   yaml: string;
 }
 
+export type TemplateArchiveFormat = "yaml" | "json";
+export type TemplateImportConflict = "skip" | "overwrite" | "rename";
+
+export interface TemplateImportResponse {
+  templates: {
+    created: number;
+    updated: number;
+    skipped: number;
+    upstream_ignored: number;
+    renamed: { from: string; to: string }[];
+  };
+  set?: TemplateSet;
+  set_status?: "created" | "updated" | "skipped" | "renamed";
+}
+
 export interface TemplatesQuery {
   source?: TemplateSource;
   severities?: string[];
@@ -531,6 +546,25 @@ async function requestYAML<T>(method: string, path: string, yaml: string): Promi
   return (await res.json()) as T;
 }
 
+async function uploadArchive(
+  path: string,
+  file: File,
+  conflict: TemplateImportConflict,
+): Promise<TemplateImportResponse> {
+  const form = new FormData();
+  form.set("file", file);
+  const res = await fetch(`${path}?on_conflict=${encodeURIComponent(conflict)}`, {
+    method: "POST",
+    credentials: "same-origin",
+    body: form,
+  });
+  if (!res.ok) {
+    const text = (await res.text()).trim();
+    throw new ApiError(res.status, text || res.statusText);
+  }
+  return (await res.json()) as TemplateImportResponse;
+}
+
 export const api = {
   me: () => request<Identity>("GET", "/api/auth/me"),
 
@@ -577,6 +611,13 @@ export const api = {
     request<{ queued: boolean }>("POST", "/api/templates/sync"),
   listTemplateSyncRuns: () =>
     request<TemplateSyncRun[]>("GET", "/api/templates/sync-runs"),
+  templateExportURL: (ids: string[], format: TemplateArchiveFormat) => {
+    const p = new URLSearchParams({ format });
+    ids.forEach((id) => p.append("ids", id));
+    return `/api/templates/export?${p.toString()}`;
+  },
+  importTemplates: (file: File, conflict: TemplateImportConflict) =>
+    uploadArchive("/api/templates/import", file, conflict),
 
   listTemplateSets: () => request<TemplateSet[]>("GET", "/api/template-sets"),
   createTemplateSet: (t: Partial<TemplateSet>) =>
@@ -596,6 +637,10 @@ export const api = {
     request<TemplateSet>("POST", `/api/template-sets/${id}/members`, {
       template_ids: templateIDs,
     }),
+  templateSetExportURL: (id: string, format: TemplateArchiveFormat) =>
+    `/api/template-sets/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`,
+  importTemplateSet: (file: File, conflict: TemplateImportConflict) =>
+    uploadArchive("/api/template-sets/import", file, conflict),
 
   // Scan policies (#87). Reads are viewer; create/edit are operator; delete is
   // admin. A null knob means "use the built-in default" for that field.

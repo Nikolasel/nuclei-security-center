@@ -163,13 +163,67 @@ func (s *Store) GetTemplate(ctx context.Context, id string) (Template, error) {
 	return t, nil
 }
 
+// GetTemplatesByIDs returns the requested catalog rows including verbatim YAML,
+// ordered by id. Missing ids are simply absent; the export handler compares the
+// result with its normalized request so it can report all missing ids together.
+func (s *Store) GetTemplatesByIDs(ctx context.Context, ids []string) ([]Template, error) {
+	if len(ids) == 0 {
+		return []Template{}, nil
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT `+tmplListCols+`, yaml FROM templates WHERE id = ANY($1) ORDER BY id`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("get templates by ids: %w", err)
+	}
+	defer rows.Close()
+	out := make([]Template, 0, len(ids))
+	for rows.Next() {
+		t, err := scanTemplate(rows, true)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// TemplateSources returns every catalog id and its owner ("upstream" or
+// "custom"). Import uses one snapshot to resolve conflicts and validate a set's
+// member ids without issuing one query per archive entry.
+func (s *Store) TemplateSources(ctx context.Context) (map[string]string, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id, source FROM templates`)
+	if err != nil {
+		return nil, fmt.Errorf("list template identities: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]string)
+	for rows.Next() {
+		var id, source string
+		if err := rows.Scan(&id, &source); err != nil {
+			return nil, err
+		}
+		out[id] = source
+	}
+	return out, rows.Err()
+}
+
 // scanTemplateList scans a row selected with tmplListCols (no yaml).
 func scanTemplateList(rows pgx.Rows) (Template, error) {
+	return scanTemplate(rows, false)
+}
+
+func scanTemplate(row pgx.Row, withYAML bool) (Template, error) {
 	var t Template
 	var upstreamRef, createdBy *string
-	if err := rows.Scan(&t.ID, &t.Source, &t.Path, &t.ContentSHA256, &t.Name, &t.Author,
-		&t.Severity, &t.Description, &t.Tags, &upstreamRef, &t.Revision, &t.Availability,
-		&createdBy, &t.CreatedAt, &t.UpdatedAt); err != nil {
+	dest := []any{
+		&t.ID, &t.Source, &t.Path, &t.ContentSHA256, &t.Name, &t.Author,
+		&t.Severity, &t.Description, &t.Tags, &upstreamRef, &t.Revision,
+		&t.Availability, &createdBy, &t.CreatedAt, &t.UpdatedAt,
+	}
+	if withYAML {
+		dest = append(dest, &t.YAML)
+	}
+	if err := row.Scan(dest...); err != nil {
 		return Template{}, err
 	}
 	t.UpstreamRef = deref(upstreamRef)

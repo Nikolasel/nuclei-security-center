@@ -79,7 +79,10 @@ set membership (`template_set_members`). `template_sets` no longer carries the P
 `POST /api/template-sets/{id}/convert` atomically materializes the snapshot against the current
 active upstream catalog. Scans carry concrete `template_ids` plus the full-catalog `templates_commit`.
 The backend pushes that full catalog to nodes; nodes select IDs from their verified active bundle
-and reject missing IDs or digest drift. `internal/backend/template_syncer.go`,
+and reject missing IDs or digest drift. Viewer exports and operator imports round-trip selected
+templates or an explicit set as a YAML tarball / JSON portability document; custom YAML remains
+lossless, upstream entries stay sync-owned, and imports apply conflict policy plus set membership in
+one transaction. `internal/backend/template_syncer.go`,
 `internal/backend/distributor.go`, `internal/store/templates*.go`, and
 `internal/scanner/bundle.go`.
 

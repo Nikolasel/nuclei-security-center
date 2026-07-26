@@ -107,6 +107,21 @@ export interface TemplateDetail extends Template {
   yaml: string;
 }
 
+export type TemplateArchiveFormat = "yaml" | "json";
+export type TemplateImportConflict = "skip" | "overwrite" | "rename";
+
+export interface TemplateImportResponse {
+  templates: {
+    created: number;
+    updated: number;
+    skipped: number;
+    upstream_ignored: number;
+    renamed: { from: string; to: string }[];
+  };
+  set?: TemplateSet;
+  set_status?: "created" | "updated" | "skipped" | "renamed";
+}
+
 export interface TemplatesQuery {
   source?: TemplateSource;
   severities?: string[];
@@ -531,6 +546,57 @@ async function requestYAML<T>(method: string, path: string, yaml: string): Promi
   return (await res.json()) as T;
 }
 
+async function uploadArchive(
+  path: string,
+  file: File,
+  conflict: TemplateImportConflict,
+): Promise<TemplateImportResponse> {
+  const form = new FormData();
+  form.set("file", file);
+  const res = await fetch(`${path}?on_conflict=${encodeURIComponent(conflict)}`, {
+    method: "POST",
+    credentials: "same-origin",
+    body: form,
+  });
+  if (!res.ok) {
+    const text = (await res.text()).trim();
+    throw new ApiError(res.status, text || res.statusText);
+  }
+  return (await res.json()) as TemplateImportResponse;
+}
+
+async function downloadArchive(path: string, fallbackName: string): Promise<void> {
+  const res = await fetch(path, { credentials: "same-origin" });
+  if (!res.ok) {
+    const text = (await res.text()).trim();
+    throw new ApiError(res.status, text || res.statusText);
+  }
+  const disposition = res.headers.get("content-disposition") ?? "";
+  const match = disposition.match(/filename="([^"]+)"/i);
+  const filename = (match?.[1] || fallbackName).split(/[\\/]/).pop() || fallbackName;
+  const objectURL = URL.createObjectURL(await res.blob());
+  const link = document.createElement("a");
+  link.href = objectURL;
+  link.download = filename;
+  try {
+    document.body.append(link);
+    link.click();
+  } finally {
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectURL), 0);
+  }
+}
+
+function templateExportURL(ids: string[], format: TemplateArchiveFormat): string {
+  const p = new URLSearchParams({ format });
+  ids.forEach((id) => p.append("ids", id));
+  return `/api/templates/export?${p.toString()}`;
+}
+
+function templateSetExportURL(id: string, format: TemplateArchiveFormat): string {
+  return `/api/template-sets/${encodeURIComponent(id)}/export?format=${encodeURIComponent(format)}`;
+}
+
 export const api = {
   me: () => request<Identity>("GET", "/api/auth/me"),
 
@@ -577,6 +643,14 @@ export const api = {
     request<{ queued: boolean }>("POST", "/api/templates/sync"),
   listTemplateSyncRuns: () =>
     request<TemplateSyncRun[]>("GET", "/api/templates/sync-runs"),
+  templateExportURL,
+  downloadTemplates: (ids: string[], format: TemplateArchiveFormat) =>
+    downloadArchive(
+      templateExportURL(ids, format),
+      format === "yaml" ? "templates.tar.gz" : "templates.json",
+    ),
+  importTemplates: (file: File, conflict: TemplateImportConflict) =>
+    uploadArchive("/api/templates/import", file, conflict),
 
   listTemplateSets: () => request<TemplateSet[]>("GET", "/api/template-sets"),
   createTemplateSet: (t: Partial<TemplateSet>) =>
@@ -596,6 +670,14 @@ export const api = {
     request<TemplateSet>("POST", `/api/template-sets/${id}/members`, {
       template_ids: templateIDs,
     }),
+  templateSetExportURL,
+  downloadTemplateSet: (id: string, format: TemplateArchiveFormat) =>
+    downloadArchive(
+      templateSetExportURL(id, format),
+      format === "yaml" ? "template-set.tar.gz" : "template-set.json",
+    ),
+  importTemplateSet: (file: File, conflict: TemplateImportConflict) =>
+    uploadArchive("/api/template-sets/import", file, conflict),
 
   // Scan policies (#87). Reads are viewer; create/edit are operator; delete is
   // admin. A null knob means "use the built-in default" for that field.

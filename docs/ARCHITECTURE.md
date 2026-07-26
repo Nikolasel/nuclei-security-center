@@ -88,6 +88,9 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
 - **template_sets** — curated explicit membership in `template_set_members`. The retired filter
   columns are gone. Pre-existing POC rows retain a read-only JSON filter snapshot and fail closed
   until an operator atomically converts the snapshot against the current active upstream catalog.
+  Sets and selected templates are portable as either a lossless YAML tarball (verbatim files +
+  manifest) or one JSON document retaining the verbatim YAML strings. Import writes custom
+  templates and set membership atomically; upstream rows remain sync-owned and are reference-only.
 - **scan_policies** — `id, name, target_id, template_set_id, rate_limit, concurrency,
   timeout_sec, max_host_error`. The **central, reusable scan configuration**: it bundles
   *everything* a scan needs — the target (required — the scope), an optional template set
@@ -301,7 +304,8 @@ trade; the native-services path only wins if you're committed to one cloud forev
 - **Audit log** — every mutating call is emitted as a structured `event=audit` log line
   to stdout, where the platform's log aggregator ingests/retains/queries it. Off-DB by
   design, so a DB compromise can't rewrite the trail; a small `event_id` vocabulary drives
-  detections.
+  detections. Template and template-set imports use `event_id=config_changed`,
+  `action=templates.import`; exports are read-only and do not emit mutations.
 - **Authz on every mutating endpoint** — the three roles are enforced server-side.
 - Patch your own deps: a vuln scanner running on stale libraries is a bad look.
 

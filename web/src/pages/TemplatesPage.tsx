@@ -4,10 +4,13 @@ import {
   api,
   SEVERITIES,
   type Template,
+  type TemplateArchiveFormat,
   type TemplateDetail,
+  type TemplateImportResponse,
   type TemplateSource,
 } from "../api";
 import { hasRole, useMe } from "../auth";
+import { TemplateArchiveImportModal } from "../components/TemplateArchiveImportModal";
 import {
   Button,
   Card,
@@ -24,6 +27,9 @@ import {
 import { parseList } from "../util";
 
 const PAGE_SIZE = 30;
+// Stay below the common 8 KiB request-line ceiling used by proxies. For larger
+// selections, a named set provides the path-based export endpoint.
+const MAX_TEMPLATE_EXPORT_URL_LENGTH = 7_000;
 
 function fmtTime(value?: string) {
   return value ? new Date(value).toLocaleString() : "—";
@@ -295,6 +301,7 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
   const [setID, setSetID] = useState("");
   const [setName, setSetName] = useState("");
   const [notice, setNotice] = useState("");
+  const [exportFormat, setExportFormat] = useState<TemplateArchiveFormat>("yaml");
 
   const templates = useQuery({
     queryKey: ["templates", "catalog", source, severity, query, tags, offset],
@@ -330,7 +337,12 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
       void qc.invalidateQueries({ queryKey: ["template-sets"] });
     },
   });
+  const download = useMutation({
+    mutationFn: () => api.downloadTemplates([...selected], exportFormat),
+  });
   const resetPage = () => setOffset(0);
+  const exportURL = api.templateExportURL([...selected], exportFormat);
+  const exportTooLarge = exportURL.length > MAX_TEMPLATE_EXPORT_URL_LENGTH;
 
   return (
     <div className="space-y-4">
@@ -358,29 +370,51 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
         </div>
       </Card>
 
-      {canWrite && selected.size > 0 && (
+      {selected.size > 0 && (
         <Card className="p-4">
           <div className="flex flex-wrap items-end gap-3">
             <div className="mr-auto">
               <div className="font-medium">{selected.size} selected</div>
               <button type="button" className="text-xs text-indigo-600 hover:underline" onClick={() => setSelected(new Set())}>Clear selection</button>
             </div>
-            <Field label="Add to existing set">
-              <Select className="min-w-52" value={setID} onChange={(event) => setSetID(event.target.value)}>
-                <option value="">Choose a set…</option>
-                {explicitSets.map((set) => <option key={set.id} value={set.id}>{set.name}</option>)}
+            <Field label="Export format">
+              <Select value={exportFormat} onChange={(event) => setExportFormat(event.target.value as TemplateArchiveFormat)}>
+                <option value="yaml">YAML archive (.tar.gz)</option>
+                <option value="json">JSON document</option>
               </Select>
             </Field>
-            <Button variant="primary" disabled={!setID || add.isPending} onClick={() => add.mutate()}>
-              {add.isPending ? "Adding…" : "Add selected"}
+            <Button disabled={exportTooLarge || download.isPending} onClick={() => download.mutate()}>
+              {download.isPending ? "Preparing export…" : "Export selected"}
             </Button>
-            <Field label="Or create a set">
-              <Input className="w-52" value={setName} onChange={(event) => setSetName(event.target.value)} placeholder="internet-exposure" />
-            </Field>
-            <Button variant="primary" disabled={!setName.trim() || create.isPending} onClick={() => create.mutate()}>
-              {create.isPending ? "Creating…" : "Create from selection"}
-            </Button>
+            {canWrite && (
+              <>
+                <Field label="Add to existing set">
+                  <Select className="min-w-52" value={setID} onChange={(event) => setSetID(event.target.value)}>
+                    <option value="">Choose a set…</option>
+                    {explicitSets.map((set) => <option key={set.id} value={set.id}>{set.name}</option>)}
+                  </Select>
+                </Field>
+                <Button variant="primary" disabled={!setID || add.isPending} onClick={() => add.mutate()}>
+                  {add.isPending ? "Adding…" : "Add selected"}
+                </Button>
+                <Field label="Or create a set">
+                  <Input className="w-52" value={setName} onChange={(event) => setSetName(event.target.value)} placeholder="internet-exposure" />
+                </Field>
+                <Button variant="primary" disabled={!setName.trim() || create.isPending} onClick={() => create.mutate()}>
+                  {create.isPending ? "Creating…" : "Create from selection"}
+                </Button>
+              </>
+            )}
           </div>
+          {exportTooLarge && (
+            <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
+              This selection is too large for a reliable URL-based export.{" "}
+              {canWrite
+                ? "Add it to a template set and export the set instead."
+                : "Ask an operator to save it as a template set, then export the set."}
+            </p>
+          )}
+          {download.isError && <div className="mt-3"><ErrorText error={download.error} /></div>}
           {(add.isError || create.isError) && <div className="mt-3"><ErrorText error={add.error ?? create.error} /></div>}
         </Card>
       )}
@@ -390,7 +424,7 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
         <Card>
           <CatalogTable
             templates={templates.data.items}
-            selected={canWrite ? selected : undefined}
+            selected={selected}
             onToggle={(id) => setSelected((current) => {
               const next = new Set(current);
               if (next.has(id)) next.delete(id); else next.add(id);
@@ -544,15 +578,32 @@ export function TemplatesPage() {
   const canWrite = hasRole(me.data ?? undefined, "operator");
   const canDelete = hasRole(me.data ?? undefined, "admin");
   const [tab, setTab] = useState<"catalog" | "custom" | "sync">("catalog");
+  const [importing, setImporting] = useState(false);
+  const [importNotice, setImportNotice] = useState("");
+  const qc = useQueryClient();
+
+  const imported = (result: TemplateImportResponse) => {
+    const summary = result.templates;
+    setImportNotice(
+      `Import complete: ${summary.created} created, ${summary.updated} updated, ${summary.skipped} skipped, ${summary.upstream_ignored} upstream ignored${summary.renamed.length ? `, ${summary.renamed.length} renamed` : ""}.`,
+    );
+    setImporting(false);
+    void qc.invalidateQueries({ queryKey: ["templates"] });
+    void qc.invalidateQueries({ queryKey: ["template-sets"] });
+  };
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-semibold">Templates</h1>
-        <p className="mt-1 text-sm text-neutral-500">
-          Browse the mirrored Nuclei catalog, author custom checks, and monitor catalog refreshes.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold">Templates</h1>
+          <p className="mt-1 text-sm text-neutral-500">
+            Browse the mirrored Nuclei catalog, author custom checks, and monitor catalog refreshes.
+          </p>
+        </div>
+        {canWrite && <Button variant="primary" onClick={() => setImporting(true)}>Import templates</Button>}
       </div>
+      {importNotice && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">{importNotice}</div>}
       <div className="flex gap-1 border-b border-neutral-200 dark:border-neutral-800">
         {(["catalog", "custom", "sync"] as const).map((value) => (
           <button
@@ -568,6 +619,15 @@ export function TemplatesPage() {
       {tab === "catalog" && <CatalogTab canWrite={canWrite} />}
       {tab === "custom" && <CustomTab canWrite={canWrite} canDelete={canDelete} />}
       {tab === "sync" && <SyncTab canWrite={canWrite} />}
+      {importing && (
+        <TemplateArchiveImportModal
+          title="Import templates"
+          description="Upload a template export in YAML archive or JSON format. This imports custom templates only; use Template Sets to restore a set and its membership."
+          importArchive={api.importTemplates}
+          onImported={imported}
+          onClose={() => setImporting(false)}
+        />
+      )}
     </div>
   );
 }

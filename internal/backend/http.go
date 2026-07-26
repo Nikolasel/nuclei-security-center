@@ -136,6 +136,8 @@ func (s *Server) Handler() http.Handler {
 	// Literal sync routes are more specific than /{id}, so ServeMux routes them
 	// first — no real Nuclei template id collides with them.
 	mux.HandleFunc("GET /api/templates", s.requireRole(RoleViewer, s.handleListTemplates))
+	mux.HandleFunc("GET /api/templates/export", s.requireRole(RoleViewer, s.handleExportTemplates))
+	mux.HandleFunc("POST /api/templates/import", s.mutation(eventConfigChanged, "templates.import", "template_archive", RoleOperator, s.handleImportTemplates))
 	mux.HandleFunc("GET /api/templates/sync", s.requireRole(RoleViewer, s.handleGetTemplateSync))
 	mux.HandleFunc("POST /api/templates/sync", s.mutation(eventConfigChanged, "templates.sync_requested", "template_sync", RoleOperator, s.handleRequestTemplateSync))
 	mux.HandleFunc("GET /api/templates/sync-runs", s.requireRole(RoleViewer, s.handleListTemplateSyncRuns))
@@ -146,8 +148,10 @@ func (s *Server) Handler() http.Handler {
 
 	// Template sets (config)
 	mux.HandleFunc("GET /api/template-sets", s.requireRole(RoleViewer, s.handleListTemplateSets))
+	mux.HandleFunc("POST /api/template-sets/import", s.mutation(eventConfigChanged, "templates.import", "template_set_archive", RoleOperator, s.handleImportTemplateSet))
 	mux.HandleFunc("POST /api/template-sets", s.mutation(eventConfigChanged, "template_set.create", "template_set", RoleOperator, s.handleCreateTemplateSet))
 	mux.HandleFunc("GET /api/template-sets/{id}", s.requireRole(RoleViewer, s.handleGetTemplateSet))
+	mux.HandleFunc("GET /api/template-sets/{id}/export", s.requireRole(RoleViewer, s.handleExportTemplateSet))
 	mux.HandleFunc("PUT /api/template-sets/{id}", s.mutation(eventConfigChanged, "template_set.update", "template_set", RoleOperator, s.handleUpdateTemplateSet))
 	mux.HandleFunc("POST /api/template-sets/{id}/convert", s.mutation(eventConfigChanged, "template_set.convert", "template_set", RoleOperator, s.handleConvertTemplateSet))
 	mux.HandleFunc("DELETE /api/template-sets/{id}", s.mutation(eventConfigChanged, "template_set.delete", "template_set", RoleAdmin, s.handleDeleteTemplateSet))

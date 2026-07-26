@@ -240,7 +240,7 @@ export function NodesPage() {
                   <th className="px-3 py-2 font-medium">Endpoint</th>
                   <th className="px-3 py-2 font-medium">CIDRs</th>
                   <th className="px-3 py-2 font-medium">Nuclei</th>
-                  <th className="px-3 py-2 font-medium">Templates</th>
+                  <th className="px-3 py-2 font-medium">Catalog bundle</th>
                   <th className="px-3 py-2 font-medium">Last seen</th>
                   <th className="px-3 py-2 font-medium">Tags</th>
                   {isAdmin && <th className="px-3 py-2" />}

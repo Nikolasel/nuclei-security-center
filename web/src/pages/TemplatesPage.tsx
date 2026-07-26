@@ -8,6 +8,7 @@ import {
   type TemplateDetail,
   type TemplateImportResponse,
   type TemplateSource,
+  type TemplatesQuery,
 } from "../api";
 import { hasRole, useMe } from "../auth";
 import { TemplateArchiveImportModal } from "../components/TemplateArchiveImportModal";
@@ -218,6 +219,7 @@ function CatalogTable({
             <th className="px-3 py-2 font-medium">Severity</th>
             <th className="px-3 py-2 font-medium">Source</th>
             <th className="px-3 py-2 font-medium">Tags</th>
+            <th className="px-3 py-2 font-medium">Inserted</th>
             <th className="px-3 py-2 font-medium">Revision</th>
             <th className="px-3 py-2" />
           </tr>
@@ -250,6 +252,7 @@ function CatalogTable({
               <td className="max-w-xs px-3 py-2 text-xs text-neutral-500">
                 <span className="line-clamp-2">{template.tags.join(", ") || "—"}</span>
               </td>
+              <td className="whitespace-nowrap px-3 py-2 text-xs text-neutral-500">{fmtTime(template.created_at)}</td>
               <td className="px-3 py-2 tabular-nums text-neutral-500">{template.revision}</td>
               <td className="whitespace-nowrap px-3 py-2 text-right">
                 <Button variant="ghost" onClick={() => onView(template)}>View YAML</Button>
@@ -259,7 +262,7 @@ function CatalogTable({
           ))}
           {templates.length === 0 && (
             <tr>
-              <td colSpan={selected ? 7 : 6} className="px-3 py-8 text-center text-neutral-400">
+              <td colSpan={selected ? 8 : 7} className="px-3 py-8 text-center text-neutral-400">
                 No templates match these filters.
               </td>
             </tr>
@@ -299,6 +302,8 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
   const [severity, setSeverity] = useState("");
   const [query, setQuery] = useState("");
   const [tags, setTags] = useState("");
+  const [cveOnly, setCVEOnly] = useState(false);
+  const [sort, setSort] = useState<"name" | "inserted">("name");
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [viewing, setViewing] = useState<Template | null>(null);
@@ -306,21 +311,26 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
   const [setName, setSetName] = useState("");
   const [notice, setNotice] = useState("");
   const [exportFormat, setExportFormat] = useState<TemplateArchiveFormat>("yaml");
+  const filters: TemplatesQuery = {
+    source: source || undefined,
+    severities: severity ? [severity] : undefined,
+    tags: parseList(tags),
+    cve_only: cveOnly,
+    q: query.trim(),
+    sort,
+  };
 
   const templates = useQuery({
-    queryKey: ["templates", "catalog", source, severity, query, tags, offset],
+    queryKey: ["templates", "catalog", source, severity, query, tags, cveOnly, sort, offset],
     queryFn: () =>
       api.listTemplates({
-        source: source || undefined,
-        severities: severity ? [severity] : undefined,
-        tags: parseList(tags),
-        q: query.trim(),
+        ...filters,
         limit: PAGE_SIZE,
         offset,
       }),
   });
   const sets = useQuery({ queryKey: ["template-sets"], queryFn: () => api.listTemplateSets() });
-  const explicitSets = (sets.data ?? []).filter((set) => !set.legacy_filter);
+  const explicitSets = (sets.data ?? []).filter((set) => !set.dynamic_all);
   const add = useMutation({
     mutationFn: () => api.addTemplateSetMembers(setID, [...selected]),
     onSuccess: (set) => {
@@ -344,6 +354,10 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
   const download = useMutation({
     mutationFn: () => api.downloadTemplates([...selected], exportFormat),
   });
+  const selectMatching = useMutation({
+    mutationFn: () => api.listTemplateIDs(filters),
+    onSuccess: ({ ids }) => setSelected(new Set(ids)),
+  });
   const resetPage = () => setOffset(0);
   const exportURL = api.templateExportURL([...selected], exportFormat);
   const exportTooLarge = exportURL.length > MAX_TEMPLATE_EXPORT_URL_LENGTH;
@@ -351,7 +365,7 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
   return (
     <div className="space-y-4">
       <Card className="p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
           <Field label="Search">
             <Input value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} placeholder="ID, name, description" />
           </Field>
@@ -370,6 +384,18 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
           </Field>
           <Field label="Tags (comma separated)">
             <Input value={tags} onChange={(event) => { setTags(event.target.value); resetPage(); }} placeholder="cve, rce" />
+          </Field>
+          <Field label="CVE">
+            <Select className="w-full" value={cveOnly ? "cve" : ""} onChange={(event) => { setCVEOnly(event.target.value === "cve"); resetPage(); }}>
+              <option value="">All templates</option>
+              <option value="cve">CVE templates only</option>
+            </Select>
+          </Field>
+          <Field label="Sort">
+            <Select className="w-full" value={sort} onChange={(event) => { setSort(event.target.value as "name" | "inserted"); resetPage(); }}>
+              <option value="name">Name</option>
+              <option value="inserted">Newest inserted</option>
+            </Select>
           </Field>
         </div>
       </Card>
@@ -423,9 +449,30 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
         </Card>
       )}
       {notice && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">{notice}</div>}
+      {selectMatching.isError && <ErrorText error={selectMatching.error} />}
 
       {templates.isError ? <ErrorText error={templates.error} /> : templates.isLoading || !templates.data ? <Spinner /> : (
         <Card>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800">
+            <span>{templates.data.total} templates match the current filters.</span>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                onClick={() => setSelected((current) => {
+                  const next = new Set(current);
+                  templates.data.items.forEach((template) => next.add(template.id));
+                  return next;
+                })}
+              >
+                Select this page
+              </Button>
+              <Button
+                disabled={selectMatching.isPending || templates.data.total === 0}
+                onClick={() => selectMatching.mutate()}
+              >
+                {selectMatching.isPending ? "Selecting…" : `Select all ${templates.data.total} matching`}
+              </Button>
+            </div>
+          </div>
           <CatalogTable
             templates={templates.data.items}
             selected={selected}
@@ -536,6 +583,16 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
                   <div><dt className="text-xs text-neutral-500">Repository</dt><dd className="mt-0.5 break-all font-mono text-xs">{status.data.repo}</dd></div>
                   <div><dt className="text-xs text-neutral-500">Ref</dt><dd className="mt-0.5 font-mono text-xs">{status.data.ref}</dd></div>
                   <div><dt className="text-xs text-neutral-500">Interval</dt><dd className="mt-0.5">{status.data.interval}</dd></div>
+                  <div>
+                    <dt className="text-xs text-neutral-500">Active catalog bundle</dt>
+                    <dd className="mt-0.5 font-mono text-xs" title={status.data.templates_commit}>
+                      {shortDigest(status.data.templates_commit)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-neutral-500">Active templates</dt>
+                    <dd className="mt-0.5 tabular-nums">{status.data.template_count}</dd>
+                  </div>
                 </dl>
               ) : (
                 <p className="mt-2 text-sm text-neutral-500">Set TEMPLATE_SYNC_REPO to enable the community catalog mirror. Custom templates remain available.</p>
@@ -561,7 +618,7 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
                   <th className="px-3 py-2 font-medium">Started</th>
                   <th className="px-3 py-2 font-medium">Status</th>
                   <th className="px-3 py-2 font-medium">Result</th>
-                  <th className="px-3 py-2 font-medium">Commit</th>
+                  <th className="px-3 py-2 font-medium">Upstream commit</th>
                   <th className="px-3 py-2 font-medium">Finished</th>
                   <th className="px-3 py-2 font-medium">Error</th>
                 </tr>

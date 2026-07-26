@@ -2,6 +2,7 @@ package templates
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +23,23 @@ func TestParseExtractsMetadataWithoutChangingYAML(t *testing.T) {
 	}
 	if got.ContentSHA256 == "" {
 		t.Error("expected content sha256")
+	}
+}
+
+func TestParseEscapesDecodedNULInIndexedMetadata(t *testing.T) {
+	body := []byte("id: nul-description\ninfo:\n  name: NUL description\n  author: test\n  severity: info\n  description: \"A value of '\\0' matches the default '\\0'.\"\n  tags: test\nhttp:\n  - method: GET\n    path: ['{{BaseURL}}']\n")
+	got, err := Parse("http/nul-description.yaml", body)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if want := `A value of '\0' matches the default '\0'.`; got.Description != want {
+		t.Errorf("description = %q, want %q", got.Description, want)
+	}
+	if strings.ContainsRune(got.Description, '\x00') {
+		t.Fatal("indexed description retained a PostgreSQL-invalid NUL byte")
+	}
+	if got.YAML != string(body) {
+		t.Fatal("authoritative YAML was not retained byte-for-byte")
 	}
 }
 

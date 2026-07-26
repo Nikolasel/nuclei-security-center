@@ -77,11 +77,14 @@ func parse(path string, body []byte, strict bool) (Metadata, error) {
 	if id == "" {
 		return Metadata{}, ErrNotTemplate
 	}
+	if strings.ContainsRune(id, '\x00') {
+		return Metadata{}, fmt.Errorf("template id contains a NUL byte")
+	}
 	info, err := mappingRoot(mappingValue(root, "info"))
 	if err != nil {
 		return Metadata{}, fmt.Errorf("template %q info: %w", id, err)
 	}
-	name := scalar(mappingValue(info, "name"))
+	name := indexText(scalar(mappingValue(info, "name")))
 	if name == "" {
 		return Metadata{}, fmt.Errorf("template %q: info.name is required", id)
 	}
@@ -94,7 +97,7 @@ func parse(path string, body []byte, strict bool) (Metadata, error) {
 		return Metadata{}, fmt.Errorf("template %q author: %w", id, err)
 	}
 	hash := sha256.Sum256(body)
-	severity := strings.ToLower(strings.TrimSpace(scalar(mappingValue(info, "severity"))))
+	severity := strings.ToLower(indexText(scalar(mappingValue(info, "severity"))))
 	if severity == "" {
 		severity = "unknown"
 	}
@@ -109,7 +112,7 @@ func parse(path string, body []byte, strict bool) (Metadata, error) {
 	return Metadata{
 		ID: id, Path: path, YAML: string(body), ContentSHA256: hex.EncodeToString(hash[:]),
 		Name: name, Author: strings.Join(authors, ", "), Severity: severity,
-		Description: scalar(mappingValue(info, "description")), Tags: tags,
+		Description: indexText(scalar(mappingValue(info, "description"))), Tags: tags,
 	}, nil
 }
 
@@ -179,6 +182,15 @@ func scalar(n *yaml.Node) string {
 	return strings.TrimSpace(n.Value)
 }
 
+// indexText makes decoded YAML scalar values safe for Postgres TEXT columns.
+// YAML double-quoted strings may legally contain escapes such as \0, which
+// yaml.v3 decodes to U+0000; Postgres rejects that code point. The authoritative
+// YAML is retained byte-for-byte separately, so the searchable/display
+// projection preserves the meaning as the printable two-character escape.
+func indexText(s string) string {
+	return strings.ReplaceAll(s, "\x00", `\0`)
+}
+
 func stringValues(n *yaml.Node) ([]string, error) {
 	if n == nil {
 		return nil, nil
@@ -200,7 +212,7 @@ func stringValues(n *yaml.Node) ([]string, error) {
 	seen := make(map[string]struct{}, len(values))
 	out := make([]string, 0, len(values))
 	for _, v := range values {
-		v = strings.TrimSpace(v)
+		v = indexText(strings.TrimSpace(v))
 		if v == "" {
 			continue
 		}

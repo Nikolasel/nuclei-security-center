@@ -372,8 +372,8 @@ registered node (ordered by name) that the health monitor has positively observe
 node runs its pinned `nuclei -validate` without a target. A Nuclei rejection is `400` with bounded
 diagnostics and nothing is persisted. If no validator is known healthy, every healthy candidate
 fails in transit, validation times out, or the node cannot execute Nuclei, the write fails closed
-with `503` plus `Retry-After: 5`. Import remains a bulk catalog operation and does not spawn one
-Nuclei process per archive entry; adding one bounded bulk validation pass is tracked in #140.
+with `503` plus `Retry-After: 5`. Archive imports use the same fail-closed boundary through one
+bounded batch process, described under [Template portability](#template-portability).
 
 ### Template portability
 
@@ -420,6 +420,15 @@ one multipart `file`, caps the request at 64 MiB, caps expanded tar content at 2
 files, rejects traversal, links, duplicate/unreferenced files, unknown JSON fields, digest mismatch,
 invalid YAML, and incomplete sets. Imports are audited as `config_changed` with action
 `templates.import`.
+
+After conflict resolution, every custom template selected for create, overwrite, or rename is packed
+into one transient verified bundle and sent to a known-healthy scanner node. The node runs a single
+pinned `nuclei -validate` process over the batch; skipped items and upstream reference material are
+not revalidated. A mixed valid/invalid batch returns `400` with bounded per-template diagnostics and
+persists nothing. No healthy validator, timeout, or node transport/execution failure returns `503`
+with `Retry-After: 5`, also before persistence. A successful response includes
+`validation: {valid:true, failures:[], errors:[], nuclei_version:"v…"}` when custom writes were
+validated; it omits `validation` when the conflict policy selected no custom writes.
 
 ## Config: scan policies
 

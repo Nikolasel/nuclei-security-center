@@ -155,6 +155,25 @@ type TemplateValidationResult struct {
 	NucleiVersion string   `json:"nuclei_version"`
 }
 
+// TemplateValidationFailure is the bounded Nuclei diagnostic for one template
+// in a batch. TemplateID comes from the verified bundle manifest, never from
+// parsing Nuclei's human-readable text.
+type TemplateValidationFailure struct {
+	TemplateID string   `json:"template_id"`
+	Errors     []string `json:"errors"`
+}
+
+// TemplateBatchValidationResult is the verdict for one transient bundle
+// validated by a single Nuclei process. Errors holds diagnostics that could not
+// be attributed to one manifest entry; Failures holds per-template diagnostics.
+type TemplateBatchValidationResult struct {
+	Valid         bool                        `json:"valid"`
+	Failures      []TemplateValidationFailure `json:"failures"`
+	Errors        []string                    `json:"errors"`
+	Truncated     bool                        `json:"truncated,omitempty"`
+	NucleiVersion string                      `json:"nuclei_version"`
+}
+
 // BundleDigest computes a bundle's canonical, order-independent digest: the
 // sha256 over each template's "id\x00sha256\n" line, sorted by id. It is content-
 // addressed — independent of tar byte order, file timestamps, and compression —

@@ -598,8 +598,11 @@ export function TemplatesPage() {
 
   const imported = (result: TemplateImportResponse) => {
     const summary = result.templates;
+    const validation = result.validation
+      ? ` Validated with Nuclei ${result.validation.nuclei_version}.`
+      : " No custom writes required Nuclei validation.";
     setImportNotice(
-      `Import complete: ${summary.created} created, ${summary.updated} updated, ${summary.skipped} skipped, ${summary.upstream_ignored} upstream ignored${summary.renamed.length ? `, ${summary.renamed.length} renamed` : ""}.`,
+      `Import complete: ${summary.created} created, ${summary.updated} updated, ${summary.skipped} skipped, ${summary.upstream_ignored} upstream ignored${summary.renamed.length ? `, ${summary.renamed.length} renamed` : ""}.${validation}`,
     );
     setImporting(false);
     void qc.invalidateQueries({ queryKey: ["templates"] });

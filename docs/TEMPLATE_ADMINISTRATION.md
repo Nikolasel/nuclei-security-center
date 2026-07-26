@@ -190,8 +190,14 @@ custom YAML. Import it again with one conflict policy:
 Upstream content in an import is ignored because the configured sync source owns it. Import is
 atomic: the set is never restored with missing custom members.
 
-> Current limitation: individual custom create/edit is authoritatively validated by Nuclei, but a
-> bulk import is not yet run through one bounded Nuclei validation pass. That follow-up is #140.
+Expected validation behavior:
+
+- conflict policy is resolved first; only final custom creates, overwrites, and renamed YAML are
+  selected;
+- those selected files are validated by one bounded Nuclei process, not one process per file;
+- a mixed valid/invalid archive identifies the rejected template and persists nothing;
+- a successful notice reports the deployed Nuclei version; and
+- an all-skipped/upstream-only import needs no validator because it has no custom writes.
 
 ## Routine administration
 
@@ -212,6 +218,8 @@ atomic: the set is never restored with missing custom members.
 |---|---|
 | Custom save returns `400` with Nuclei diagnostics | Fix the YAML schema. Nothing was persisted. |
 | Custom save returns `503` | No known-healthy validator completed the request. Check node health, endpoint, token/mTLS, and Nuclei availability; then retry. |
+| Import returns `400` with a template ID | Fix that archive entry. The entire selected batch was rejected and nothing was persisted. |
+| Import returns `503` | Selected custom writes required validation, but no healthy node completed it. Restore node health and retry. |
 | Upstream sync is disabled | Configure `TEMPLATE_SYNC_REPO`, or intentionally operate a custom-only catalog. |
 | Set cannot be selected in a policy | Convert a legacy set, add members to an empty set, or replace unavailable members. |
 | Manual node sync returns `409` | A scan is using the active bundle. Wait for it to finish and retry. |

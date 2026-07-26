@@ -167,6 +167,35 @@ func (c *ScannerClient) ValidateTemplate(ctx context.Context, yaml []byte) (type
 	return result, nil
 }
 
+// ValidateTemplateBatch submits a transient, verified bundle for validation in
+// one Nuclei process. The node does not activate this bundle.
+func (c *ScannerClient) ValidateTemplateBatch(ctx context.Context, bundle []byte) (types.TemplateBatchValidationResult, error) {
+	req, err := c.newReq(ctx, http.MethodPost, "/v1/templates/validate-batch", bytes.NewReader(bundle))
+	if err != nil {
+		return types.TemplateBatchValidationResult{}, err
+	}
+	req.Header.Set("Content-Type", "application/gzip")
+	resp, err := c.clientForTimeout(130 * time.Second).Do(req)
+	if err != nil {
+		return types.TemplateBatchValidationResult{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return types.TemplateBatchValidationResult{}, fmt.Errorf("validate template batch: %s", statusErr(resp))
+	}
+	var result types.TemplateBatchValidationResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return types.TemplateBatchValidationResult{}, err
+	}
+	if result.Failures == nil {
+		result.Failures = []types.TemplateValidationFailure{}
+	}
+	if result.Errors == nil {
+		result.Errors = []string{}
+	}
+	return result, nil
+}
+
 // pushBundleTimeout bounds a full-catalog bundle upload + the node's verify/
 // activate. Generous: the catalog is a few MB and the node hashes every file.
 const pushBundleTimeout = 5 * time.Minute

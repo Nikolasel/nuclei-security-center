@@ -84,7 +84,8 @@ func (r *Runner) ValidateTemplate(ctx context.Context, yaml []byte) (types.Templ
 // cappedBuffer accepts the complete process stream while retaining only a
 // bounded tail. Nuclei's actionable fatal diagnostic is normally at the end.
 type cappedBuffer struct {
-	buf bytes.Buffer
+	buf       bytes.Buffer
+	truncated bool
 }
 
 func (b *cappedBuffer) Write(p []byte) (int, error) {
@@ -92,6 +93,7 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 	if original >= maxValidationOutput {
 		b.buf.Reset()
 		_, _ = b.buf.Write(p[original-maxValidationOutput:])
+		b.truncated = true
 		return original, nil
 	}
 	overflow := b.buf.Len() + original - maxValidationOutput
@@ -99,6 +101,7 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 		kept := append([]byte(nil), b.buf.Bytes()[overflow:]...)
 		b.buf.Reset()
 		_, _ = b.buf.Write(kept)
+		b.truncated = true
 	}
 	_, _ = b.buf.Write(p)
 	return original, nil
@@ -107,40 +110,29 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 func (b *cappedBuffer) String() string { return b.buf.String() }
 
 func validationDiagnostics(output, templatePath string) []string {
-	lines := strings.Split(output, "\n")
+	lines := actionableValidationLines(output)
 	out := make([]string, 0, len(lines))
 	templateDir := filepath.Dir(templatePath)
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
 		line = strings.ReplaceAll(line, templatePath, "template.yaml")
-		line = strings.ReplaceAll(line, templateDir, "<validation-dir>")
-		if len(line) > maxValidationLine {
-			line = line[:maxValidationLine]
-			for !utf8.ValidString(line) {
-				line = line[:len(line)-1]
-			}
-		}
+		line = sanitizeValidationLine(line, templateDir)
 		out = append(out, line)
-	}
-	// Nuclei prints its banner and metrics-server notice even for validation.
-	// Prefer the actionable error/fatal lines; keep the bounded tail as a
-	// fallback for versions whose diagnostic format differs.
-	actionable := make([]string, 0, len(out))
-	for _, line := range out {
-		if strings.HasPrefix(line, "[ERR]") || strings.HasPrefix(line, "[FTL]") {
-			actionable = append(actionable, line)
-		}
-	}
-	if len(actionable) > 0 {
-		out = actionable
 	}
 	if len(out) > maxValidationErrors {
 		out = out[len(out)-maxValidationErrors:]
 	}
 	return out
+}
+
+func sanitizeValidationLine(line, validationDir string) string {
+	line = strings.ReplaceAll(line, validationDir, "<validation-dir>")
+	if len(line) > maxValidationLine {
+		line = line[:maxValidationLine]
+		for !utf8.ValidString(line) {
+			line = line[:len(line)-1]
+		}
+	}
+	return line
 }
 
 var _ io.Writer = (*cappedBuffer)(nil)

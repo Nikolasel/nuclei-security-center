@@ -21,16 +21,17 @@ import (
 // OIDC/BFF auth (§6); when auth is nil (OIDC unconfigured) the guards fall back
 // to a dev identity with all roles, so local smoke tests still work.
 type Server struct {
-	store             *store.Store
-	orch              *Orchestrator
-	auth              *Authenticator
-	archive           ObjectStore          // nil when object storage is not configured
-	searcher          FindingsSearcher     // reads the findings list; defaults to Postgres
-	templateSyncer    *TemplateSyncer      // nil when upstream catalog sync is disabled
-	distributor       *TemplateDistributor // nil when template sync is disabled (#85)
-	templateValidator func(context.Context, []byte) (types.TemplateValidationResult, error)
-	spa               http.Handler
-	log               *slog.Logger
+	store                  *store.Store
+	orch                   *Orchestrator
+	auth                   *Authenticator
+	archive                ObjectStore          // nil when object storage is not configured
+	searcher               FindingsSearcher     // reads the findings list; defaults to Postgres
+	templateSyncer         *TemplateSyncer      // nil when upstream catalog sync is disabled
+	distributor            *TemplateDistributor // nil when template sync is disabled (#85)
+	templateValidator      func(context.Context, []byte) (types.TemplateValidationResult, error)
+	templateBatchValidator func(context.Context, []store.TemplateImportWrite) (types.TemplateBatchValidationResult, error)
+	spa                    http.Handler
+	log                    *slog.Logger
 }
 
 // SetTemplateSyncer wires the upstream catalog status/trigger API.
@@ -49,6 +50,7 @@ func (s *Server) SetTemplateDistributor(d *TemplateDistributor) {
 func NewServer(st *store.Store, orch *Orchestrator, auth *Authenticator, archive ObjectStore, spa http.Handler, log *slog.Logger) *Server {
 	s := &Server{store: st, orch: orch, auth: auth, archive: archive, searcher: pgSearcher{store: st}, spa: spa, log: log}
 	s.templateValidator = s.validateCustomTemplate
+	s.templateBatchValidator = s.validateCustomTemplateBatch
 	return s
 }
 

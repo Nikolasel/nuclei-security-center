@@ -5,10 +5,21 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 	templatespkg "github.com/Nikolasel/nuclei-security-center/internal/templates"
+	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
+
+const templateImportValidationTimeout = 140 * time.Second
+
+type portableTemplateWritePlan struct {
+	Writes   []store.TemplateImportWrite
+	Renamed  map[string]string
+	Occupied map[string]struct{}
+	Summary  templateImportSummary
+}
 
 func (s *Server) applyPortableImport(
 	ctx context.Context,
@@ -21,68 +32,14 @@ func (s *Server) applyPortableImport(
 	if err != nil {
 		return portableImportResponse{}, err
 	}
-	occupied := make(map[string]struct{}, len(sources)+len(archive.Templates))
-	for id := range sources {
-		occupied[id] = struct{}{}
+	plan, err := planPortableTemplateWrites(archive, strategy, sources, requireSet)
+	if err != nil {
+		return portableImportResponse{}, err
 	}
-	renamed := make(map[string]string)
-	var writes []store.TemplateImportWrite
-	response := portableImportResponse{
-		Templates: templateImportSummary{Renamed: []importRename{}},
-	}
-
-	for _, entry := range archive.Templates {
-		if entry.Source == "upstream" {
-			response.Templates.UpstreamIgnored++
-			continue
-		}
-		template, err := customTemplateFromYAML([]byte(entry.YAML))
-		if err != nil {
-			return portableImportResponse{}, err
-		}
-		existingSource, exists := sources[entry.ID]
-		if !exists {
-			writes = append(writes, store.TemplateImportWrite{Template: template})
-			occupied[entry.ID] = struct{}{}
-			response.Templates.Created++
-			continue
-		}
-		if existingSource == "upstream" && requireSet && strategy != "rename" {
-			return portableImportResponse{}, fmt.Errorf(
-				"%w: custom template %q collides with an upstream template; use on_conflict=rename",
-				store.ErrConflict, entry.ID,
-			)
-		}
-
-		switch strategy {
-		case "skip":
-			response.Templates.Skipped++
-		case "overwrite":
-			if existingSource == "upstream" {
-				response.Templates.Skipped++
-				continue
-			}
-			writes = append(writes, store.TemplateImportWrite{Template: template, Overwrite: true})
-			response.Templates.Updated++
-		case "rename":
-			newID := nextImportedTemplateID(entry.ID, occupied)
-			rewritten, err := templatespkg.RewriteID([]byte(entry.YAML), newID)
-			if err != nil {
-				return portableImportResponse{}, fmt.Errorf("rename template %q: %w", entry.ID, err)
-			}
-			template, err = customTemplateFromYAML(rewritten)
-			if err != nil {
-				return portableImportResponse{}, fmt.Errorf("validate renamed template %q: %w", entry.ID, err)
-			}
-			writes = append(writes, store.TemplateImportWrite{Template: template})
-			occupied[newID] = struct{}{}
-			renamed[entry.ID] = newID
-			response.Templates.Created++
-			response.Templates.Renamed = append(response.Templates.Renamed, importRename{
-				From: entry.ID, To: newID,
-			})
-		}
-	}
+	writes := plan.Writes
+	renamed := plan.Renamed
+	occupied := plan.Occupied
+	response := portableImportResponse{Templates: plan.Summary}
 
 	var (
 		setWrite    *store.TemplateSetImportWrite
@@ -136,10 +93,15 @@ func (s *Server) applyPortableImport(
 		}
 	}
 
-	importedSet, err := s.store.ApplyTemplateImport(ctx, writes, setWrite, actor)
+	validation, importedSet, err := validateThenApplyTemplateImport(
+		ctx, writes, setWrite, actor,
+		s.validateTemplateImportWrites,
+		s.store.ApplyTemplateImport,
+	)
 	if err != nil {
 		return portableImportResponse{}, err
 	}
+	response.Validation = validation
 	if importedSet != nil {
 		response.Set = importedSet
 	}
@@ -147,6 +109,149 @@ func (s *Server) applyPortableImport(
 		return response.Templates.Renamed[i].From < response.Templates.Renamed[j].From
 	})
 	return response, nil
+}
+
+func planPortableTemplateWrites(
+	archive parsedPortableArchive,
+	strategy string,
+	sources map[string]string,
+	requireSet bool,
+) (portableTemplateWritePlan, error) {
+	occupied := make(map[string]struct{}, len(sources)+len(archive.Templates))
+	for id := range sources {
+		occupied[id] = struct{}{}
+	}
+	renamed := make(map[string]string)
+	var writes []store.TemplateImportWrite
+	summary := templateImportSummary{Renamed: []importRename{}}
+
+	for _, entry := range archive.Templates {
+		if entry.Source == "upstream" {
+			summary.UpstreamIgnored++
+			continue
+		}
+		template, err := customTemplateFromYAML([]byte(entry.YAML))
+		if err != nil {
+			return portableTemplateWritePlan{}, err
+		}
+		existingSource, exists := sources[entry.ID]
+		if !exists {
+			writes = append(writes, store.TemplateImportWrite{Template: template})
+			occupied[entry.ID] = struct{}{}
+			summary.Created++
+			continue
+		}
+		if existingSource == "upstream" && requireSet && strategy != "rename" {
+			return portableTemplateWritePlan{}, fmt.Errorf(
+				"%w: custom template %q collides with an upstream template; use on_conflict=rename",
+				store.ErrConflict, entry.ID,
+			)
+		}
+
+		switch strategy {
+		case "skip":
+			summary.Skipped++
+		case "overwrite":
+			if existingSource == "upstream" {
+				summary.Skipped++
+				continue
+			}
+			writes = append(writes, store.TemplateImportWrite{Template: template, Overwrite: true})
+			summary.Updated++
+		case "rename":
+			newID := nextImportedTemplateID(entry.ID, occupied)
+			rewritten, err := templatespkg.RewriteID([]byte(entry.YAML), newID)
+			if err != nil {
+				return portableTemplateWritePlan{}, fmt.Errorf("rename template %q: %w", entry.ID, err)
+			}
+			template, err = customTemplateFromYAML(rewritten)
+			if err != nil {
+				return portableTemplateWritePlan{}, fmt.Errorf("validate renamed template %q: %w", entry.ID, err)
+			}
+			writes = append(writes, store.TemplateImportWrite{Template: template})
+			occupied[newID] = struct{}{}
+			renamed[entry.ID] = newID
+			summary.Created++
+			summary.Renamed = append(summary.Renamed, importRename{
+				From: entry.ID, To: newID,
+			})
+		}
+	}
+	return portableTemplateWritePlan{
+		Writes: writes, Renamed: renamed, Occupied: occupied, Summary: summary,
+	}, nil
+}
+
+func (s *Server) validateTemplateImportWrites(
+	ctx context.Context,
+	writes []store.TemplateImportWrite,
+) (types.TemplateBatchValidationResult, error) {
+	if s.templateBatchValidator == nil {
+		return types.TemplateBatchValidationResult{}, errTemplateValidatorUnavailable
+	}
+	validationCtx, cancel := context.WithTimeout(ctx, templateImportValidationTimeout)
+	defer cancel()
+	return s.templateBatchValidator(validationCtx, writes)
+}
+
+type templateImportValidationError struct {
+	Result types.TemplateBatchValidationResult
+}
+
+func (e *templateImportValidationError) Error() string {
+	return formatTemplateImportValidationError(e.Result)
+}
+
+type templateImportValidator func(
+	context.Context, []store.TemplateImportWrite,
+) (types.TemplateBatchValidationResult, error)
+
+type templateImportApplier func(
+	context.Context, []store.TemplateImportWrite, *store.TemplateSetImportWrite, string,
+) (*store.TemplateSet, error)
+
+func validateThenApplyTemplateImport(
+	ctx context.Context,
+	writes []store.TemplateImportWrite,
+	setWrite *store.TemplateSetImportWrite,
+	actor string,
+	validate templateImportValidator,
+	apply templateImportApplier,
+) (*types.TemplateBatchValidationResult, *store.TemplateSet, error) {
+	var validation *types.TemplateBatchValidationResult
+	if len(writes) > 0 {
+		result, err := validate(ctx, writes)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !result.Valid {
+			return nil, nil, &templateImportValidationError{Result: result}
+		}
+		validation = &result
+	}
+	importedSet, err := apply(ctx, writes, setWrite, actor)
+	return validation, importedSet, err
+}
+
+func formatTemplateImportValidationError(result types.TemplateBatchValidationResult) string {
+	parts := make([]string, 0, len(result.Failures)+len(result.Errors)+1)
+	version := result.NucleiVersion
+	if version == "" {
+		version = "unknown version"
+	}
+	for _, failure := range result.Failures {
+		parts = append(parts, fmt.Sprintf(
+			"template %q: %s", failure.TemplateID, strings.Join(failure.Errors, "; "),
+		))
+	}
+	parts = append(parts, result.Errors...)
+	if result.Truncated {
+		parts = append(parts, "additional Nuclei diagnostics were truncated")
+	}
+	if len(parts) == 0 {
+		parts = append(parts, "Nuclei rejected the template batch")
+	}
+	return fmt.Sprintf("nuclei %s import validation failed: %s", version, strings.Join(parts, "; "))
 }
 
 func nextImportedTemplateID(base string, occupied map[string]struct{}) string {

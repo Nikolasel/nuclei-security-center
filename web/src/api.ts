@@ -132,7 +132,6 @@ export interface TemplatesQuery {
   source?: TemplateSource;
   severities?: string[];
   tags?: string[];
-  cve_only?: boolean;
   q?: string;
   sort?: "name" | "inserted";
   include_unavailable?: boolean;
@@ -634,7 +633,6 @@ export const api = {
     if (q.source) p.set("source", q.source);
     if (q.severities?.length) p.set("severity", q.severities.join(","));
     if (q.tags?.length) p.set("tag", q.tags.join(","));
-    if (q.cve_only) p.set("cve", "true");
     if (q.q) p.set("q", q.q);
     if (q.sort) p.set("sort", q.sort);
     if (q.include_unavailable) p.set("include_unavailable", "true");
@@ -648,7 +646,6 @@ export const api = {
     if (q.source) p.set("source", q.source);
     if (q.severities?.length) p.set("severity", q.severities.join(","));
     if (q.tags?.length) p.set("tag", q.tags.join(","));
-    if (q.cve_only) p.set("cve", "true");
     if (q.q) p.set("q", q.q);
     if (q.sort) p.set("sort", q.sort);
     if (q.include_unavailable) p.set("include_unavailable", "true");

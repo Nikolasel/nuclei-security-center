@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestValidateTemplateValid(t *testing.T) {
@@ -114,16 +115,31 @@ func TestValidateTemplateEndpointAuthAndBodyBounds(t *testing.T) {
 
 func TestValidationDiagnosticsFiltersBannerAndHidesTempPath(t *testing.T) {
 	const path = "/private/work/template-validation-123/template.yaml"
-	output := "banner\n[VER] Started metrics server\n[ERR] load " + path + ": bad matcher\n[FTL] validation failed\n"
+	output := "banner\n[VER] Started metrics server\n[ERR] load " + path + ": bad matcher\n" +
+		"[ERR] directory " + filepath.Dir(path) + "\n[FTL] validation failed\n"
 	got := validationDiagnostics(output, path)
-	if len(got) != 2 {
-		t.Fatalf("diagnostics = %#v, want two actionable lines", got)
+	if len(got) != 3 {
+		t.Fatalf("diagnostics = %#v, want three actionable lines", got)
 	}
 	if strings.Contains(strings.Join(got, " "), "/private/work") {
 		t.Fatalf("diagnostics leak temp path: %#v", got)
 	}
 	if !strings.Contains(got[0], "template.yaml") {
 		t.Errorf("diagnostic = %q, want normalized filename", got[0])
+	}
+}
+
+func TestValidationDiagnosticsTruncatesAtUTF8Boundary(t *testing.T) {
+	line := "[ERR] " + strings.Repeat("a", maxValidationLine-len("[ERR] ")-1) + "€"
+	got := validationDiagnostics(line, "/tmp/template.yaml")
+	if len(got) != 1 {
+		t.Fatalf("diagnostics = %#v", got)
+	}
+	if !utf8.ValidString(got[0]) {
+		t.Fatalf("diagnostic is not valid UTF-8: %q", got[0])
+	}
+	if len(got[0]) > maxValidationLine {
+		t.Fatalf("diagnostic length = %d, want <= %d", len(got[0]), maxValidationLine)
 	}
 }
 

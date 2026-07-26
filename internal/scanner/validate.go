@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
@@ -108,14 +109,19 @@ func (b *cappedBuffer) String() string { return b.buf.String() }
 func validationDiagnostics(output, templatePath string) []string {
 	lines := strings.Split(output, "\n")
 	out := make([]string, 0, len(lines))
+	templateDir := filepath.Dir(templatePath)
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 		line = strings.ReplaceAll(line, templatePath, "template.yaml")
+		line = strings.ReplaceAll(line, templateDir, "<validation-dir>")
 		if len(line) > maxValidationLine {
 			line = line[:maxValidationLine]
+			for !utf8.ValidString(line) {
+				line = line[:len(line)-1]
+			}
 		}
 		out = append(out, line)
 	}

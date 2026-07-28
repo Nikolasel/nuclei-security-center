@@ -21,7 +21,7 @@ export function Button({ variant = "secondary", className, ...props }: ButtonPro
   const styles: Record<string, string> = {
     primary: "bg-indigo-600 text-white hover:bg-indigo-500 disabled:bg-indigo-600/50",
     secondary:
-      "bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-50 dark:hover:bg-neutral-700",
+      "border border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-50 disabled:text-neutral-400 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700 dark:disabled:text-neutral-500",
     danger: "bg-red-600 text-white hover:bg-red-500 disabled:bg-red-600/50",
     ghost: "hover:bg-neutral-100 dark:hover:bg-neutral-800",
   };
@@ -250,10 +250,16 @@ export function Modal({
    *  destroyed by closing and cannot be recovered — a secret shown exactly once. */
   dismissible?: boolean;
   /** "wide" roughly doubles the max width — for forms with long free-text fields
-   *  (e.g. a port list) that need room to stretch. */
-  size?: "default" | "wide";
+   *  (e.g. a port list) that need room to stretch. "workspace" is a stable,
+   *  viewport-aware work surface for editors whose filtered content changes. */
+  size?: "default" | "wide" | "workspace";
 }) {
-  const widthClass = size === "wide" ? "w-[min(94vw,48rem)]" : "w-[min(92vw,32rem)]";
+  const workspace = size === "workspace";
+  const sizeClass = {
+    default: "w-[min(92vw,32rem)]",
+    wide: "w-[min(94vw,48rem)]",
+    workspace: "h-[min(94dvh,64rem)] w-[min(96vw,72rem)]",
+  }[size];
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -262,10 +268,23 @@ export function Modal({
           onPointerDownOutside={dismissible ? undefined : (e) => e.preventDefault()}
           onEscapeKeyDown={dismissible ? undefined : (e) => e.preventDefault()}
           onInteractOutside={dismissible ? undefined : (e) => e.preventDefault()}
-          className={`fixed left-1/2 top-1/2 max-h-[90dvh] ${widthClass} -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-neutral-200 bg-white p-5 shadow-xl focus:outline-none dark:border-neutral-800 dark:bg-neutral-900`}
+          className={cn(
+            "fixed left-1/2 top-1/2 max-h-[94dvh] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-neutral-200 bg-white shadow-xl focus:outline-none dark:border-neutral-800 dark:bg-neutral-900",
+            sizeClass,
+            workspace ? "flex flex-col overflow-hidden p-0" : "overflow-y-auto p-5",
+          )}
         >
-          <Dialog.Title className="mb-3 text-base font-semibold">{title}</Dialog.Title>
-          {children}
+          <Dialog.Title
+            className={cn(
+              "text-base font-semibold",
+              workspace
+                ? "shrink-0 border-b border-neutral-200 px-5 py-4 dark:border-neutral-800"
+                : "mb-3",
+            )}
+          >
+            {title}
+          </Dialog.Title>
+          <div className={workspace ? "min-h-0 flex-1" : undefined}>{children}</div>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

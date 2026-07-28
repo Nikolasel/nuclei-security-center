@@ -71,7 +71,8 @@ type TemplateFilter struct {
 	Severities         []string // any-of, case-insensitive
 	Tags               []string // any-of (array overlap on tags[])
 	Query              string   // case-insensitive substring over id/name/description
-	Sort               string   // "name" (default) | "inserted" (newest first)
+	Sort               string   // "name" (default) | "severity" | "source" | "inserted" | "revision"
+	Order              string   // "asc" | "desc"; empty uses the sort's natural default
 	IncludeUnavailable bool     // false (default) ⇒ only availability='active'
 }
 
@@ -104,7 +105,7 @@ func (s *Store) ListTemplates(ctx context.Context, f TemplateFilter, limit, offs
 	offsetPH := fmt.Sprintf("$%d", len(args))
 	rows, err := s.pool.Query(ctx,
 		"SELECT "+tmplListCols+" FROM templates "+where+
-			" ORDER BY "+templateSortOrder(f.Sort)+" LIMIT "+limitPH+" OFFSET "+offsetPH, args...)
+			" ORDER BY "+templateSortOrder(f.Sort, f.Order)+" LIMIT "+limitPH+" OFFSET "+offsetPH, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list templates: %w", err)
 	}
@@ -126,7 +127,7 @@ func (s *Store) ListTemplates(ctx context.Context, f TemplateFilter, limit, offs
 func (s *Store) ListTemplateIDs(ctx context.Context, f TemplateFilter) ([]string, error) {
 	where, args := templateFilterWhere(f)
 	rows, err := s.pool.Query(ctx,
-		"SELECT id FROM templates "+where+" ORDER BY "+templateSortOrder(f.Sort), args...)
+		"SELECT id FROM templates "+where+" ORDER BY "+templateSortOrder(f.Sort, f.Order), args...)
 	if err != nil {
 		return nil, fmt.Errorf("list template ids: %w", err)
 	}
@@ -175,11 +176,39 @@ func templateFilterWhere(f TemplateFilter) (string, []any) {
 	return "WHERE " + strings.Join(conds, " AND "), args
 }
 
-func templateSortOrder(sortBy string) string {
-	if sortBy == "inserted" {
-		return "created_at DESC, lower(name), id"
+func templateSortOrder(sortBy, order string) string {
+	if order != "asc" && order != "desc" {
+		switch sortBy {
+		case "severity", "inserted", "revision":
+			order = "desc"
+		default:
+			order = "asc"
+		}
 	}
-	return "lower(name), id"
+	direction := strings.ToUpper(order)
+	var expression string
+	switch sortBy {
+	case "severity":
+		expression = `CASE lower(severity)
+			WHEN 'critical' THEN 5
+			WHEN 'high' THEN 4
+			WHEN 'medium' THEN 3
+			WHEN 'low' THEN 2
+			WHEN 'info' THEN 1
+			ELSE 0 END`
+	case "source":
+		expression = "source"
+	case "inserted":
+		expression = "created_at"
+	case "revision":
+		expression = "revision"
+	default:
+		expression = "lower(name)"
+	}
+	if expression == "lower(name)" {
+		return expression + " " + direction + ", id"
+	}
+	return expression + " " + direction + ", lower(name), id"
 }
 
 // GetTemplate returns one template by id including its yaml body, or ErrNotFound.
@@ -355,18 +384,26 @@ func (s *Store) assertCustom(ctx context.Context, id string) error {
 	return nil
 }
 
-// ListTemplateSyncRuns returns the most recent sync-run rows (newest first) for
-// the Sync view — time-since-last-sync, counts, and any error.
-func (s *Store) ListTemplateSyncRuns(ctx context.Context, limit int) ([]TemplateSyncRun, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 20
+// ListTemplateSyncRuns returns one newest-first page of sync-run history and
+// the total row count. Runs are retained in PostgreSQL; pagination keeps the
+// Sync view useful without silently hiding older history.
+func (s *Store) ListTemplateSyncRuns(ctx context.Context, limit, offset int) ([]TemplateSyncRun, int, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM template_sync_runs`).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count template sync runs: %w", err)
 	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, started_at, finished_at, status, ref_before, ref_after,
 		   templates_commit, template_count, added, removed, updated, skipped, error
-		 FROM template_sync_runs ORDER BY started_at DESC LIMIT $1`, limit)
+		 FROM template_sync_runs ORDER BY started_at DESC LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
-		return nil, fmt.Errorf("list template sync runs: %w", err)
+		return nil, 0, fmt.Errorf("list template sync runs: %w", err)
 	}
 	defer rows.Close()
 	var out []TemplateSyncRun
@@ -375,13 +412,13 @@ func (s *Store) ListTemplateSyncRuns(ctx context.Context, limit int) ([]Template
 		var refBefore, refAfter, templatesCommit, errStr *string
 		if err := rows.Scan(&r.ID, &r.StartedAt, &r.FinishedAt, &r.Status, &refBefore, &refAfter,
 			&templatesCommit, &r.TemplateCount, &r.Added, &r.Removed, &r.Updated, &r.Skipped, &errStr); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		r.RefBefore, r.RefAfter = deref(refBefore), deref(refAfter)
 		r.TemplatesCommit, r.Error = deref(templatesCommit), deref(errStr)
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 type templateBundleQuerier interface {

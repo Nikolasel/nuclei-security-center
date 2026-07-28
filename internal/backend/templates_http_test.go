@@ -110,6 +110,16 @@ func TestHandleListTemplatesRejectsBadSort(t *testing.T) {
 	}
 }
 
+func TestHandleListTemplatesRejectsBadOrder(t *testing.T) {
+	s := &Server{}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/api/templates?sort=severity&order=sideways", nil)
+	s.handleListTemplates(rr, req)
+	if rr.Code != 400 {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+}
+
 func TestReadTemplateBodyRejectsEmpty(t *testing.T) {
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/api/templates", strings.NewReader(""))

@@ -1,12 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   api,
   SEVERITIES,
+  type SortOrder,
   type Template,
   type TemplateArchiveFormat,
   type TemplateDetail,
   type TemplateImportResponse,
+  type TemplateSort,
   type TemplateSource,
   type TemplatesQuery,
 } from "../api";
@@ -41,18 +44,23 @@ function shortDigest(value?: string) {
 }
 
 function TemplateDetailModal({
-  template,
+  templateID,
   onClose,
 }: {
-  template: Template;
+  templateID: string;
   onClose: () => void;
 }) {
   const detail = useQuery({
-    queryKey: ["template", template.id],
-    queryFn: () => api.getTemplate(template.id),
+    queryKey: ["template", templateID],
+    queryFn: () => api.getTemplate(templateID),
   });
   return (
-    <Modal open onOpenChange={(open) => !open && onClose()} title={template.name || template.id} size="wide">
+    <Modal
+      open
+      onOpenChange={(open) => !open && onClose()}
+      title={detail.data?.name || templateID}
+      size="wide"
+    >
       {detail.isError ? (
         <ErrorText error={detail.error} />
       ) : detail.isLoading || !detail.data ? (
@@ -202,25 +210,50 @@ function CatalogTable({
   onToggle,
   onView,
   actions,
+  sort,
+  order,
+  onSort,
 }: {
   templates: Template[];
   selected?: Set<string>;
   onToggle?: (id: string) => void;
   onView: (template: Template) => void;
   actions?: (template: Template) => ReactNode;
+  sort?: TemplateSort;
+  order?: SortOrder;
+  onSort?: (sort: TemplateSort) => void;
 }) {
+  const header = (label: string, value: TemplateSort) => (
+    <th
+      className="px-3 py-2 font-medium"
+      aria-sort={sort === value ? (order === "desc" ? "descending" : "ascending") : "none"}
+    >
+      {onSort ? (
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 hover:text-indigo-600"
+          onClick={() => onSort(value)}
+        >
+          {label}
+          <span aria-hidden="true" className={sort === value ? "text-indigo-600" : "text-neutral-300"}>
+            {sort === value ? (order === "desc" ? "↓" : "↑") : "↕"}
+          </span>
+        </button>
+      ) : label}
+    </th>
+  );
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
             {selected && <th className="w-10 px-3 py-2" />}
-            <th className="px-3 py-2 font-medium">Template</th>
-            <th className="px-3 py-2 font-medium">Severity</th>
-            <th className="px-3 py-2 font-medium">Source</th>
+            {header("Template", "name")}
+            {header("Severity", "severity")}
+            {header("Source", "source")}
             <th className="px-3 py-2 font-medium">Tags</th>
-            <th className="px-3 py-2 font-medium">Inserted</th>
-            <th className="px-3 py-2 font-medium">Revision</th>
+            {header("Inserted", "inserted")}
+            {header("Revision", "revision")}
             <th className="px-3 py-2" />
           </tr>
         </thead>
@@ -277,20 +310,22 @@ function Pager({
   offset,
   total,
   onChange,
+  pageSize = PAGE_SIZE,
 }: {
   offset: number;
   total: number;
   onChange: (offset: number) => void;
+  pageSize?: number;
 }) {
-  if (total <= PAGE_SIZE) return null;
+  if (total <= pageSize) return null;
   return (
     <div className="flex items-center justify-between border-t border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800">
       <span>
-        {offset + 1}–{Math.min(offset + PAGE_SIZE, total)} of {total}
+        {offset + 1}–{Math.min(offset + pageSize, total)} of {total}
       </span>
       <div className="flex gap-2">
-        <Button disabled={offset === 0} onClick={() => onChange(Math.max(0, offset - PAGE_SIZE))}>Previous</Button>
-        <Button disabled={offset + PAGE_SIZE >= total} onClick={() => onChange(offset + PAGE_SIZE)}>Next</Button>
+        <Button disabled={offset === 0} onClick={() => onChange(Math.max(0, offset - pageSize))}>Previous</Button>
+        <Button disabled={offset + pageSize >= total} onClick={() => onChange(offset + pageSize)}>Next</Button>
       </div>
     </div>
   );
@@ -302,7 +337,8 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
   const [severity, setSeverity] = useState("");
   const [query, setQuery] = useState("");
   const [tags, setTags] = useState("");
-  const [sort, setSort] = useState<"name" | "inserted">("name");
+  const [sort, setSort] = useState<TemplateSort>("name");
+  const [order, setOrder] = useState<SortOrder>("asc");
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [viewing, setViewing] = useState<Template | null>(null);
@@ -316,10 +352,11 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
     tags: parseList(tags),
     q: query.trim(),
     sort,
+    order,
   };
 
   const templates = useQuery({
-    queryKey: ["templates", "catalog", source, severity, query, tags, sort, offset],
+    queryKey: ["templates", "catalog", source, severity, query, tags, sort, order, offset],
     queryFn: () =>
       api.listTemplates({
         ...filters,
@@ -357,13 +394,22 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
     onSuccess: ({ ids }) => setSelected(new Set(ids)),
   });
   const resetPage = () => setOffset(0);
+  const changeSort = (nextSort: TemplateSort) => {
+    if (nextSort === sort) {
+      setOrder((current) => current === "asc" ? "desc" : "asc");
+    } else {
+      setSort(nextSort);
+      setOrder(["severity", "inserted", "revision"].includes(nextSort) ? "desc" : "asc");
+    }
+    resetPage();
+  };
   const exportURL = api.templateExportURL([...selected], exportFormat);
   const exportTooLarge = exportURL.length > MAX_TEMPLATE_EXPORT_URL_LENGTH;
 
   return (
     <div className="space-y-4">
       <Card className="p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Search">
             <Input value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} placeholder="ID, name, description" />
           </Field>
@@ -382,12 +428,6 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
           </Field>
           <Field label="Tags (comma separated)">
             <Input value={tags} onChange={(event) => { setTags(event.target.value); resetPage(); }} placeholder="cve, rce" />
-          </Field>
-          <Field label="Sort">
-            <Select className="w-full" value={sort} onChange={(event) => { setSort(event.target.value as "name" | "inserted"); resetPage(); }}>
-              <option value="name">Name</option>
-              <option value="inserted">Newest inserted</option>
-            </Select>
           </Field>
         </div>
       </Card>
@@ -474,11 +514,14 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
               return next;
             })}
             onView={setViewing}
+            sort={sort}
+            order={order}
+            onSort={changeSort}
           />
           <Pager offset={offset} total={templates.data.total} onChange={setOffset} />
         </Card>
       )}
-      {viewing && <TemplateDetailModal template={viewing} onClose={() => setViewing(null)} />}
+      {viewing && <TemplateDetailModal templateID={viewing.id} onClose={() => setViewing(null)} />}
     </div>
   );
 }
@@ -489,10 +532,21 @@ function CustomTab({ canWrite, canDelete }: { canWrite: boolean; canDelete: bool
   const [viewing, setViewing] = useState<Template | null>(null);
   const [editing, setEditing] = useState<Template | "new" | null>(null);
   const [notice, setNotice] = useState("");
+  const [sort, setSort] = useState<TemplateSort>("name");
+  const [order, setOrder] = useState<SortOrder>("asc");
   const templates = useQuery({
-    queryKey: ["templates", "custom", offset],
-    queryFn: () => api.listTemplates({ source: "custom", limit: PAGE_SIZE, offset }),
+    queryKey: ["templates", "custom", sort, order, offset],
+    queryFn: () => api.listTemplates({ source: "custom", sort, order, limit: PAGE_SIZE, offset }),
   });
+  const changeSort = (nextSort: TemplateSort) => {
+    if (nextSort === sort) {
+      setOrder((current) => current === "asc" ? "desc" : "asc");
+    } else {
+      setSort(nextSort);
+      setOrder(["severity", "inserted", "revision"].includes(nextSort) ? "desc" : "asc");
+    }
+    setOffset(0);
+  };
   const remove = useMutation({
     mutationFn: (id: string) => api.deleteTemplate(id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["templates"] }),
@@ -511,6 +565,9 @@ function CustomTab({ canWrite, canDelete }: { canWrite: boolean; canDelete: bool
           <CatalogTable
             templates={templates.data.items}
             onView={setViewing}
+            sort={sort}
+            order={order}
+            onSort={changeSort}
             actions={(template) => (
               <>
                 {canWrite && <Button variant="ghost" onClick={() => setEditing(template)}>Edit</Button>}
@@ -531,7 +588,7 @@ function CustomTab({ canWrite, canDelete }: { canWrite: boolean; canDelete: bool
           <Pager offset={offset} total={templates.data.total} onChange={setOffset} />
         </Card>
       )}
-      {viewing && <TemplateDetailModal template={viewing} onClose={() => setViewing(null)} />}
+      {viewing && <TemplateDetailModal templateID={viewing.id} onClose={() => setViewing(null)} />}
       {editing && (
         <CustomTemplateModal
           existing={editing === "new" ? undefined : editing}
@@ -546,11 +603,13 @@ function CustomTab({ canWrite, canDelete }: { canWrite: boolean; canDelete: bool
 }
 
 function SyncTab({ canWrite }: { canWrite: boolean }) {
+  const syncPageSize = 20;
   const qc = useQueryClient();
+  const [offset, setOffset] = useState(0);
   const status = useQuery({ queryKey: ["template-sync"], queryFn: () => api.getTemplateSync() });
   const runs = useQuery({
-    queryKey: ["template-sync-runs"],
-    queryFn: () => api.listTemplateSyncRuns(),
+    queryKey: ["template-sync-runs", offset],
+    queryFn: () => api.listTemplateSyncRuns(syncPageSize, offset),
     refetchInterval: 15_000,
   });
   const trigger = useMutation({
@@ -589,6 +648,10 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
               ) : (
                 <p className="mt-2 text-sm text-neutral-500">Set TEMPLATE_SYNC_REPO to enable the community catalog mirror. Custom templates remain available.</p>
               )}
+              <p className="mt-3 text-xs text-neutral-500">
+                Configure the mirror on the backend with TEMPLATE_SYNC_REPO, TEMPLATE_SYNC_REF,
+                and TEMPLATE_SYNC_INTERVAL. Changes take effect after a backend restart.
+              </p>
             </div>
             {canWrite && (
               <Button variant="primary" disabled={!status.data.enabled || trigger.isPending} onClick={() => trigger.mutate()}>
@@ -602,7 +665,12 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
 
       {runs.isError ? <ErrorText error={runs.error} /> : runs.isLoading || !runs.data ? <Spinner /> : (
         <Card>
-          <div className="border-b border-neutral-200 px-3 py-2 font-medium dark:border-neutral-800">Recent sync runs</div>
+          <div className="border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
+            <div className="font-medium">Sync history</div>
+            <div className="text-xs text-neutral-500">
+              {runs.data.total} retained {runs.data.total === 1 ? "run" : "runs"} in PostgreSQL.
+            </div>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
@@ -617,7 +685,7 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
                 </tr>
               </thead>
               <tbody>
-                {runs.data.map((run) => (
+                {runs.data.items.map((run) => (
                   <tr key={run.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
                     <td className="px-3 py-2 whitespace-nowrap">{fmtTime(run.started_at)}</td>
                     <td className="px-3 py-2"><Pill tone={run.status === "success" ? "good" : run.status === "failed" ? "warn" : "neutral"}>{run.status}</Pill></td>
@@ -639,10 +707,16 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
                     <td className="max-w-md px-3 py-2 text-xs text-rose-600 dark:text-rose-400" title={run.error}>{run.error || "—"}</td>
                   </tr>
                 ))}
-                {runs.data.length === 0 && <tr><td colSpan={7} className="px-3 py-8 text-center text-neutral-400">No upstream sync has run yet.</td></tr>}
+                {runs.data.items.length === 0 && <tr><td colSpan={7} className="px-3 py-8 text-center text-neutral-400">No upstream sync has run yet.</td></tr>}
               </tbody>
             </table>
           </div>
+          <Pager
+            offset={offset}
+            total={runs.data.total}
+            pageSize={syncPageSize}
+            onChange={setOffset}
+          />
         </Card>
       )}
     </div>
@@ -653,6 +727,8 @@ export function TemplatesPage() {
   const me = useMe();
   const canWrite = hasRole(me.data ?? undefined, "operator");
   const canDelete = hasRole(me.data ?? undefined, "admin");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const linkedTemplateID = searchParams.get("template");
   const [tab, setTab] = useState<"catalog" | "custom" | "sync">("catalog");
   const [importing, setImporting] = useState(false);
   const [importNotice, setImportNotice] = useState("");
@@ -698,6 +774,16 @@ export function TemplatesPage() {
       {tab === "catalog" && <CatalogTab canWrite={canWrite} />}
       {tab === "custom" && <CustomTab canWrite={canWrite} canDelete={canDelete} />}
       {tab === "sync" && <SyncTab canWrite={canWrite} />}
+      {linkedTemplateID && (
+        <TemplateDetailModal
+          templateID={linkedTemplateID}
+          onClose={() => {
+            const next = new URLSearchParams(searchParams);
+            next.delete("template");
+            setSearchParams(next, { replace: true });
+          }}
+        />
+      )}
       {importing && (
         <TemplateArchiveImportModal
           title="Import templates"

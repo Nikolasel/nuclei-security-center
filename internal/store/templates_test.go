@@ -29,11 +29,20 @@ func TestTemplateFilterWhereCombinesFilters(t *testing.T) {
 }
 
 func TestTemplateSortOrder(t *testing.T) {
-	if got := templateSortOrder("inserted"); got != "created_at DESC, lower(name), id" {
+	if got := templateSortOrder("inserted", ""); got != "created_at DESC, lower(name), id" {
 		t.Errorf("inserted order = %q", got)
 	}
-	if got := templateSortOrder("name"); got != "lower(name), id" {
+	if got := templateSortOrder("name", ""); got != "lower(name) ASC, id" {
 		t.Errorf("name order = %q", got)
+	}
+	if got := templateSortOrder("revision", "asc"); got != "revision ASC, lower(name), id" {
+		t.Errorf("revision order = %q", got)
+	}
+	if got := templateSortOrder("source", "desc"); got != "source DESC, lower(name), id" {
+		t.Errorf("source order = %q", got)
+	}
+	if got := templateSortOrder("severity", ""); !strings.Contains(got, "END DESC") {
+		t.Errorf("severity order = %q, want severity rank descending", got)
 	}
 }
 

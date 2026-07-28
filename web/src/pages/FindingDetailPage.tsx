@@ -262,17 +262,27 @@ export function FindingDetailPage() {
           </Meta>
           <Meta label="Type">{raw.type || f.type || "—"}</Meta>
           <Meta label="Template">
-            {safeHref(raw["template-url"]) ? (
-              <a
-                href={safeHref(raw["template-url"])}
-                target="_blank"
-                rel="noreferrer"
-                className="font-mono text-xs text-indigo-600 hover:underline dark:text-indigo-400"
-              >
-                {f.template_id}
-              </a>
-            ) : (
-              <span className="font-mono text-xs">{f.template_id}</span>
+            <Link
+              to={`/templates?template=${encodeURIComponent(f.template_id)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open the NSC template in a new tab"
+              className="font-mono text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+            >
+              {f.template_id}
+            </Link>
+            {safeHref(raw["template-url"]) && (
+              <>
+                {" "}
+                <a
+                  href={safeHref(raw["template-url"])}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs text-neutral-500 hover:underline"
+                >
+                  upstream
+                </a>
+              </>
             )}
           </Meta>
           <Meta label="First seen">

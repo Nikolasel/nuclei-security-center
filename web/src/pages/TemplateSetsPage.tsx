@@ -107,29 +107,31 @@ function TemplateSetModal({
       title={existing ? `${readOnly ? "View" : "Edit"} ${existing.name}` : "New template set"}
       size="workspace"
     >
-      <div className="space-y-4">
-        <Field label="Name">
-          <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="critical-cves" autoFocus disabled={readOnly} />
-        </Field>
-        <Field label="Membership mode">
-          <Select
-            value={dynamicAll ? "dynamic" : "exact"}
-            disabled={readOnly}
-            onChange={(event) => setDynamicAll(event.target.value === "dynamic")}
-            className="w-full"
-          >
-            <option value="exact">Exact selection</option>
-            <option value="dynamic">All active templates (dynamic)</option>
-          </Select>
-        </Field>
+      <div className="flex h-full min-h-0 flex-col">
+        <div className="grid shrink-0 gap-4 px-5 py-4 md:grid-cols-2">
+          <Field label="Name">
+            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="critical-cves" autoFocus disabled={readOnly} />
+          </Field>
+          <Field label="Membership mode">
+            <Select
+              value={dynamicAll ? "dynamic" : "exact"}
+              disabled={readOnly}
+              onChange={(event) => setDynamicAll(event.target.value === "dynamic")}
+              className="w-full"
+            >
+              <option value="exact">Exact selection</option>
+              <option value="dynamic">All active templates (dynamic)</option>
+            </Select>
+          </Field>
+        </div>
         {dynamicAll ? (
-          <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-800 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-300">
+          <div className="mx-5 mb-4 min-h-0 flex-1 overflow-y-auto rounded-md border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-800 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-300">
             This set always resolves to every active template at scan time. New templates from a
             later upstream sync are included automatically.
           </div>
         ) : (
-          <div className="rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
-          <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="mx-5 mb-4 flex min-h-0 flex-1 flex-col rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
+          <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
             <div>
               <h3 className="font-medium">Exact template selection</h3>
               <p className="text-xs text-neutral-500">The saved set records these immutable catalog IDs, not the filters below.</p>
@@ -186,7 +188,7 @@ function TemplateSetModal({
             </p>
           )}
           {selected.size > 0 && (
-            <div className="mb-3 max-h-28 overflow-y-auto rounded-md bg-neutral-50 p-2 dark:bg-neutral-950/50">
+            <div className="mb-3 h-20 shrink-0 overflow-y-auto rounded-md bg-neutral-50 p-2 dark:bg-neutral-950/50">
               <div className="flex flex-wrap gap-1.5">
                 {selectedPreview.map((id) => (
                   <span key={id} className="inline-flex items-center gap-1 rounded border border-neutral-200 bg-white px-2 py-1 font-mono text-[11px] dark:border-neutral-700 dark:bg-neutral-900">
@@ -215,7 +217,7 @@ function TemplateSetModal({
               </div>
             </div>
           )}
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid shrink-0 gap-2 sm:grid-cols-2 lg:grid-cols-4">
             <Input value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} placeholder="Search templates" aria-label="Search templates" />
             <Select value={source} onChange={(event) => { setSource(event.target.value as TemplateSource | ""); resetPage(); }} aria-label="Template source">
               <option value="">All sources</option>
@@ -230,9 +232,10 @@ function TemplateSetModal({
           </div>
 
           {selectMatching.isError && <ErrorText error={selectMatching.error} />}
+          <div className="mt-3 flex min-h-0 flex-1 flex-col">
           {members.isLoading && existing ? <Spinner label="Loading current selection…" /> : templates.isError ? <ErrorText error={templates.error} /> : templates.isLoading || !templates.data ? <Spinner /> : (
             <>
-              <div className="mt-3 max-h-72 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-800">
+              <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-800">
                 {templates.data.items.map((template) => (
                   <label key={template.id} className="flex cursor-pointer items-start gap-3 border-b border-neutral-100 px-3 py-2 last:border-0 hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-800/50">
                     <input
@@ -256,7 +259,7 @@ function TemplateSetModal({
                 ))}
                 {templates.data.items.length === 0 && <div className="px-3 py-8 text-center text-sm text-neutral-400">No templates match these filters.</div>}
               </div>
-              <div className="mt-2 flex items-center justify-between text-xs text-neutral-500">
+              <div className="mt-2 flex shrink-0 items-center justify-between text-xs text-neutral-500">
                 <span>{total ? `${offset + 1}–${Math.min(offset + PAGE_SIZE, total)} of ${total}` : "0 templates"}</span>
                 <div className="flex gap-2">
                   <Button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>Previous</Button>
@@ -266,24 +269,27 @@ function TemplateSetModal({
             </>
           )}
           </div>
+          </div>
         )}
-        {members.isError && <ErrorText error={members.error} />}
-        {save.isError && <ErrorText error={save.error} />}
-        <div className="flex justify-end gap-2">
-          <Button onClick={onClose}>{readOnly ? "Close" : "Cancel"}</Button>
-          {!readOnly && (
-            <Button
-              variant="primary"
-              disabled={save.isPending || !name.trim() || (!dynamicAll && !loadedMembers)}
-              onClick={() => save.mutate()}
-            >
-              {save.isPending
-                ? "Saving…"
-                : dynamicAll
-                  ? "Save dynamic set"
-                  : `Save ${selected.size} templates`}
-            </Button>
-          )}
+        <div className="shrink-0 border-t border-neutral-200 px-5 py-3 dark:border-neutral-800">
+          {members.isError && <ErrorText error={members.error} />}
+          {save.isError && <ErrorText error={save.error} />}
+          <div className="flex justify-end gap-2">
+            <Button onClick={onClose}>{readOnly ? "Close" : "Cancel"}</Button>
+            {!readOnly && (
+              <Button
+                variant="primary"
+                disabled={save.isPending || !name.trim() || (!dynamicAll && !loadedMembers)}
+                onClick={() => save.mutate()}
+              >
+                {save.isPending
+                  ? "Saving…"
+                  : dynamicAll
+                    ? "Save dynamic set"
+                    : `Save ${selected.size} templates`}
+              </Button>
+            )}
+          </div>
         </div>
       </div>
     </Modal>

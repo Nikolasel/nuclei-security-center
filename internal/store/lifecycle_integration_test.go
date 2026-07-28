@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -12,8 +13,8 @@ import (
 )
 
 // TestTemplateAwareLifecyclePostgres exercises the complete lifecycle against a
-// real migrated PostgreSQL database. It is opt-in so ordinary unit tests need no
-// external service:
+// real migrated PostgreSQL database. CI supplies an ephemeral service; local
+// runs remain opt-in:
 //
 //	NSC_TEST_DATABASE_URL=postgres://... go test ./internal/store -run TestTemplateAwareLifecyclePostgres
 func TestTemplateAwareLifecyclePostgres(t *testing.T) {
@@ -58,7 +59,7 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 	})
 
 	createdAt := time.Now().UTC().Add(-time.Hour)
-	createScan := func(templateIDs []string, findingTemplate string) string {
+	createScan := func(templateIDs []string, findingTemplates ...string) string {
 		t.Helper()
 		spec := types.ScanSpec{
 			Targets: target.Hosts,
@@ -77,11 +78,15 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 			`UPDATE scans SET created_at = $2 WHERE id = $1`, scanID, createdAt); updateErr != nil {
 			t.Fatalf("order scan: %v", updateErr)
 		}
-		if findingTemplate != "" {
+		for i, findingTemplate := range findingTemplates {
+			matchedAt := "https://issue88.invalid"
+			if i > 0 {
+				matchedAt += "/path-" + strconv.Itoa(i)
+			}
 			finding := types.NucleiFinding{
 				TemplateID: findingTemplate,
 				Host:       "issue88.invalid",
-				MatchedAt:  "https://issue88.invalid",
+				MatchedAt:  matchedAt,
 				Type:       "http",
 				Info: types.NucleiInfo{
 					Name:     findingTemplate,
@@ -102,7 +107,7 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 		return scanID
 	}
 
-	assertFinding := func(templateID, wantState string, wantMitigated int) {
+	assertFindingAt := func(templateID, matchedAt, wantState string, wantMitigated int) {
 		t.Helper()
 		query := FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{{
 			Field: "target", Op: "any_of", Values: []string{target.ID},
@@ -112,7 +117,7 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 			t.Fatalf("list lifecycle: %v", listErr)
 		}
 		for _, row := range rows {
-			if row.TemplateID != templateID {
+			if row.TemplateID != templateID || row.MatchedAt != matchedAt {
 				continue
 			}
 			if row.DetectionState != wantState || row.TimesMitigated != wantMitigated {
@@ -121,26 +126,30 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 			}
 			return
 		}
-		t.Fatalf("finding %s not returned", templateID)
+		t.Fatalf("finding %s at %s not returned", templateID, matchedAt)
+	}
+	assertFinding := func(templateID, wantState string, wantMitigated int) {
+		t.Helper()
+		assertFindingAt(templateID, "https://issue88.invalid", wantState, wantMitigated)
 	}
 
 	createScan([]string{"template-a"}, "template-a")
 	assertFinding("template-a", "new", 0)
 
 	// A narrower scan cannot mitigate template-a.
-	createScan([]string{"template-b"}, "")
+	createScan([]string{"template-b"})
 	assertFinding("template-a", "new", 0)
 
 	// A scan that did include template-a and did not observe it is real
 	// mitigation evidence.
-	mitigationScan := createScan([]string{"template-a"}, "")
+	mitigationScan := createScan([]string{"template-a"})
 	assertFinding("template-a", "mitigated", 0)
 
 	createScan([]string{"template-a"}, "template-a")
 	assertFinding("template-a", "resurfaced", 1)
 
 	// Later unrelated coverage must not change the resurfaced state.
-	createScan([]string{"template-b"}, "")
+	createScan([]string{"template-b"})
 	assertFinding("template-a", "resurfaced", 1)
 
 	// Deleting the only mitigation evidence repairs the history using the same
@@ -150,10 +159,34 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 	}
 	assertFinding("template-a", "active", 0)
 
-	// Pre-catalog occurrences prove positive coverage, but a legacy scan with no
-	// ids and no occurrence cannot manufacture a mitigation cycle.
-	createScan(nil, "legacy-template")
-	createScan(nil, "")
+	// A pre-catalog occurrence proves scan-wide template coverage, not merely
+	// coverage for its own lifecycle row. The second finding is therefore
+	// mitigated when the next legacy scan observes the same template elsewhere.
+	createScan(nil, "legacy-template", "legacy-template")
 	createScan(nil, "legacy-template")
 	assertFinding("legacy-template", "active", 0)
+	assertFindingAt("legacy-template", "https://issue88.invalid/path-1", "mitigated", 0)
+
+	// A legacy scan with neither concrete ids nor an occurrence proves nothing.
+	createScan(nil)
+	assertFindingAt("legacy-template", "https://issue88.invalid/path-1", "mitigated", 0)
+
+	// When the second finding returns, its prior scan-wide absence is a real
+	// mitigation cycle.
+	createScan(nil, "legacy-template", "legacy-template")
+	assertFindingAt("legacy-template", "https://issue88.invalid/path-1", "resurfaced", 1)
+
+	// Malformed historical JSONB is treated as unknown coverage instead of
+	// aborting scan-deletion repair.
+	malformedScan := createScan(nil)
+	if _, err := st.pool.Exec(ctx,
+		`UPDATE scans SET spec = jsonb_set(spec, '{templates}', '{"template_ids":"not-an-array"}'::jsonb)
+		  WHERE id = $1`,
+		malformedScan); err != nil {
+		t.Fatalf("make malformed historical spec: %v", err)
+	}
+	repairTrigger := createScan([]string{"template-b"})
+	if _, _, err := st.DeleteScan(ctx, repairTrigger); err != nil {
+		t.Fatalf("repair with malformed historical spec: %v", err)
+	}
 }

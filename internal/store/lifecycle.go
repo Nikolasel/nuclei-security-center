@@ -98,36 +98,6 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 	}
 	defer tx.Rollback(ctx)
 
-	// The target's most recent completed scan *before* this one that could have
-	// observed this template. A scan that omitted the template is not evidence
-	// that the finding disappeared and must not create a resurfacing cycle.
-	//
-	// Concrete template ids have been persisted in scans.spec since the catalog
-	// rollout. For older scans, an occurrence with this dedup key is positive
-	// proof that the template ran; absence from a legacy scan with no concrete
-	// ids proves nothing and therefore fails closed.
-	var prevLatest *string
-	if targetID != "" {
-		var id string
-		err := tx.QueryRow(ctx,
-			`SELECT s.id::text FROM scans s
-			 WHERE s.target_id = $1 AND s.state = 'complete' AND s.id <> $2
-			   AND (
-			       (s.spec #> '{templates,template_ids}') ? $3
-			       OR EXISTS (
-			           SELECT 1 FROM findings observed
-			            WHERE observed.scan_id = s.id AND observed.dedup_key = $4
-			       )
-			   )
-			 ORDER BY s.created_at DESC LIMIT 1`,
-			targetID, scanID, f.TemplateID, key).Scan(&id)
-		if err == nil {
-			prevLatest = &id
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			return fmt.Errorf("prev scan lookup: %w", err)
-		}
-	}
-
 	var occID int64
 	if err := tx.QueryRow(ctx,
 		`INSERT INTO findings (scan_id, target_id, dedup_key, template_id, name, severity, host, matched_at, type, cve, tags, raw, raw_line)
@@ -156,13 +126,13 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 		    tags                 = excluded.tags,
 		    latest_occurrence_id = excluded.latest_occurrence_id,
 		    times_mitigated      = finding_lifecycle.times_mitigated + CASE
-		        WHEN $13::uuid IS NOT NULL
-		         AND finding_lifecycle.last_seen_scan IS DISTINCT FROM $13::uuid
-		         AND finding_lifecycle.last_seen_scan IS DISTINCT FROM $11::uuid
+		        WHEN finding_lifecycle.last_covering_scan IS NOT NULL
+		         AND finding_lifecycle.last_seen_scan IS DISTINCT FROM finding_lifecycle.last_covering_scan
+		         AND finding_lifecycle.last_seen_scan IS DISTINCT FROM excluded.last_seen_scan
 		        THEN 1 ELSE 0 END
 		 RETURNING id`,
 		key, nullStr(targetID), f.TemplateID, f.Info.Name, f.Info.Severity, f.Host, f.MatchedAt, f.Type,
-		orEmpty(f.CVEs()), orEmpty(f.Info.Tags), scanID, occID, prevLatest,
+		orEmpty(f.CVEs()), orEmpty(f.Info.Tags), scanID, occID,
 	).Scan(&lcID); err != nil {
 		return fmt.Errorf("upsert lifecycle: %w", err)
 	}
@@ -253,17 +223,17 @@ func postgresTexts(values []string) []string {
 	return out
 }
 
-// lifecycle read-time expressions. All reference l (finding_lifecycle) and ls
-// (the latest completed scan that covered the finding's template, from the
-// lateral join in lifecycleFrom).
+// lifecycle read-time expressions. last_covering_scan is an evidence pointer
+// advanced once when a scan completes, so lifecycle reads remain simple indexed
+// row reads even when a scan contains thousands of concrete template ids.
 const (
 	// lcDetectionExpr derives the Tenable-style detection state purely from scan
 	// observation. Ad-hoc findings (no target scope) are always "active".
 	lcDetectionExpr = `CASE
-		WHEN ls.latest_scan IS NULL THEN 'active'
-		WHEN l.last_seen_scan IS DISTINCT FROM ls.latest_scan
+		WHEN l.target_id IS NULL OR l.last_covering_scan IS NULL THEN 'active'
+		WHEN l.last_seen_scan IS DISTINCT FROM l.last_covering_scan
 			THEN CASE WHEN l.times_mitigated >= 1 THEN 'previously_mitigated' ELSE 'mitigated' END
-		WHEN l.first_seen_scan = ls.latest_scan THEN 'new'
+		WHEN l.first_seen_scan = l.last_covering_scan THEN 'new'
 		WHEN l.times_mitigated >= 1 THEN 'resurfaced'
 		ELSE 'active'
 	END`
@@ -281,19 +251,7 @@ const (
 	effSevOrder = `CASE lower(coalesce(l.recast_severity, l.severity))
 		WHEN 'critical' THEN 5 WHEN 'high' THEN 4 WHEN 'medium' THEN 3
 		WHEN 'low' THEN 2 WHEN 'info' THEN 1 ELSE 0 END`
-	lifecycleFrom = `FROM finding_lifecycle l
-		LEFT JOIN LATERAL (
-			SELECT s.id AS latest_scan FROM scans s
-			WHERE s.target_id = l.target_id AND s.state = 'complete'
-			  AND (
-			      (s.spec #> '{templates,template_ids}') ? l.template_id
-			      OR EXISTS (
-			          SELECT 1 FROM findings observed
-			           WHERE observed.scan_id = s.id AND observed.finding_id = l.id
-			      )
-			  )
-			ORDER BY s.created_at DESC LIMIT 1
-		) ls ON l.target_id IS NOT NULL`
+	lifecycleFrom = `FROM finding_lifecycle l`
 )
 
 // LifecycleRow is a deduplicated finding as returned to API callers (the triage

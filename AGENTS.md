@@ -161,9 +161,12 @@ dimensions:
   counter, never a stored state: `new` / `active` / `resurfaced` (still detected) and
   `mitigated` / `previously_mitigated` (gone). A narrower scan that omitted the template is
   not mitigation evidence; legacy occurrences prove positive coverage while an absence
-  without concrete ids fails closed. **Closure is evidence-driven; there is no manual
-  "fixed."** `times_mitigated` is bumped at ingest when a finding reappears after being absent
-  from the previous scan that covered its template.
+  without concrete ids fails closed. `finding_lifecycle.last_covering_scan` materializes the
+  latest covering scan's id at scan completion (and is rebuilt after scan deletion); it is an
+  evidence pointer, not a stored state, and avoids scanning JSONB history on lifecycle reads.
+  **Closure is evidence-driven; there is no manual "fixed."** `times_mitigated` is bumped at
+  ingest when a finding reappears after being absent from the previous scan that covered its
+  template.
 - **Disposition** (manual overlay, the only stored state): `none` / `false_positive` /
   `accepted` (Accept Risk; `accept_expires_at` optional — an expired acceptance falls back
   to the detection state) + `recast_severity` (Recast Risk). `effective_state` /

@@ -87,7 +87,7 @@ the deduplicated entities (keyed on `(target, template, matched_at)`). Each has:
   (`times_mitigated`). A scan using a narrower template set is not evidence that an omitted
   finding was mitigated:
 
-  | Detection state | In latest scan? | Meaning |
+  | Detection state | In latest covering scan? | Meaning |
   |---|---|---|
   | `new` | yes | first time ever observed |
   | `active` | yes | seen before, never gone |

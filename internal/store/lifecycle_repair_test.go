@@ -21,6 +21,7 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 		occByScan           map[string]int64
 		wantFirst, wantLast *string
 		wantOcc             *int64
+		wantCovering        *string
 		wantMitigated       int
 	}{
 		{
@@ -28,6 +29,7 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 			scanIDs:   []string{"s1", "s2"},
 			occByScan: map[string]int64{},
 			wantFirst: nil, wantLast: nil, wantOcc: nil, wantMitigated: 0,
+			wantCovering: str("s2"),
 		},
 		{
 			// The exact bug this repair targets: everything but one scan got
@@ -38,12 +40,14 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 			scanIDs:   []string{"s3"},
 			occByScan: map[string]int64{"s3": 100},
 			wantFirst: str("s3"), wantLast: str("s3"), wantOcc: i64(100), wantMitigated: 0,
+			wantCovering: str("s3"),
 		},
 		{
 			name:      "present in every surviving scan",
 			scanIDs:   []string{"s1", "s2", "s3"},
 			occByScan: map[string]int64{"s1": 1, "s2": 2, "s3": 3},
 			wantFirst: str("s1"), wantLast: str("s3"), wantOcc: i64(3), wantMitigated: 0,
+			wantCovering: str("s3"),
 		},
 		{
 			// Present, then absent, and never comes back: mitigated, but never
@@ -52,18 +56,21 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 			scanIDs:   []string{"s1", "s2", "s3"},
 			occByScan: map[string]int64{"s1": 1},
 			wantFirst: str("s1"), wantLast: str("s1"), wantOcc: i64(1), wantMitigated: 0,
+			wantCovering: str("s3"),
 		},
 		{
 			name:      "one mitigation-then-reappear cycle",
 			scanIDs:   []string{"s1", "s2", "s3"},
 			occByScan: map[string]int64{"s1": 1, "s3": 3},
 			wantFirst: str("s1"), wantLast: str("s3"), wantOcc: i64(3), wantMitigated: 1,
+			wantCovering: str("s3"),
 		},
 		{
 			name:      "two mitigation-then-reappear cycles",
 			scanIDs:   []string{"s1", "s2", "s3", "s4", "s5"},
 			occByScan: map[string]int64{"s1": 1, "s3": 3, "s5": 5},
 			wantFirst: str("s1"), wantLast: str("s5"), wantOcc: i64(5), wantMitigated: 2,
+			wantCovering: str("s5"),
 		},
 		{
 			// Absent from the very first surviving scan, then observed later:
@@ -73,6 +80,7 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 			scanIDs:   []string{"s1", "s2"},
 			occByScan: map[string]int64{"s2": 2},
 			wantFirst: str("s2"), wantLast: str("s2"), wantOcc: i64(2), wantMitigated: 0,
+			wantCovering: str("s2"),
 		},
 		{
 			// A scan that did not include this template is not evidence of
@@ -82,6 +90,7 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 			coveredByScan: map[string]bool{"s1": true, "s3": true},
 			occByScan:     map[string]int64{"s1": 1, "s3": 3},
 			wantFirst:     str("s1"), wantLast: str("s3"), wantOcc: i64(3), wantMitigated: 0,
+			wantCovering: str("s3"),
 		},
 		{
 			name:          "covered gap creates mitigation cycle",
@@ -89,6 +98,7 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 			coveredByScan: map[string]bool{"s1": true, "s2": true, "s3": true},
 			occByScan:     map[string]int64{"s1": 1, "s3": 3},
 			wantFirst:     str("s1"), wantLast: str("s3"), wantOcc: i64(3), wantMitigated: 1,
+			wantCovering: str("s3"),
 		},
 		{
 			// Occurrences from pre-catalog scans prove that the template ran,
@@ -99,6 +109,7 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 			coveredByScan: map[string]bool{},
 			occByScan:     map[string]int64{"s1": 1, "s3": 3},
 			wantFirst:     str("s1"), wantLast: str("s3"), wantOcc: i64(3), wantMitigated: 0,
+			wantCovering: str("s3"),
 		},
 	}
 
@@ -111,8 +122,15 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 					coveredByScan[scanID] = true
 				}
 			}
-			gotFirst, gotLast, gotOcc, gotMitigated := computeLifecycleTimeline(
-				c.scanIDs, coveredByScan, c.occByScan)
+			templatesByScan := make(map[string]map[string]struct{}, len(c.scanIDs))
+			for _, scanID := range c.scanIDs {
+				templatesByScan[scanID] = map[string]struct{}{}
+				if coveredByScan[scanID] {
+					templatesByScan[scanID]["template"] = struct{}{}
+				}
+			}
+			gotFirst, gotLast, gotOcc, gotCovering, gotMitigated := computeLifecycleTimeline(
+				c.scanIDs, "template", templatesByScan, c.occByScan)
 			if !strPtrEqual(gotFirst, c.wantFirst) {
 				t.Errorf("firstSeenScan = %s, want %s", fmtStrPtr(gotFirst), fmtStrPtr(c.wantFirst))
 			}
@@ -121,6 +139,9 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 			}
 			if !i64PtrEqual(gotOcc, c.wantOcc) {
 				t.Errorf("latestOccurrenceID = %s, want %s", fmtI64Ptr(gotOcc), fmtI64Ptr(c.wantOcc))
+			}
+			if !strPtrEqual(gotCovering, c.wantCovering) {
+				t.Errorf("lastCoveringScan = %s, want %s", fmtStrPtr(gotCovering), fmtStrPtr(c.wantCovering))
 			}
 			if gotMitigated != c.wantMitigated {
 				t.Errorf("timesMitigated = %d, want %d", gotMitigated, c.wantMitigated)

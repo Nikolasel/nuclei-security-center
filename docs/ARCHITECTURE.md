@@ -86,7 +86,8 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   upstream commit, resulting canonical `templates_commit` + template count, and
   added/updated/removed/skipped counts. Failed runs record the unchanged active bundle state, so a
   node reporting an older digest can be matched to catalog history (a stray malformed file is
-  skipped-and-counted, not fatal; the run fails closed only if nothing parses).
+  skipped-and-counted, not fatal; the run fails closed only if nothing parses). Runs are retained
+  in PostgreSQL and exposed through a paginated history; NSC does not silently prune them.
 - **template_sets** — either curated exact membership in `template_set_members`, or an explicit
   `dynamic_all` mode that resolves every active catalog template at scan time. The retired POC
   filter columns and compatibility code are gone (alpha breaking change). Exact sets and selected

@@ -50,6 +50,13 @@ type templatesPage struct {
 	Offset int              `json:"offset"`
 }
 
+type templateSyncRunsPage struct {
+	Items  []store.TemplateSyncRun `json:"items"`
+	Total  int                     `json:"total"`
+	Limit  int                     `json:"limit"`
+	Offset int                     `json:"offset"`
+}
+
 type templateIDsResponse struct {
 	IDs []string `json:"ids"`
 }
@@ -60,8 +67,12 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "source must be 'upstream' or 'custom'", http.StatusBadRequest)
 		return
 	}
-	if sortBy := q.Get("sort"); sortBy != "" && sortBy != "name" && sortBy != "inserted" {
-		http.Error(w, "sort must be 'name' or 'inserted'", http.StatusBadRequest)
+	if !validTemplateSort(q.Get("sort")) {
+		http.Error(w, "sort must be 'name', 'severity', 'source', 'inserted', or 'revision'", http.StatusBadRequest)
+		return
+	}
+	if order := q.Get("order"); order != "" && order != "asc" && order != "desc" {
+		http.Error(w, "order must be 'asc' or 'desc'", http.StatusBadRequest)
 		return
 	}
 	limit, offset := pageParams(q)
@@ -71,6 +82,7 @@ func (s *Server) handleListTemplates(w http.ResponseWriter, r *http.Request) {
 		Tags:               multiCSV(q, "tag"),
 		Query:              q.Get("q"),
 		Sort:               q.Get("sort"),
+		Order:              q.Get("order"),
 		IncludeUnavailable: q.Get("include_unavailable") == "true",
 	}
 	items, total, err := s.store.ListTemplates(r.Context(), f, limit, offset)
@@ -90,8 +102,12 @@ func (s *Server) handleListTemplateIDs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "source must be 'upstream' or 'custom'", http.StatusBadRequest)
 		return
 	}
-	if sortBy := q.Get("sort"); sortBy != "" && sortBy != "name" && sortBy != "inserted" {
-		http.Error(w, "sort must be 'name' or 'inserted'", http.StatusBadRequest)
+	if !validTemplateSort(q.Get("sort")) {
+		http.Error(w, "sort must be 'name', 'severity', 'source', 'inserted', or 'revision'", http.StatusBadRequest)
+		return
+	}
+	if order := q.Get("order"); order != "" && order != "asc" && order != "desc" {
+		http.Error(w, "order must be 'asc' or 'desc'", http.StatusBadRequest)
 		return
 	}
 	ids, err := s.store.ListTemplateIDs(r.Context(), store.TemplateFilter{
@@ -100,6 +116,7 @@ func (s *Server) handleListTemplateIDs(w http.ResponseWriter, r *http.Request) {
 		Tags:               multiCSV(q, "tag"),
 		Query:              q.Get("q"),
 		Sort:               q.Get("sort"),
+		Order:              q.Get("order"),
 		IncludeUnavailable: q.Get("include_unavailable") == "true",
 	})
 	if err != nil {
@@ -110,6 +127,15 @@ func (s *Server) handleListTemplateIDs(w http.ResponseWriter, r *http.Request) {
 		ids = []string{}
 	}
 	writeJSON(w, http.StatusOK, templateIDsResponse{IDs: ids})
+}
+
+func validTemplateSort(sortBy string) bool {
+	switch sortBy {
+	case "", "name", "severity", "source", "inserted", "revision":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleGetTemplate(w http.ResponseWriter, r *http.Request) {
@@ -236,10 +262,11 @@ func (s *Server) handleRequestTemplateSync(w http.ResponseWriter, _ *http.Reques
 	writeJSON(w, http.StatusAccepted, map[string]bool{"queued": true})
 }
 
-// handleListTemplateSyncRuns backs the Sync view: recent refresh outcomes,
-// newest first.
+// handleListTemplateSyncRuns backs the Sync view with retained, newest-first
+// refresh history.
 func (s *Server) handleListTemplateSyncRuns(w http.ResponseWriter, r *http.Request) {
-	runs, err := s.store.ListTemplateSyncRuns(r.Context(), 20)
+	limit, offset := pageParams(r.URL.Query())
+	runs, total, err := s.store.ListTemplateSyncRuns(r.Context(), limit, offset)
 	if err != nil {
 		s.serverError(w, "list template sync runs", err)
 		return
@@ -247,7 +274,9 @@ func (s *Server) handleListTemplateSyncRuns(w http.ResponseWriter, r *http.Reque
 	if runs == nil {
 		runs = []store.TemplateSyncRun{}
 	}
-	writeJSON(w, http.StatusOK, runs)
+	writeJSON(w, http.StatusOK, templateSyncRunsPage{
+		Items: runs, Total: total, Limit: limit, Offset: offset,
+	})
 }
 
 // readTemplateBody reads a raw YAML upload (not JSON) up to maxTemplateYAML,

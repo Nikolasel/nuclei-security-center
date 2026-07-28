@@ -133,11 +133,15 @@ export interface TemplatesQuery {
   severities?: string[];
   tags?: string[];
   q?: string;
-  sort?: "name" | "inserted";
+  sort?: TemplateSort;
+  order?: SortOrder;
   include_unavailable?: boolean;
   limit?: number;
   offset?: number;
 }
+
+export type TemplateSort = "name" | "severity" | "source" | "inserted" | "revision";
+export type SortOrder = "asc" | "desc";
 
 export interface TemplateSyncRun {
   id: string;
@@ -275,6 +279,9 @@ export interface Scan {
   target_id?: string;
   target_name?: string;
   target_host_count?: number;
+  /** the concrete template set resolved for this scan; absent after deletion. */
+  template_set_id?: string;
+  template_set_name?: string;
   /** the scan policy applied (#87); absent when the scan used the built-in
    *  defaults, or once the policy has been deleted. */
   scan_policy_id?: string;
@@ -637,6 +644,7 @@ export const api = {
     if (q.tags?.length) p.set("tag", q.tags.join(","));
     if (q.q) p.set("q", q.q);
     if (q.sort) p.set("sort", q.sort);
+    if (q.order) p.set("order", q.order);
     if (q.include_unavailable) p.set("include_unavailable", "true");
     if (q.limit != null) p.set("limit", String(q.limit));
     if (q.offset != null) p.set("offset", String(q.offset));
@@ -650,6 +658,7 @@ export const api = {
     if (q.tags?.length) p.set("tag", q.tags.join(","));
     if (q.q) p.set("q", q.q);
     if (q.sort) p.set("sort", q.sort);
+    if (q.order) p.set("order", q.order);
     if (q.include_unavailable) p.set("include_unavailable", "true");
     const qs = p.toString();
     return request<{ ids: string[] }>(
@@ -667,8 +676,11 @@ export const api = {
   getTemplateSync: () => request<TemplateSyncStatus>("GET", "/api/templates/sync"),
   requestTemplateSync: () =>
     request<{ queued: boolean }>("POST", "/api/templates/sync"),
-  listTemplateSyncRuns: () =>
-    request<TemplateSyncRun[]>("GET", "/api/templates/sync-runs"),
+  listTemplateSyncRuns: (limit = 20, offset = 0) =>
+    request<Page<TemplateSyncRun>>(
+      "GET",
+      `/api/templates/sync-runs?limit=${limit}&offset=${offset}`,
+    ),
   templateExportURL,
   downloadTemplates: (ids: string[], format: TemplateArchiveFormat) =>
     downloadArchive(

@@ -250,10 +250,15 @@ export function Modal({
    *  destroyed by closing and cannot be recovered — a secret shown exactly once. */
   dismissible?: boolean;
   /** "wide" roughly doubles the max width — for forms with long free-text fields
-   *  (e.g. a port list) that need room to stretch. */
-  size?: "default" | "wide";
+   *  (e.g. a port list) that need room to stretch. "workspace" is a stable,
+   *  viewport-aware work surface for editors whose filtered content changes. */
+  size?: "default" | "wide" | "workspace";
 }) {
-  const widthClass = size === "wide" ? "w-[min(94vw,48rem)]" : "w-[min(92vw,32rem)]";
+  const sizeClass = {
+    default: "w-[min(92vw,32rem)]",
+    wide: "w-[min(94vw,48rem)]",
+    workspace: "h-[min(94dvh,64rem)] w-[min(96vw,72rem)]",
+  }[size];
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -262,7 +267,7 @@ export function Modal({
           onPointerDownOutside={dismissible ? undefined : (e) => e.preventDefault()}
           onEscapeKeyDown={dismissible ? undefined : (e) => e.preventDefault()}
           onInteractOutside={dismissible ? undefined : (e) => e.preventDefault()}
-          className={`fixed left-1/2 top-1/2 max-h-[90dvh] ${widthClass} -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-neutral-200 bg-white p-5 shadow-xl focus:outline-none dark:border-neutral-800 dark:bg-neutral-900`}
+          className={`fixed left-1/2 top-1/2 max-h-[94dvh] ${sizeClass} -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border border-neutral-200 bg-white p-5 shadow-xl focus:outline-none dark:border-neutral-800 dark:bg-neutral-900`}
         >
           <Dialog.Title className="mb-3 text-base font-semibold">{title}</Dialog.Title>
           {children}

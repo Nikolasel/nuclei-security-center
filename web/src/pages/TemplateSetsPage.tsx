@@ -64,8 +64,13 @@ function TemplateSetModal({
       }),
   });
   const selectMatching = useMutation({
-    mutationFn: () => api.listTemplateIDs(filters),
-    onSuccess: ({ ids }) => setSelected(new Set(ids)),
+    mutationFn: (mode: "select" | "deselect") =>
+      api.listTemplateIDs(filters).then((result) => ({ ...result, mode })),
+    onSuccess: ({ ids, mode }) => setSelected((current) => {
+      const next = new Set(current);
+      ids.forEach((id) => mode === "select" ? next.add(id) : next.delete(id));
+      return next;
+    }),
   });
 
   const save = useMutation({
@@ -100,7 +105,7 @@ function TemplateSetModal({
       open
       onOpenChange={(open) => !open && onClose()}
       title={existing ? `${readOnly ? "View" : "Edit"} ${existing.name}` : "New template set"}
-      size="wide"
+      size="workspace"
     >
       <div className="space-y-4">
         <Field label="Name">
@@ -134,6 +139,12 @@ function TemplateSetModal({
               {!readOnly && (
                 <>
                   <Button
+                    disabled={selected.size === 0}
+                    onClick={() => setSelected(new Set())}
+                  >
+                    Clear all
+                  </Button>
+                  <Button
                     disabled={!templates.data?.items.length}
                     onClick={() => setSelected((current) => {
                       const next = new Set(current);
@@ -144,10 +155,26 @@ function TemplateSetModal({
                     Select page
                   </Button>
                   <Button
+                    disabled={!templates.data?.items.some((template) => selected.has(template.id))}
+                    onClick={() => setSelected((current) => {
+                      const next = new Set(current);
+                      templates.data?.items.forEach((template) => next.delete(template.id));
+                      return next;
+                    })}
+                  >
+                    Deselect page
+                  </Button>
+                  <Button
                     disabled={selectMatching.isPending || total === 0}
-                    onClick={() => selectMatching.mutate()}
+                    onClick={() => selectMatching.mutate("select")}
                   >
                     {selectMatching.isPending ? "Selecting…" : `Select all ${total} matching`}
+                  </Button>
+                  <Button
+                    disabled={selectMatching.isPending || total === 0 || selected.size === 0}
+                    onClick={() => selectMatching.mutate("deselect")}
+                  >
+                    {selectMatching.isPending ? "Updating…" : `Deselect all ${total} matching`}
                   </Button>
                 </>
               )}

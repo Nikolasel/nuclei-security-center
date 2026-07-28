@@ -28,10 +28,11 @@ curl -sb jar.txt localhost:8080/api/scans/<scan_id>
 curl -sb jar.txt "localhost:8080/api/scans/<scan_id>/findings" | jq
 ```
 
-Each scan record carries the `scan_policy_id` / `scan_policy_name` it ran, plus the
-`target_id` / `target_name` / `target_host_count` the policy resolved to (the target fields are
-absent once the target or policy has been deleted — scan history survives either way), so a
-queued/running scan is identifiable before any findings appear. `target_host_count` (and a
+Each scan record carries the `scan_policy_id` / `scan_policy_name` it ran, the
+`template_set_id` / `template_set_name` selected at dispatch, plus the `target_id` /
+`target_name` / `target_host_count` the policy resolved to (linked fields are absent once their
+source row has been deleted — scan history survives), so a queued/running scan is identifiable
+before any findings appear. `target_host_count` (and a
 target's own `host_count` from [Config](#config-targets--template-sets)) is the real
 address-range size, expanding any CIDR entry rather than counting it as one array element — a
 target scoped to `10.0.0.0/24` reports 256, not 1. `templates_commit` is recorded when the scan
@@ -338,8 +339,10 @@ The list response is a `{items, total, limit, offset}` page; list rows omit the 
 (fetch a single template to get it). Filters: `source`, repeatable/CSV `severity` and `tag`
 (any-of), free-text `q` (matches id/name/description), and `include_unavailable=true` to include
 tombstoned upstream rows (removed upstream but retained so curated sets don't silently lose
-members). CVE templates use the canonical `cve` tag, so no separate CVE-only filter is needed.
-`sort=inserted` orders by NSC's `created_at` ingestion timestamp, newest first; this is labelled
+members). Sorting accepts `sort=name|severity|source|inserted|revision` plus
+`order=asc|desc`; severity uses Nuclei's semantic critical-to-info order. CVE templates use the
+canonical `cve` tag, so no separate CVE-only filter is needed. `sort=inserted&order=desc` orders
+by NSC's `created_at` ingestion timestamp, newest first; this is labelled
 **Inserted** because the upstream catalog does not provide an authoritative ProjectDiscovery
 added/updated timestamp. `GET /api/templates/ids` accepts the same filters and returns all matching
 ids without pagination.
@@ -365,6 +368,9 @@ requests coalesce behind a running or already-queued refresh. It returns `503` w
 `/api/templates/sync-runs`. Each completed run includes the resulting `templates_commit` and
 `template_count`; failed runs carry the unchanged active state. These historical bundle IDs let an
 administrator identify which catalog snapshot a stale scanner node still holds.
+Sync runs are retained in PostgreSQL rather than deleted. `GET /api/templates/sync-runs` returns
+the standard `{items,total,limit,offset}` page, ordered newest first, so the UI can page through the
+full history instead of silently capping it.
 
 Custom uploads are sanity-checked at write time (all `400` on failure): the body must be a single
 YAML document with a top-level `id`, a non-empty `info.name`, a severity in Nuclei's set

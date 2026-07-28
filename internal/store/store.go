@@ -331,7 +331,9 @@ func (s *Store) ScanLogKey(ctx context.Context, id string) (string, error) {
 // zero-valued for an ad-hoc spec scan, or once the target has been deleted —
 // scans.target_id is ON DELETE SET NULL so history survives). TargetHostCount
 // is the real address-range size (types.HostCount), not len(target.Hosts) — a
-// CIDR entry counts as its full range, not as one array element. NodeID /
+// CIDR entry counts as its full range, not as one array element. TemplateSetID /
+// TemplateSetName identify the set selected at dispatch; both are empty after
+// that set is deleted. NodeID /
 // NodeName identify the registered scanner node dispatch selected (#107); both
 // zero-valued for a scan whose node was deleted (node_id is ON DELETE SET NULL)
 // or that failed before a node was chosen. The node's token/endpoint are never
@@ -342,6 +344,8 @@ type ScanRow struct {
 	TargetID        string     `json:"target_id,omitempty"`
 	TargetName      string     `json:"target_name,omitempty"`
 	TargetHostCount int64      `json:"target_host_count,omitempty"`
+	TemplateSetID   string     `json:"template_set_id,omitempty"`
+	TemplateSetName string     `json:"template_set_name,omitempty"`
 	ScanPolicyID    string     `json:"scan_policy_id,omitempty"`
 	ScanPolicyName  string     `json:"scan_policy_name,omitempty"`
 	NodeID          string     `json:"node_id,omitempty"`
@@ -369,11 +373,13 @@ type ScanRow struct {
 // scanScan expands it into a real host count rather than counting array
 // elements.
 const scanSelect = `
-	SELECT s.id, s.state, s.target_id, t.name, t.hosts, s.scan_policy_id, sp.name, s.node_id, n.name,
+	SELECT s.id, s.state, s.target_id, t.name, t.hosts, s.template_set_id, ts.name,
+	       s.scan_policy_id, sp.name, s.node_id, n.name,
 	       s.nuclei_version, s.templates_commit, s.error, s.raw_object_key, s.log_object_key,
 	       s.created_at, s.finished_at, s.discovered_targets
 	  FROM scans s
 	  LEFT JOIN targets t ON t.id = s.target_id
+	  LEFT JOIN template_sets ts ON ts.id = s.template_set_id
 	  LEFT JOIN scan_policies sp ON sp.id = s.scan_policy_id
 	  LEFT JOIN scanner_nodes n ON n.id = s.node_id`
 
@@ -382,15 +388,18 @@ const scanCancellableStates = `('queued', 'running')`
 
 func scanScan(row pgx.Row) (ScanRow, error) {
 	var r ScanRow
-	var targetID, targetName, scanPolicyID, scanPolicyName, nodeID, nodeName, nucleiVersion, templatesCommit, errStr, rawKey, logKey *string
+	var targetID, targetName, templateSetID, templateSetName, scanPolicyID, scanPolicyName, nodeID, nodeName, nucleiVersion, templatesCommit, errStr, rawKey, logKey *string
 	var hosts []string
-	if err := row.Scan(&r.ID, &r.State, &targetID, &targetName, &hosts, &scanPolicyID, &scanPolicyName, &nodeID, &nodeName,
+	if err := row.Scan(&r.ID, &r.State, &targetID, &targetName, &hosts, &templateSetID, &templateSetName,
+		&scanPolicyID, &scanPolicyName, &nodeID, &nodeName,
 		&nucleiVersion, &templatesCommit, &errStr, &rawKey, &logKey, &r.CreatedAt, &r.FinishedAt, &r.DiscoveredTargets); err != nil {
 		return ScanRow{}, err
 	}
 	r.TargetID = deref(targetID)
 	r.TargetName = deref(targetName)
 	r.TargetHostCount = types.HostCount(hosts)
+	r.TemplateSetID = deref(templateSetID)
+	r.TemplateSetName = deref(templateSetName)
 	r.ScanPolicyID = deref(scanPolicyID)
 	r.ScanPolicyName = deref(scanPolicyName)
 	r.NodeID = deref(nodeID)

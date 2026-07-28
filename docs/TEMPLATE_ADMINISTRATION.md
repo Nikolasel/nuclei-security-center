@@ -129,6 +129,8 @@ Go to **Template Sets → New template set**.
 5. Change a search filter without checking another row; confirm the saved membership does not
    change.
 6. Use **Select all matching** with a filter and confirm it selects matches across every page.
+7. Use **Deselect page**, **Deselect all matching**, and **Clear all** to remove large selections
+   without deleting IDs one at a time.
 
 An empty set may be saved for later curation, but cannot be selected by a scan policy.
 
@@ -202,7 +204,8 @@ Expected validation behavior:
 
 ## Routine administration
 
-- Review **Templates → Sync** for failed upstream runs and tombstone counts.
+- Review the paginated **Templates → Sync** history for failed upstream runs and tombstone counts;
+  the rows are retained in PostgreSQL.
 - Review **Scanner Nodes** for health, Nuclei-version drift, catalog-digest drift, and last push.
 - Curate sets by explicit ID; do not assume a search filter is saved.
 - Export important custom templates/sets before moving them between environments.

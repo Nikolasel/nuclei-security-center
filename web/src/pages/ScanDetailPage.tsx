@@ -153,6 +153,25 @@ export function ScanDetailPage() {
                 </dd>
               </div>
               <div>
+                <dt className="text-xs text-neutral-500">Template set</dt>
+                <dd>
+                  {scan.data.template_set_name ? (
+                    scan.data.template_set_id ? (
+                      <Link
+                        to="/template-sets"
+                        className="text-indigo-600 hover:underline dark:text-indigo-400"
+                      >
+                        {scan.data.template_set_name}
+                      </Link>
+                    ) : (
+                      scan.data.template_set_name
+                    )
+                  ) : (
+                    <span className="text-neutral-400">—</span>
+                  )}
+                </dd>
+              </div>
+              <div>
                 <dt className="text-xs text-neutral-500">Created</dt>
                 <dd>{new Date(scan.data.created_at).toLocaleString()}</dd>
               </div>

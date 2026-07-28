@@ -264,6 +264,9 @@ export function FindingDetailPage() {
           <Meta label="Template">
             <Link
               to={`/templates?template=${encodeURIComponent(f.template_id)}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open the NSC template in a new tab"
               className="font-mono text-xs text-indigo-600 hover:underline dark:text-indigo-400"
             >
               {f.template_id}

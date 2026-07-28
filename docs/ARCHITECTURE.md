@@ -119,9 +119,13 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   **Tenable Security Center-style** two-dimensional lifecycle:
   - *Detection state* — **derived at read time** from scan observation, never stored:
     **New / Active / Resurfaced** (cumulative — still detected) and **Mitigated /
-    Previously Mitigated** (no longer detected). `times_mitigated` (maintained at ingest)
-    distinguishes a first disappearance from a flapping one. **Closure is
-    evidence-driven — there is no manual "fixed."**
+    Previously Mitigated** (no longer detected). The comparison scan is the target's
+    latest completed scan whose persisted concrete `template_ids` includes this
+    finding's template; a narrower scan that omitted it is not evidence of mitigation.
+    Legacy scans with an occurrence prove positive coverage, while an absence without
+    concrete ids proves nothing and fails closed. `times_mitigated` (maintained at
+    ingest with the same coverage rule) distinguishes a first disappearance from a
+    flapping one. **Closure is evidence-driven — there is no manual "fixed."**
   - *Disposition* — the analyst overlay (the only manual state): **Accept Risk** (with an
     optional `accept_expires_at` — an expired acceptance falls back to its detection
     state) and **False Positive**, plus **Recast Risk** (a `recast_severity` override).

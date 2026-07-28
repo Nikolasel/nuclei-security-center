@@ -17,6 +17,7 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 	cases := []struct {
 		name                string
 		scanIDs             []string
+		coveredByScan       map[string]bool
 		occByScan           map[string]int64
 		wantFirst, wantLast *string
 		wantOcc             *int64
@@ -73,11 +74,45 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 			occByScan: map[string]int64{"s2": 2},
 			wantFirst: str("s2"), wantLast: str("s2"), wantOcc: i64(2), wantMitigated: 0,
 		},
+		{
+			// A scan that did not include this template is not evidence of
+			// mitigation, so the next observation remains continuously active.
+			name:          "uncovered gap does not create mitigation cycle",
+			scanIDs:       []string{"s1", "s2", "s3"},
+			coveredByScan: map[string]bool{"s1": true, "s3": true},
+			occByScan:     map[string]int64{"s1": 1, "s3": 3},
+			wantFirst:     str("s1"), wantLast: str("s3"), wantOcc: i64(3), wantMitigated: 0,
+		},
+		{
+			name:          "covered gap creates mitigation cycle",
+			scanIDs:       []string{"s1", "s2", "s3"},
+			coveredByScan: map[string]bool{"s1": true, "s2": true, "s3": true},
+			occByScan:     map[string]int64{"s1": 1, "s3": 3},
+			wantFirst:     str("s1"), wantLast: str("s3"), wantOcc: i64(3), wantMitigated: 1,
+		},
+		{
+			// Occurrences from pre-catalog scans prove that the template ran,
+			// while an unobserved legacy scan with no concrete ids proves
+			// nothing and is ignored.
+			name:          "legacy occurrences prove coverage",
+			scanIDs:       []string{"s1", "s2", "s3"},
+			coveredByScan: map[string]bool{},
+			occByScan:     map[string]int64{"s1": 1, "s3": 3},
+			wantFirst:     str("s1"), wantLast: str("s3"), wantOcc: i64(3), wantMitigated: 0,
+		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			gotFirst, gotLast, gotOcc, gotMitigated := computeLifecycleTimeline(c.scanIDs, c.occByScan)
+			coveredByScan := c.coveredByScan
+			if coveredByScan == nil {
+				coveredByScan = make(map[string]bool, len(c.scanIDs))
+				for _, scanID := range c.scanIDs {
+					coveredByScan[scanID] = true
+				}
+			}
+			gotFirst, gotLast, gotOcc, gotMitigated := computeLifecycleTimeline(
+				c.scanIDs, coveredByScan, c.occByScan)
 			if !strPtrEqual(gotFirst, c.wantFirst) {
 				t.Errorf("firstSeenScan = %s, want %s", fmtStrPtr(gotFirst), fmtStrPtr(c.wantFirst))
 			}

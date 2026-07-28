@@ -14,6 +14,14 @@ under `internal/store/migrations/`; the runner applies unseen files in filename 
 them in `schema_migrations`. Run `gofmt -w`, `go vet`, and `go test` before considering a change
 done.
 
+The template-aware finding-lifecycle regression has an opt-in real-PostgreSQL test. Point it only
+at a disposable test database; it applies migrations and creates then removes isolated test rows:
+
+```sh
+NSC_TEST_DATABASE_URL='postgres://nuclei:nuclei@localhost:5432/nuclei?sslmode=disable' \
+  go test ./internal/store -run TestTemplateAwareLifecyclePostgres -count=1 -v
+```
+
 ## Frontend
 
 The SPA lives in `web/` and is embedded into the backend binary via `go:embed`. For hot-reload

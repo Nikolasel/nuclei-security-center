@@ -98,15 +98,29 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 	}
 	defer tx.Rollback(ctx)
 
-	// The target's most recent completed scan *before* this one. If a pre-existing
-	// finding's last-seen isn't that scan, it was gone in between and is resurfacing.
+	// The target's most recent completed scan *before* this one that could have
+	// observed this template. A scan that omitted the template is not evidence
+	// that the finding disappeared and must not create a resurfacing cycle.
+	//
+	// Concrete template ids have been persisted in scans.spec since the catalog
+	// rollout. For older scans, an occurrence with this dedup key is positive
+	// proof that the template ran; absence from a legacy scan with no concrete
+	// ids proves nothing and therefore fails closed.
 	var prevLatest *string
 	if targetID != "" {
 		var id string
 		err := tx.QueryRow(ctx,
-			`SELECT id::text FROM scans
-			 WHERE target_id = $1 AND state = 'complete' AND id <> $2
-			 ORDER BY created_at DESC LIMIT 1`, targetID, scanID).Scan(&id)
+			`SELECT s.id::text FROM scans s
+			 WHERE s.target_id = $1 AND s.state = 'complete' AND s.id <> $2
+			   AND (
+			       (s.spec #> '{templates,template_ids}') ? $3
+			       OR EXISTS (
+			           SELECT 1 FROM findings observed
+			            WHERE observed.scan_id = s.id AND observed.dedup_key = $4
+			       )
+			   )
+			 ORDER BY s.created_at DESC LIMIT 1`,
+			targetID, scanID, f.TemplateID, key).Scan(&id)
 		if err == nil {
 			prevLatest = &id
 		} else if !errors.Is(err, pgx.ErrNoRows) {
@@ -240,7 +254,8 @@ func postgresTexts(values []string) []string {
 }
 
 // lifecycle read-time expressions. All reference l (finding_lifecycle) and ls
-// (the target's latest completed scan, from the lateral join in lifecycleFrom).
+// (the latest completed scan that covered the finding's template, from the
+// lateral join in lifecycleFrom).
 const (
 	// lcDetectionExpr derives the Tenable-style detection state purely from scan
 	// observation. Ad-hoc findings (no target scope) are always "active".
@@ -270,6 +285,13 @@ const (
 		LEFT JOIN LATERAL (
 			SELECT s.id AS latest_scan FROM scans s
 			WHERE s.target_id = l.target_id AND s.state = 'complete'
+			  AND (
+			      (s.spec #> '{templates,template_ids}') ? l.template_id
+			      OR EXISTS (
+			          SELECT 1 FROM findings observed
+			           WHERE observed.scan_id = s.id AND observed.finding_id = l.id
+			      )
+			  )
 			ORDER BY s.created_at DESC LIMIT 1
 		) ls ON l.target_id IS NOT NULL`
 )

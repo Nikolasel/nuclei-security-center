@@ -82,8 +82,10 @@ the deduplicated entities (keyed on `(target, template, matched_at)`). Each has:
 
 - a **detection state** — derived from scan observation, never stored. **Closure is
   evidence-driven — there is no manual "fixed."** The state is a function of whether the
-  finding is in the target's latest completed scan and how many times it has come back after
-  disappearing (`times_mitigated`):
+  finding is in the target's latest completed scan that actually included the finding's
+  concrete template id and how many times it has come back after disappearing
+  (`times_mitigated`). A scan using a narrower template set is not evidence that an omitted
+  finding was mitigated:
 
   | Detection state | In latest scan? | Meaning |
   |---|---|---|

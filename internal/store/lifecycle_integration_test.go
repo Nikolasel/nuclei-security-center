@@ -13,8 +13,8 @@ import (
 )
 
 // TestTemplateAwareLifecyclePostgres exercises the complete lifecycle against a
-// real migrated PostgreSQL database. CI supplies an ephemeral service; local
-// runs remain opt-in:
+// real migrated PostgreSQL database. It is intentionally opt-in so regular CI
+// does not need to start external infrastructure:
 //
 //	NSC_TEST_DATABASE_URL=postgres://... go test ./internal/store -run TestTemplateAwareLifecyclePostgres
 func TestTemplateAwareLifecyclePostgres(t *testing.T) {

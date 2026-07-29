@@ -17,20 +17,6 @@ jobs:
   backend:
     name: Go build / vet / test
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_DB: nuclei
-          POSTGRES_USER: nuclei
-          POSTGRES_PASSWORD: nuclei
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U nuclei -d nuclei"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     steps:
       - uses: actions/checkout@v7
 
@@ -56,8 +42,6 @@ jobs:
 
       - name: go test
         run: go test -race ./...
-        env:
-          NSC_TEST_DATABASE_URL: postgres://nuclei:nuclei@localhost:5432/nuclei?sslmode=disable
 
   frontend:
     name: SPA typecheck / build

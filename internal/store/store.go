@@ -256,13 +256,57 @@ func (s *Store) FailOrphanedScans(ctx context.Context, reason string) (int64, er
 	return tag.RowsAffected(), nil
 }
 
-// MarkComplete records successful completion and the versions that ran. Like
-// MarkFailed it won't overwrite an already-cancelled scan, so a cancel that
-// races an ingest finishing stays cancelled.
+// MarkComplete records successful completion and the versions that ran. It also
+// advances each matching lifecycle row's last_covering_scan evidence pointer
+// once, at completion, avoiding a per-row JSONB scan-history lookup on every
+// lifecycle read. A concrete template id proves coverage; for legacy specs, any
+// occurrence of a template proves that template ran scan-wide. Absence from a
+// legacy scan without either signal fails closed.
+//
+// The scan transition and coverage update are one statement, so readers cannot
+// observe a complete scan without its lifecycle evidence. Like MarkFailed this
+// won't overwrite an already-cancelled scan, so a cancel that races an ingest
+// finishing stays cancelled.
 func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templatesCommit string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE scans SET state = $1, nuclei_version = $2, templates_commit = $3, finished_at = now()
-		  WHERE id = $4 AND state <> $5`,
+		`WITH completed_scan AS (
+		    UPDATE scans
+		       SET state = $1, nuclei_version = $2, templates_commit = $3, finished_at = now()
+		     WHERE id = $4 AND state <> $5
+		     RETURNING id, target_id, spec, created_at
+		 ),
+		 covered_templates AS (
+		    SELECT completed_scan.id AS scan_id, completed_scan.target_id,
+		           completed_scan.created_at, ids.template_id
+		      FROM completed_scan
+		      CROSS JOIN LATERAL jsonb_array_elements_text(
+		          CASE
+		              WHEN jsonb_typeof(completed_scan.spec #> '{templates,template_ids}') = 'array'
+		              THEN completed_scan.spec #> '{templates,template_ids}'
+		              ELSE '[]'::jsonb
+		          END
+		      ) AS ids(template_id)
+		    UNION
+		    SELECT completed_scan.id, completed_scan.target_id,
+		           completed_scan.created_at, findings.template_id
+		      FROM completed_scan
+		      JOIN findings ON findings.scan_id = completed_scan.id
+		 )
+		 UPDATE finding_lifecycle lifecycle
+		    SET last_covering_scan = covered_templates.scan_id
+		   FROM covered_templates
+		  WHERE lifecycle.target_id = covered_templates.target_id
+		    AND lifecycle.template_id = covered_templates.template_id
+		    AND (
+		        lifecycle.last_covering_scan IS NULL
+		        OR EXISTS (
+		            SELECT 1
+		              FROM scans previous
+		             WHERE previous.id = lifecycle.last_covering_scan
+		               AND (previous.created_at, previous.id) <
+		                   (covered_templates.created_at, covered_templates.scan_id)
+		        )
+		    )`,
 		types.ScanComplete, nucleiVersion, templatesCommit, scanID, types.ScanCancelled,
 	)
 	return err

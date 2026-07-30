@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
+	"github.com/Nikolasel/nuclei-security-center/internal/types"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -44,10 +46,11 @@ func computeLifecycleTimeline(scanIDs []string, covered func(string) bool, occBy
 }
 
 // repairLifecycleFindings rebuilds only the global lifecycle rows affected by a
-// scan deletion. A scan covers a global finding when it ran the template in one
-// of the target/ad-hoc scopes that has observed that finding. This preserves the
-// existing fail-closed behavior for unknown scope/template coverage while
-// allowing observations from overlapping target records to share one lifecycle.
+// scan deletion. A scan covers a global finding when its trace proves the exact
+// template+endpoint pair in one of the target/ad-hoc scopes that has observed
+// that finding. This preserves the existing fail-closed behavior for unknown
+// coverage while allowing observations from overlapping target records to
+// share one lifecycle.
 //
 // A row with no surviving occurrence is deleted: deleting every scan that
 // observed a finding deletes the evidence and its analyst overlay with it.
@@ -92,28 +95,10 @@ func repairLifecycleFindings(ctx context.Context, tx pgx.Tx, lifecycleIDs []int6
 	occRows.Close()
 
 	// Restrict history to target/ad-hoc scopes that still have an occurrence of
-	// one of the affected global findings. Previously this loaded every
-	// completed scan and every concrete template id into memory for one delete.
-	// Positive legacy occurrence evidence comes from every finding in each
-	// selected scan, not only from the affected lifecycle subset.
+	// one of the affected global findings. Exact observations are positive
+	// evidence; otherwise a scan covers only an exact template+endpoint pair.
 	scanRows, err := tx.Query(ctx,
-		`SELECT scans.id, scans.target_id,
-		        ARRAY(
-		            SELECT covered.template_id
-		              FROM (
-		                  SELECT jsonb_array_elements_text(
-		                      CASE
-		                          WHEN jsonb_typeof(scans.spec #> '{templates,template_ids}') = 'array'
-		                          THEN scans.spec #> '{templates,template_ids}'
-		                          ELSE '[]'::jsonb
-		                      END
-		                  ) AS template_id
-		                  UNION
-		                  SELECT occurrence.template_id
-		                    FROM findings occurrence
-		                   WHERE occurrence.scan_id = scans.id
-		              ) covered
-		        )
+		`SELECT scans.id, scans.target_id, scans.covered_endpoints
 		   FROM scans
 		  WHERE scans.state = 'complete'
 		    AND EXISTS (
@@ -130,20 +115,32 @@ func repairLifecycleFindings(ctx context.Context, tx pgx.Tx, lifecycleIDs []int6
 	}
 	var scanIDs []string
 	targetByScan := map[string]string{}
-	templatesByScan := map[string]map[string]struct{}{}
+	coverageByScan := map[string]map[types.EndpointCoverage]struct{}{}
 	for scanRows.Next() {
 		var id string
 		var targetID *string
-		var templateIDs []string
-		if err := scanRows.Scan(&id, &targetID, &templateIDs); err != nil {
+		var coveredJSON []byte
+		if err := scanRows.Scan(&id, &targetID, &coveredJSON); err != nil {
 			scanRows.Close()
 			return err
 		}
 		scanIDs = append(scanIDs, id)
 		targetByScan[id] = targetScopeKey(targetID)
-		templatesByScan[id] = make(map[string]struct{}, len(templateIDs))
-		for _, templateID := range templateIDs {
-			templatesByScan[id][templateID] = struct{}{}
+		if coveredJSON != nil {
+			var endpoints []types.EndpointCoverage
+			if err := json.Unmarshal(coveredJSON, &endpoints); err != nil {
+				// Persisted telemetry is evidence, not authority over whether scan
+				// deletion can proceed. Treat malformed historical JSON as unknown
+				// coverage so repair fails closed for this scan.
+				continue
+			}
+			coverageByScan[id] = make(map[types.EndpointCoverage]struct{}, len(endpoints))
+			for _, endpoint := range endpoints {
+				if endpoint.TemplateID == "" || endpoint.Endpoint == "" {
+					continue
+				}
+				coverageByScan[id][endpoint] = struct{}{}
+			}
 		}
 	}
 	if err := scanRows.Err(); err != nil {
@@ -153,22 +150,24 @@ func repairLifecycleFindings(ctx context.Context, tx pgx.Tx, lifecycleIDs []int6
 	scanRows.Close()
 
 	lcRows, err := tx.Query(ctx,
-		`SELECT id, template_id FROM finding_lifecycle WHERE id = ANY($1)`,
+		`SELECT id, template_id, endpoint_key FROM finding_lifecycle WHERE id = ANY($1)`,
 		lifecycleIDs)
 	if err != nil {
 		return fmt.Errorf("list affected lifecycle rows: %w", err)
 	}
 	templateByLifecycle := map[int64]string{}
+	endpointByLifecycle := map[int64]string{}
 	var existingIDs []int64
 	for lcRows.Next() {
 		var id int64
-		var templateID string
-		if err := lcRows.Scan(&id, &templateID); err != nil {
+		var templateID, endpointKey string
+		if err := lcRows.Scan(&id, &templateID, &endpointKey); err != nil {
 			lcRows.Close()
 			return err
 		}
 		existingIDs = append(existingIDs, id)
 		templateByLifecycle[id] = templateID
+		endpointByLifecycle[id] = endpointKey
 	}
 	if err := lcRows.Err(); err != nil {
 		lcRows.Close()
@@ -179,10 +178,20 @@ func repairLifecycleFindings(ctx context.Context, tx pgx.Tx, lifecycleIDs []int6
 	for _, lcID := range existingIDs {
 		templateID := templateByLifecycle[lcID]
 		covered := func(scanID string) bool {
-			if _, ok := templatesByScan[scanID][templateID]; !ok {
+			if _, ok := targetsByLifecycle[lcID][targetByScan[scanID]]; !ok {
 				return false
 			}
-			_, ok := targetsByLifecycle[lcID][targetByScan[scanID]]
+			if _, present := byLifecycle[lcID][scanID]; present {
+				return true
+			}
+			coverage, known := coverageByScan[scanID]
+			if !known || endpointByLifecycle[lcID] == "" {
+				return false
+			}
+			_, ok := coverage[types.EndpointCoverage{
+				TemplateID: templateID,
+				Endpoint:   endpointByLifecycle[lcID],
+			}]
 			return ok
 		}
 		firstSeenScan, lastSeenScan, latestOccID, lastCoveringScan, timesMitigated :=

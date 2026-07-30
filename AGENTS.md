@@ -133,6 +133,15 @@ host:port list is reported as
 `ScanStatus.DiscoveredTargets`, cached live by the orchestrator during the scanning phase and
 persisted to `scans.discovered_targets` (migration 0019, `TEXT[]`) at completion, so the scan
 detail can show which endpoints were actually scanned.
+Nuclei also runs with `-trace-log` into a FIFO and the node reduces error-free request records
+to exact `{template_id, endpoint(host:port)}` pairs (`ScanStatus.CoveredEndpoints`). The backend
+persists that evidence to `scans.covered_endpoints` (migration 0034; NULL = unknown/fail closed,
+empty = known zero) plus an optional surfaced `coverage_warning`. Lifecycle mitigation requires
+an exact pair for the finding's `endpoint_key`; another port or a template skipped by
+`max-host-error` proves nothing. Scheme/type defaults normalize HTTP→80, HTTPS/TLS→443, DNS→53,
+and WHOIS→43; non-network findings expose `auto_mitigation_eligible=false` and never auto-close.
+Completion expands the JSON pairs once and uses the migration-0035
+`(template_id, endpoint_key)` index. An exact occurrence remains positive evidence for itself.
 
 **Scheduling:** `schedules` (migration 0007; reshaped by 0017) pairs a
 `scan_policy_id` (required, FK `ON DELETE CASCADE`) with a `cron` expression — the policy
@@ -172,8 +181,8 @@ logic treats `scans.target_id` as authoritative. Ingest inserts an occurrence an
   evidence pointer, not a stored state, and avoids scanning JSONB history on lifecycle reads.
   **Closure is evidence-driven; there is no manual "fixed."** `times_mitigated` is bumped at
   ingest when a finding reappears after being absent from the previous scan that covered its
-  template. This does not prove that the concrete endpoint was attempted; #91 remains open until
-  endpoint-level coverage evidence exists.
+  template and successfully reached its normalized host. Request-trace telemetry is fail-closed:
+  legacy/unparseable coverage cannot mitigate an absent finding.
 - **Disposition** (manual overlay, the only stored state): `none` / `false_positive` /
   `accepted` (Accept Risk; `accept_expires_at` optional — an expired acceptance falls back
   to the detection state) + `recast_severity` (Recast Risk). `effective_state` /

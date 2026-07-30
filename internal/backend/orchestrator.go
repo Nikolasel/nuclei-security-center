@@ -281,6 +281,11 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 	if err := o.store.SetScanDiscovered(ctx, scanID, status.DiscoveredTargets); err != nil {
 		log.Warn("record discovered targets", "err", err)
 	}
+	// Persist exact template+endpoint request-trace coverage before
+	// ingest/completion. MarkComplete advances only matching lifecycle evidence.
+	if err := o.store.SetScanCoverage(ctx, scanID, status.CoveredEndpoints, status.CoverageWarning); err != nil {
+		log.Warn("record endpoint coverage", "err", err)
+	}
 	// Archive the node's execution log regardless of outcome (it's most useful
 	// on failure). pollToDone only returns on a terminal node state, so the log
 	// is complete on the node by now. Best-effort, like the raw archive.

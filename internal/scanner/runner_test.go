@@ -17,7 +17,7 @@ func TestBuildArgs(t *testing.T) {
 		},
 		Options: types.ScanOptions{RateLimit: 150, Concurrency: 25, MaxHostError: 50},
 	}
-	args := buildArgs("/t/targets.txt", "/t/out.jsonl", []string{"/bundle/a.yaml", "/bundle/b.yaml"}, spec)
+	args := buildArgs("/t/targets.txt", "/t/out.jsonl", "/t/trace.jsonl", []string{"/bundle/a.yaml", "/bundle/b.yaml"}, spec)
 
 	mustHavePair := func(flag, val string) {
 		for i := 0; i+1 < len(args); i++ {
@@ -29,6 +29,7 @@ func TestBuildArgs(t *testing.T) {
 	}
 	mustHavePair("-list", "/t/targets.txt")
 	mustHavePair("-output", "/t/out.jsonl")
+	mustHavePair("-trace-log", "/t/trace.jsonl")
 	mustHavePair("-templates", "/bundle/a.yaml")
 	mustHavePair("-templates", "/bundle/b.yaml")
 	mustHavePair("-rate-limit", "150")
@@ -58,7 +59,7 @@ func TestBuildArgs(t *testing.T) {
 
 func TestBuildArgsMinimal(t *testing.T) {
 	// No filters/options => no severity/tags/rate flags, but core flags present.
-	args := buildArgs("/t/targets.txt", "/t/out.jsonl", nil, types.ScanSpec{Targets: []string{"x"}})
+	args := buildArgs("/t/targets.txt", "/t/out.jsonl", "/t/trace.jsonl", nil, types.ScanSpec{Targets: []string{"x"}})
 	if slices.Contains(args, "-rate-limit") || slices.Contains(args, "-severity") ||
 		slices.Contains(args, "-max-host-error") {
 		t.Errorf("unexpected optional flags in minimal args: %v", args)

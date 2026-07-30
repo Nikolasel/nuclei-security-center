@@ -91,10 +91,17 @@ continuity is desired. Each has:
 - a **detection state** — derived from scan observation, never stored. **Closure is
   evidence-driven — there is no manual "fixed."** The state is a function of whether the
   finding is in the latest completed scan, across scopes that have observed the global result,
-  that actually included the finding's concrete template id, and how many times it has come
-  back after disappearing (`times_mitigated`). A scan using a narrower template set is not
-  evidence that an omitted finding was mitigated. Endpoint-level reach evidence is not recorded
-  yet, so #91 remains a separate coverage follow-up:
+  whose request trace proves the exact template id + normalized host:port pair, and how many
+  times it has come back after disappearing
+  (`times_mitigated`). A scan using a narrower template set, or one whose Nuclei request trace
+  shows only another port, another template, or a failed/unreachable request, is not mitigation
+  evidence. `covered_endpoints: null` means telemetry is unavailable (including legacy scans)
+  and fails closed; `[]` means the trace was read successfully but no template/endpoint pair
+  completed successfully. `coverage_warning`, when present, explains skipped or unavailable
+  trace evidence and is shown on scan detail. Lifecycle findings also expose
+  `auto_mitigation_eligible`: `false` means `matched_at` has no normalizable network
+  host:port (for example a `file`/`code` result), so scan absence deliberately cannot close
+  that finding and the UI labels the limitation:
 
   | Detection state | In latest covering scan? | Meaning |
   |---|---|---|

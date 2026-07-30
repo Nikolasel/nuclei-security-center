@@ -138,7 +138,12 @@ func (b *bundleStore) activate(staging, digest string) error {
 // RLock intentionally blocks if an activation already holds the exclusive lock:
 // a scan starting mid-activation queues briefly, then sees the fully swapped
 // tree. Conversely, activation uses TryLock and is refused while any scan runs.
-func (b *bundleStore) lockTemplates(templateIDs []string, templatesCommit string) ([]string, func(), error) {
+type lockedTemplate struct {
+	ID   string
+	Path string
+}
+
+func (b *bundleStore) lockTemplates(templateIDs []string, templatesCommit string) ([]lockedTemplate, func(), error) {
 	b.mu.RLock()
 	unlock := b.mu.RUnlock
 
@@ -164,7 +169,7 @@ func (b *bundleStore) lockTemplates(templateIDs []string, templatesCommit string
 		byID[entry.ID] = entry.Path
 	}
 	seen := make(map[string]struct{}, len(templateIDs))
-	paths := make([]string, 0, len(templateIDs))
+	templates := make([]lockedTemplate, 0, len(templateIDs))
 	var missing []string
 	for _, id := range templateIDs {
 		if _, duplicate := seen[id]; duplicate {
@@ -181,7 +186,7 @@ func (b *bundleStore) lockTemplates(templateIDs []string, templatesCommit string
 			unlock()
 			return nil, nil, fmt.Errorf("resolve active template %q: %w", id, err)
 		}
-		paths = append(paths, path)
+		templates = append(templates, lockedTemplate{ID: id, Path: path})
 	}
 	if len(missing) > 0 {
 		unlock()
@@ -195,7 +200,7 @@ func (b *bundleStore) lockTemplates(templateIDs []string, templatesCommit string
 			templatesCommit, manifest.Digest,
 		)
 	}
-	return paths, unlock, nil
+	return templates, unlock, nil
 }
 
 func uniqueSorted(values []string) []string {

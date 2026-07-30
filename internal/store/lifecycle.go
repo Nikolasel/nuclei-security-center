@@ -98,6 +98,7 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 	key := DedupKey(f.TemplateID, f.MatchedAt, discriminator)
 	rawLine := findingRawLine(raw)
 	f = findingTextProjection(f)
+	endpointKey := postgresText(types.EndpointKey(f.MatchedAt, f.Type))
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -128,26 +129,26 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 	// slower older scan cannot move last_seen backwards and manufacture a
 	// mitigation cycle after a newer scan has already completed.
 	const incomingNewer = `(finding_lifecycle.last_seen_scan IS NULL OR COALESCE((
-		SELECT (current_scan.created_at, current_scan.id) < ($13::timestamptz, $11::uuid)
+		SELECT (current_scan.created_at, current_scan.id) < ($14::timestamptz, $12::uuid)
 		  FROM scans current_scan
 		 WHERE current_scan.id = finding_lifecycle.last_seen_scan
 	), true))`
 	const incomingOlder = `(finding_lifecycle.first_seen_scan IS NULL OR COALESCE((
-		SELECT ($13::timestamptz, $11::uuid) < (current_scan.created_at, current_scan.id)
+		SELECT ($14::timestamptz, $12::uuid) < (current_scan.created_at, current_scan.id)
 		  FROM scans current_scan
 		 WHERE current_scan.id = finding_lifecycle.first_seen_scan
 	), true))`
 	const incomingAfterCovering = `COALESCE((
-		SELECT (current_scan.created_at, current_scan.id) < ($13::timestamptz, $11::uuid)
+		SELECT (current_scan.created_at, current_scan.id) < ($14::timestamptz, $12::uuid)
 		  FROM scans current_scan
 		 WHERE current_scan.id = finding_lifecycle.last_covering_scan
 	), true)`
 	upsertLifecycle := fmt.Sprintf(
 		`INSERT INTO finding_lifecycle
 		   (dedup_key, result_discriminator, template_id, name, severity, host,
-		    matched_at, type, cve, tags, first_seen_scan, first_seen_at, last_seen_scan,
+		    matched_at, endpoint_key, type, cve, tags, first_seen_scan, first_seen_at, last_seen_scan,
 		    last_seen_at, latest_occurrence_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), $11, now(), $12)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now(), $12, now(), $13)
 		 ON CONFLICT (dedup_key) DO UPDATE SET
 		    first_seen_scan      = CASE WHEN %[2]s THEN excluded.first_seen_scan ELSE finding_lifecycle.first_seen_scan END,
 		    first_seen_at        = least(finding_lifecycle.first_seen_at, excluded.first_seen_at),
@@ -157,6 +158,7 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 		    severity             = CASE WHEN %[1]s THEN excluded.severity ELSE finding_lifecycle.severity END,
 		    host                 = CASE WHEN %[1]s THEN excluded.host ELSE finding_lifecycle.host END,
 		    matched_at           = CASE WHEN %[1]s THEN excluded.matched_at ELSE finding_lifecycle.matched_at END,
+		    endpoint_key         = CASE WHEN %[1]s THEN excluded.endpoint_key ELSE finding_lifecycle.endpoint_key END,
 		    type                 = CASE WHEN %[1]s THEN excluded.type ELSE finding_lifecycle.type END,
 		    cve                  = CASE WHEN %[1]s THEN excluded.cve ELSE finding_lifecycle.cve END,
 		    tags                 = CASE WHEN %[1]s THEN excluded.tags ELSE finding_lifecycle.tags END,
@@ -172,7 +174,7 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 		incomingNewer, incomingOlder, incomingAfterCovering)
 	if err := tx.QueryRow(ctx, upsertLifecycle,
 		key, discriminator, f.TemplateID, f.Info.Name, f.Info.Severity, f.Host, f.MatchedAt,
-		f.Type, orEmpty(f.CVEs()), orEmpty(f.Info.Tags), scanID, occID, scanCreatedAt,
+		endpointKey, f.Type, orEmpty(f.CVEs()), orEmpty(f.Info.Tags), scanID, occID, scanCreatedAt,
 	).Scan(&lcID); err != nil {
 		return fmt.Errorf("upsert lifecycle: %w", err)
 	}
@@ -298,28 +300,32 @@ const (
 // view). DetectionState and EffectiveState are derived server-side from scan
 // history + disposition; EffectiveSeverity honours a recast.
 type LifecycleRow struct {
-	ID                 int64      `json:"id"`
-	TargetIDs          []string   `json:"target_ids"`
-	TemplateID         string     `json:"template_id"`
-	Name               string     `json:"name"`
-	Severity           string     `json:"severity"`
-	RecastSeverity     *string    `json:"recast_severity,omitempty"`
-	EffectiveSeverity  string     `json:"effective_severity"`
-	Host               string     `json:"host"`
-	MatchedAt          string     `json:"matched_at"`
-	Type               string     `json:"type"`
-	CVE                []string   `json:"cve"`
-	Tags               []string   `json:"tags"`
-	Disposition        string     `json:"disposition"`
-	AcceptExpiresAt    *time.Time `json:"accept_expires_at,omitempty"`
-	DetectionState     string     `json:"detection_state"`
-	EffectiveState     string     `json:"effective_state"`
-	TimesMitigated     int        `json:"times_mitigated"`
-	FirstSeenScan      *string    `json:"first_seen_scan,omitempty"`
-	LastSeenScan       *string    `json:"last_seen_scan,omitempty"`
-	FirstSeenAt        time.Time  `json:"first_seen_at"`
-	LastSeenAt         time.Time  `json:"last_seen_at"`
-	LatestOccurrenceID *int64     `json:"latest_occurrence_id,omitempty"`
+	ID                int64      `json:"id"`
+	TargetIDs         []string   `json:"target_ids"`
+	TemplateID        string     `json:"template_id"`
+	Name              string     `json:"name"`
+	Severity          string     `json:"severity"`
+	RecastSeverity    *string    `json:"recast_severity,omitempty"`
+	EffectiveSeverity string     `json:"effective_severity"`
+	Host              string     `json:"host"`
+	MatchedAt         string     `json:"matched_at"`
+	Type              string     `json:"type"`
+	CVE               []string   `json:"cve"`
+	Tags              []string   `json:"tags"`
+	Disposition       string     `json:"disposition"`
+	AcceptExpiresAt   *time.Time `json:"accept_expires_at,omitempty"`
+	DetectionState    string     `json:"detection_state"`
+	EffectiveState    string     `json:"effective_state"`
+	TimesMitigated    int        `json:"times_mitigated"`
+	// AutoMitigationEligible is false when matched_at cannot be normalized to a
+	// network host:port (for example file/code findings). Such rows deliberately
+	// fail closed and require analyst disposition rather than inferred closure.
+	AutoMitigationEligible bool      `json:"auto_mitigation_eligible"`
+	FirstSeenScan          *string   `json:"first_seen_scan,omitempty"`
+	LastSeenScan           *string   `json:"last_seen_scan,omitempty"`
+	FirstSeenAt            time.Time `json:"first_seen_at"`
+	LastSeenAt             time.Time `json:"last_seen_at"`
+	LatestOccurrenceID     *int64    `json:"latest_occurrence_id,omitempty"`
 }
 
 // LifecycleDetail is one deduplicated finding with its disposition/recast audit
@@ -348,12 +354,14 @@ const lcSelectCols = `l.id,
 	` + effSevExpr + ` AS eff_sev, l.host, l.matched_at, l.type, l.cve, l.tags,
 	l.disposition, l.accept_expires_at, ` + lcDetectionExpr + ` AS detection_state,
 	` + lcEffectiveExpr + ` AS effective_state, l.times_mitigated,
+	(l.endpoint_key <> '') AS auto_mitigation_eligible,
 	l.first_seen_scan, l.last_seen_scan, l.first_seen_at, l.last_seen_at, l.latest_occurrence_id`
 
 func scanLifecycleRow(row pgx.Row, r *LifecycleRow) error {
 	return row.Scan(&r.ID, &r.TargetIDs, &r.TemplateID, &r.Name, &r.Severity, &r.RecastSeverity,
 		&r.EffectiveSeverity, &r.Host, &r.MatchedAt, &r.Type, &r.CVE, &r.Tags,
 		&r.Disposition, &r.AcceptExpiresAt, &r.DetectionState, &r.EffectiveState, &r.TimesMitigated,
+		&r.AutoMitigationEligible,
 		&r.FirstSeenScan, &r.LastSeenScan, &r.FirstSeenAt, &r.LastSeenAt, &r.LatestOccurrenceID)
 }
 
@@ -499,6 +507,7 @@ func (s *Store) GetLifecycleFinding(ctx context.Context, id int64) (LifecycleDet
 		&d.ID, &d.TargetIDs, &d.TemplateID, &d.Name, &d.Severity, &d.RecastSeverity,
 		&d.EffectiveSeverity, &d.Host, &d.MatchedAt, &d.Type, &d.CVE, &d.Tags,
 		&d.Disposition, &d.AcceptExpiresAt, &d.DetectionState, &d.EffectiveState, &d.TimesMitigated,
+		&d.AutoMitigationEligible,
 		&d.FirstSeenScan, &d.LastSeenScan, &d.FirstSeenAt, &d.LastSeenAt, &d.LatestOccurrenceID,
 		&dNote, &dBy, &d.DispositionAt, &rNote, &rBy, &d.RecastAt,
 		&d.OccurrenceCount, &rawLine)

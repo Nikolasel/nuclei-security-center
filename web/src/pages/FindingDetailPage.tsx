@@ -141,6 +141,13 @@ function TriagePanel({ f }: { f: FindingDetail }) {
           detection: <span className="font-medium text-neutral-700 dark:text-neutral-300">{STATE_LABELS[f.detection_state]}</span>
         </span>
         {f.times_mitigated > 0 && <Pill tone="warn">mitigated ×{f.times_mitigated}</Pill>}
+        {!f.auto_mitigation_eligible && (
+          <Pill tone="warn">
+            <span title="This finding has no network host:port. Scan absence cannot automatically mark it mitigated.">
+              auto-mitigation unavailable
+            </span>
+          </Pill>
+        )}
         {f.disposition === "accepted" && f.accept_expires_at && (
           <span className="text-xs text-neutral-500">
             accept expires {new Date(f.accept_expires_at).toLocaleDateString()}

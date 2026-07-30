@@ -64,7 +64,7 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 	})
 
 	createdAt := time.Now().UTC().Add(-time.Hour)
-	createScan := func(templateIDs []string, findingTemplates ...string) string {
+	createScanWithCoverage := func(coverage []types.EndpointCoverage, templateIDs []string, findingTemplates ...string) string {
 		t.Helper()
 		spec := types.ScanSpec{
 			Targets: target.Hosts,
@@ -106,10 +106,32 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 				t.Fatalf("ingest %s: %v", findingTemplate, ingestErr)
 			}
 		}
+		if coverageErr := st.SetScanCoverage(ctx, scanID, coverage, ""); coverageErr != nil {
+			t.Fatalf("set scan coverage: %v", coverageErr)
+		}
 		if completeErr := st.MarkComplete(ctx, scanID, "integration-test", "integration-test"); completeErr != nil {
 			t.Fatalf("complete scan: %v", completeErr)
 		}
 		return scanID
+	}
+	createScan := func(templateIDs []string, findingTemplates ...string) string {
+		coveredTemplates := append(append([]string{}, templateIDs...), findingTemplates...)
+		seen := map[string]struct{}{}
+		coverage := make([]types.EndpointCoverage, 0, len(coveredTemplates))
+		for _, templateID := range coveredTemplates {
+			if templateID == "" {
+				continue
+			}
+			if _, exists := seen[templateID]; exists {
+				continue
+			}
+			seen[templateID] = struct{}{}
+			coverage = append(coverage, types.EndpointCoverage{
+				TemplateID: templateID,
+				Endpoint:   "issue88.invalid:443",
+			})
+		}
+		return createScanWithCoverage(coverage, templateIDs, findingTemplates...)
 	}
 
 	createTLSScanRecord := func(scanTarget Target) string {
@@ -130,6 +152,12 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 		if _, updateErr := st.pool.Exec(ctx,
 			`UPDATE scans SET created_at = $2 WHERE id = $1`, scanID, createdAt); updateErr != nil {
 			t.Fatalf("order TLS scan: %v", updateErr)
+		}
+		if coverageErr := st.SetScanCoverage(ctx, scanID, []types.EndpointCoverage{{
+			TemplateID: "tls-version",
+			Endpoint:   "issue88.invalid:443",
+		}}, ""); coverageErr != nil {
+			t.Fatalf("set TLS scan coverage: %v", coverageErr)
 		}
 		return scanID
 	}
@@ -207,8 +235,37 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 	createScan([]string{"template-b"})
 	assertFinding("template-a", "new", 0)
 
-	// A scan that did include template-a and did not observe it is real
-	// mitigation evidence.
+	// Template inclusion alone cannot mitigate template-a when Nuclei reached
+	// only a different endpoint.
+	createScanWithCoverage([]types.EndpointCoverage{{
+		TemplateID: "template-a",
+		Endpoint:   "other.invalid:443",
+	}}, []string{"template-a"})
+	assertFinding("template-a", "new", 0)
+
+	// Reaching another service on the same host is not evidence that this
+	// finding's endpoint was checked (the blocker raised in PR #153's review).
+	createScanWithCoverage([]types.EndpointCoverage{{
+		TemplateID: "template-a",
+		Endpoint:   "issue88.invalid:8080",
+	}}, []string{"template-a"})
+	assertFinding("template-a", "new", 0)
+
+	// Likewise, reaching the right endpoint with another template does not prove
+	// that max-host-error did not skip template-a.
+	createScanWithCoverage([]types.EndpointCoverage{{
+		TemplateID: "template-b",
+		Endpoint:   "issue88.invalid:443",
+	}}, []string{"template-a", "template-b"})
+	assertFinding("template-a", "new", 0)
+
+	// Unknown legacy telemetry also fails closed rather than treating target-level
+	// completion as endpoint evidence.
+	createScanWithCoverage(nil, []string{"template-a"})
+	assertFinding("template-a", "new", 0)
+
+	// A scan that included template-a, reached its host, and did not observe the
+	// result is real mitigation evidence.
 	mitigationScan := createScan([]string{"template-a"})
 	assertFinding("template-a", "mitigated", 0)
 
@@ -243,16 +300,15 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 	createScan(nil, "legacy-template", "legacy-template")
 	assertFindingAt("legacy-template", "https://issue88.invalid/path-1", "resurfaced", 1)
 
-	// Malformed historical JSONB is treated as unknown coverage instead of
-	// aborting scan-deletion repair.
+	// Malformed historical coverage is treated as unknown instead of either
+	// becoming evidence or aborting scan-deletion repair.
 	malformedScan := createScan(nil)
 	if _, err := st.pool.Exec(ctx,
-		`UPDATE scans SET spec = jsonb_set(spec, '{templates}', '{"template_ids":"not-an-array"}'::jsonb)
-		  WHERE id = $1`,
+		`UPDATE scans SET covered_endpoints = '[42]'::jsonb WHERE id = $1`,
 		malformedScan); err != nil {
-		t.Fatalf("make malformed historical spec: %v", err)
+		t.Fatalf("make malformed historical coverage: %v", err)
 	}
-	repairTrigger := createScan([]string{"template-b"})
+	repairTrigger := createScan([]string{"template-a"}, "template-a")
 	if _, _, err := st.DeleteScan(ctx, repairTrigger); err != nil {
 		t.Fatalf("repair with malformed historical spec: %v", err)
 	}

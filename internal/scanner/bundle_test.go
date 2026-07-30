@@ -206,15 +206,15 @@ func TestBundleLockTemplatesResolvesIDsAndRejectsDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	paths, unlock, err := b.lockTemplates([]string{"b", "a"}, manifest.Digest)
+	templates, unlock, err := b.lockTemplates([]string{"b", "a"}, manifest.Digest)
 	if err != nil {
 		t.Fatalf("lockTemplates: %v", err)
 	}
 	unlock()
-	if len(paths) != 2 ||
-		paths[0] != filepath.Join(b.activePath(), "custom/b.yaml") ||
-		paths[1] != filepath.Join(b.activePath(), "http/a.yaml") {
-		t.Errorf("resolved paths = %v", paths)
+	if len(templates) != 2 ||
+		templates[0] != (lockedTemplate{ID: "b", Path: filepath.Join(b.activePath(), "custom/b.yaml")}) ||
+		templates[1] != (lockedTemplate{ID: "a", Path: filepath.Join(b.activePath(), "http/a.yaml")}) {
+		t.Errorf("resolved templates = %v", templates)
 	}
 
 	if _, _, err := b.lockTemplates([]string{"missing-b", "missing-a"}, manifest.Digest); !errors.Is(err, ErrMissingTemplates) ||

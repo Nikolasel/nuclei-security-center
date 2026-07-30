@@ -97,6 +97,18 @@ type ScanStatus struct {
 	// the scan's life on the node; the backend persists it so the UI can show which
 	// endpoints were actually scanned. Empty when discovery was disabled.
 	DiscoveredTargets []string `json:"discovered_targets,omitempty"`
+	// CoveredEndpoints is the deduplicated (template id, canonical host:port)
+	// evidence for successful Nuclei requests. nil means telemetry is unavailable
+	// and must fail closed; an empty non-nil slice means known zero coverage.
+	CoveredEndpoints []EndpointCoverage `json:"covered_endpoints"`
+	CoverageWarning  string             `json:"coverage_warning,omitempty"`
+}
+
+// EndpointCoverage proves that one concrete template successfully issued a
+// request to one concrete network endpoint during a scan (#91).
+type EndpointCoverage struct {
+	TemplateID string `json:"template_id"`
+	Endpoint   string `json:"endpoint"`
 }
 
 // ScanPhase distinguishes the two execution stages the node reports live progress

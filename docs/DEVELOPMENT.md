@@ -29,6 +29,21 @@ all tracked occurrences. Existing lifecycle IDs survive exact one-to-one identit
 splits and merges receive new IDs. For a large finding history, schedule this upgrade in a
 maintenance window because the rewrite can hold table locks and generate substantial WAL.
 
+### Endpoint-coverage upgrade (`0033` + `0034`)
+
+This upgrade deliberately fails closed for historical scans. Migration `0033` resets each
+lifecycle row's `last_covering_scan` to its last observed scan and resets `times_mitigated` to
+zero because old scans have no authoritative request-trace evidence. As a result, findings that
+were previously shown as mitigated can reopen as new/active immediately after the upgrade.
+Analyst dispositions and occurrence history are preserved. Communicate this behavior and schedule
+the upgrade accordingly; subsequent successful traced scans re-establish mitigation evidence.
+
+Migration `0034` is the immutable forward correction from the development-time host-only
+representation to exact template + host:port pairs. It removes the superseded columns after
+backfilling lifecycle endpoint keys. Do not edit `0033` on databases that may already have
+recorded its checksum. Migration `0035` repairs scheme-less HTTP/HTTPS endpoint keys and adds
+the composite lifecycle lookup index used when scan completion expands exact coverage pairs.
+
 The template-aware finding-lifecycle regression is an explicit real-PostgreSQL integration test;
 regular CI stays free of service containers and skips it. Point local runs only at a disposable
 test database because the test applies migrations before creating and removing uniquely suffixed

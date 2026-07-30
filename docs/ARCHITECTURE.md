@@ -133,8 +133,11 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
     **New / Active / Resurfaced** (cumulative — still detected) and **Mitigated /
     Previously Mitigated** (no longer detected). The comparison scan is the latest
     completed scan, across target/ad-hoc scopes that have previously observed this global
-    result, whose persisted concrete `template_ids` includes the finding's template; a
-    narrower scan that omitted it is not evidence of mitigation.
+    result, whose persisted concrete `template_ids` includes the finding's template **and**
+    whose Nuclei request trace proves that the same template completed a successful request
+    against the finding's normalized `matched_at` host:port. A narrower scan that omitted the
+    template, reached only another service on the host, or had Nuclei abandon the host before
+    this template ran is not evidence of mitigation.
     Legacy scans with an occurrence prove positive coverage, while an absence without
     concrete ids proves nothing and fails closed. The latest covering scan's id is
     materialized on each lifecycle row when a scan completes (and rebuilt after scan
@@ -142,8 +145,14 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
     lifecycle reads independent of scan-history/template-array size. `times_mitigated`
     (maintained at ingest with the same coverage rule) distinguishes a first
     disappearance from a flapping one. **Closure is evidence-driven — there is no
-    manual "fixed."** This still does not prove that the specific endpoint was attempted;
-    endpoint-level coverage telemetry remains required by #91.
+    manual "fixed."** `scans.covered_endpoints` stores the deduplicated
+    `{template_id, endpoint}` positive trace evidence: NULL means unavailable and fails
+    closed, while an empty array is known zero coverage. Endpoint normalization uses
+    scheme defaults and Nuclei's `type` (`http`→80, `https`/TLS→443, DNS→53,
+    WHOIS→43). Findings such as `file`/`code` results that have no network host:port
+    deliberately remain ineligible for automatic mitigation; the API/UI exposes this as
+    `auto_mitigation_eligible=false` rather than silently implying they can close.
+    Exact occurrences always remain positive evidence for their own lifecycle entity.
   - *Disposition* — the analyst overlay (the only manual state): **Accept Risk** (with an
     optional `accept_expires_at` — an expired acceptance falls back to its detection
     state) and **False Positive**, plus **Recast Risk** (a `recast_severity` override).
@@ -243,7 +252,15 @@ so scans survive a busy or briefly-unreachable node.
    persisted `discovered_targets`; see [Development](DEVELOPMENT.md#discovery-on-docker-desktop-macos-reports-every-host-as-alive)).
 4. **Run (on node)** — `nuclei -l targets.txt -t <paths> -jsonl -o out.jsonl` plus the
    rate-limit / concurrency / timeout flags from the spec. When discovery ran,
-   `targets.txt` is the narrowed `host:port` list from step 3a.
+   `targets.txt` is the narrowed `host:port` list from step 3a. Nuclei also writes its
+   structured `-trace-log` into a private FIFO and reduces it while Nuclei runs, avoiding an
+   unbounded trace file on node disk. A read/write anchor installs the reader before process
+   launch and guarantees EOF even if Nuclei never opens the trace; a bounded post-process wait
+   fails closed rather than wedging the scan. Successful (`error = "none"`) requests become exact
+   `{template_id, endpoint(host:port)}` pairs returned as `covered_endpoints`; connection
+   errors do not count, so another port or a template skipped by `max-host-error` cannot make
+   an absent finding look mitigated. Malformed or unmapped records are skipped and surfaced
+   as `coverage_warning`; an unreadable trace or the bounded pair limit fails closed.
 5. **Poll for results** — the backend polls `GET /v1/scans/{id}` for status/progress,
    then pulls `GET /v1/scans/{id}/results` (NDJSON stream) once the node reports
    `complete`. Pull-only: the flow is strictly backend → node, and in-flight scans resume
@@ -251,8 +268,11 @@ so scans survive a busy or briefly-unreachable node.
 6. **Ingest (on backend)** — the backend parses the JSONL, inserts immutable occurrence
    rows, and upserts global lifecycle rows, updating first/last-seen evidence.
    **All dedup/lifecycle lives here** — the node stays stateless.
-7. **Persist** — upload raw `out.jsonl` (+ optional SARIF) to object storage; mark scan
-   `complete`; write audit entries.
+7. **Persist** — store `covered_endpoints` and any `coverage_warning`, upload raw `out.jsonl`
+   (+ optional SARIF) to object storage, then atomically mark the scan complete. Completion
+   expands coverage JSON once and joins it through the indexed lifecycle
+   `(template_id, endpoint_key)` pair before advancing matching evidence pointers; write audit
+   entries.
 8. **Failure path** — node timeout/non-zero exit, or dispatch/poll failure → status
    `failed`, capture stderr tail and the reason.
 
@@ -266,7 +286,7 @@ schedules, or the database — only how to run one scan and hand back results.
 | Method & path | Purpose |
 |---|---|
 | `POST /v1/scans` | Start a scan. Body: `{ targets[], templates:{template_ids[], templates_commit}, options:{rate_limit, concurrency, timeout, discovery:{enabled, scan_type, ports, timeout_sec}} }` → `202 { scan_id }`, runs async. The node resolves ids from the active manifest and rejects missing ids/commit drift before launch. `options.discovery` drives the optional naabu port-discovery pre-pass (#86) |
-| `GET /v1/scans/{id}` | Status + progress + stats (`running`/`complete`/`failed`) |
+| `GET /v1/scans/{id}` | Status + progress + stats (`running`/`complete`/`failed`) plus terminal `covered_endpoints` request-trace evidence and an optional `coverage_warning` |
 | `GET /v1/scans/{id}/results` | Stream NDJSON results (backend pulls on completion) |
 | `POST /v1/scans/{id}/cancel` | Cancel a running scan |
 | `POST /v1/templates/bundle` | Receive the **full-catalog** template bundle the backend pushes (#85): a gzipped tar of every active template's YAML + a `manifest.json`. The node holds the whole catalog (a scan selects by id); the backend pushes it on an hourly idle cadence + a pre-dispatch top-up when stale. The node extracts to staging, verifies every file sha256 and canonical `manifest.digest` (`types.BundleDigest`), then activates under an exclusive `TryLock` — refusing (`400`) a bad archive/path/hash/digest and (`409`) a push while any scan holds the active tree. → `{ templates_commit, template_count }`. Strictly backend→node (invariant #2); the node never pulls. |

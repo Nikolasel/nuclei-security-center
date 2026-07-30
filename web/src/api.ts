@@ -303,8 +303,19 @@ export interface Scan {
    *  persisted at completion, served live during the scanning phase. Empty when
    *  discovery was disabled. */
   discovered_targets?: string[];
+  /** exact template+host:port pairs for which Nuclei recorded a successful
+   *  request (#91). null/undefined means coverage telemetry is unavailable;
+   *  [] is known zero. */
+  covered_endpoints?: EndpointCoverage[] | null;
+  /** fail-closed diagnostics when request-trace evidence was incomplete. */
+  coverage_warning?: string;
   created_at: string;
   finished_at?: string;
+}
+
+export interface EndpointCoverage {
+  template_id: string;
+  endpoint: string;
 }
 
 /** scanRawUrl is the download URL for a scan's archived raw Nuclei output
@@ -404,6 +415,9 @@ export interface LifecycleFinding {
   detection_state: DetectionState;
   effective_state: EffectiveState;
   times_mitigated: number;
+  /** false when matched_at has no network host:port, so absence cannot
+   *  automatically become mitigation evidence. */
+  auto_mitigation_eligible: boolean;
   first_seen_scan?: string;
   last_seen_scan?: string;
   first_seen_at: string;

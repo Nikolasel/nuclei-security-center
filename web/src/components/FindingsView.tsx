@@ -253,6 +253,14 @@ export function FindingsView() {
                       </td>
                       <td className="px-3 py-2">
                         <FindingStateBadge state={f.effective_state} />
+                        {!f.auto_mitigation_eligible && (
+                          <span
+                            className="ml-2 text-xs text-amber-600 dark:text-amber-400"
+                            title="No network host:port; scan absence cannot automatically mark this finding mitigated"
+                          >
+                            auto-mitigation unavailable
+                          </span>
+                        )}
                       </td>
                       <td className="px-3 py-2">
                         {f.cve?.length ? (

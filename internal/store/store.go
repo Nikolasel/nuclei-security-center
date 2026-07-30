@@ -3,8 +3,10 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -93,9 +95,15 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if _, err := s.pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version    TEXT PRIMARY KEY,
+			checksum_sha256 TEXT,
 			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`); err != nil {
 		return fmt.Errorf("ensure schema_migrations: %w", err)
+	}
+	if _, err := s.pool.Exec(ctx,
+		`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum_sha256 TEXT`,
+	); err != nil {
+		return fmt.Errorf("ensure migration checksums: %w", err)
 	}
 
 	entries, err := migrationsFS.ReadDir("migrations")
@@ -111,24 +119,47 @@ func (s *Store) Migrate(ctx context.Context) error {
 	sort.Strings(names)
 
 	for _, name := range names {
-		var exists bool
-		if err := s.pool.QueryRow(ctx,
-			`SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)`, name,
-		).Scan(&exists); err != nil {
-			return fmt.Errorf("check migration %s: %w", name, err)
-		}
-		if exists {
-			continue
-		}
 		sqlBytes, err := migrationsFS.ReadFile("migrations/" + name)
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", name, err)
+		}
+		sum := sha256.Sum256(sqlBytes)
+		checksum := fmt.Sprintf("%x", sum)
+
+		var recordedChecksum *string
+		err = s.pool.QueryRow(ctx,
+			`SELECT checksum_sha256 FROM schema_migrations WHERE version = $1`, name,
+		).Scan(&recordedChecksum)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			// Apply below.
+		case err != nil:
+			return fmt.Errorf("check migration %s: %w", name, err)
+		case recordedChecksum == nil:
+			// Older installations predate checksums. Establish their current
+			// embedded migrations as the immutable baseline; separately named
+			// repair migrations handle any already-known historical drift.
+			if _, err := s.pool.Exec(ctx,
+				`UPDATE schema_migrations SET checksum_sha256 = $2 WHERE version = $1`,
+				name, checksum,
+			); err != nil {
+				return fmt.Errorf("baseline migration checksum %s: %w", name, err)
+			}
+			continue
+		case *recordedChecksum != checksum:
+			return fmt.Errorf(
+				"migration %s checksum mismatch: applied migrations are immutable (recorded %s, embedded %s)",
+				name, *recordedChecksum, checksum,
+			)
+		default:
+			continue
 		}
 		if _, err := s.pool.Exec(ctx, string(sqlBytes)); err != nil {
 			return fmt.Errorf("apply migration %s: %w", name, err)
 		}
 		if _, err := s.pool.Exec(ctx,
-			`INSERT INTO schema_migrations (version) VALUES ($1)`, name,
+			`INSERT INTO schema_migrations (version, checksum_sha256) VALUES ($1, $2)`,
+			name, checksum,
 		); err != nil {
 			return fmt.Errorf("record migration %s: %w", name, err)
 		}
@@ -257,11 +288,13 @@ func (s *Store) FailOrphanedScans(ctx context.Context, reason string) (int64, er
 }
 
 // MarkComplete records successful completion and the versions that ran. It also
-// advances each matching lifecycle row's last_covering_scan evidence pointer
-// once, at completion, avoiding a per-row JSONB scan-history lookup on every
-// lifecycle read. A concrete template id proves coverage; for legacy specs, any
-// occurrence of a template proves that template ran scan-wide. Absence from a
-// legacy scan without either signal fails closed.
+// advances each matching global lifecycle row's last_covering_scan evidence
+// pointer once, at completion, avoiding a per-row JSONB scan-history lookup on
+// every lifecycle read. The scan must cover the template and belong to a target
+// (or ad-hoc scope) that has observed this global finding before. A concrete
+// template id proves template coverage; for legacy specs, any occurrence of a
+// template proves that template ran scan-wide. Absence without either signal
+// fails closed.
 //
 // The scan transition and coverage update are one statement, so readers cannot
 // observe a complete scan without its lifecycle evidence. Like MarkFailed this
@@ -295,8 +328,14 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 		 UPDATE finding_lifecycle lifecycle
 		    SET last_covering_scan = covered_templates.scan_id
 		   FROM covered_templates
-		  WHERE lifecycle.target_id = covered_templates.target_id
-		    AND lifecycle.template_id = covered_templates.template_id
+		  WHERE lifecycle.template_id = covered_templates.template_id
+		    AND EXISTS (
+		        SELECT 1
+		          FROM findings associated
+		          JOIN scans associated_scan ON associated_scan.id = associated.scan_id
+		         WHERE associated.finding_id = lifecycle.id
+		           AND associated_scan.target_id IS NOT DISTINCT FROM covered_templates.target_id
+		    )
 		    AND (
 		        lifecycle.last_covering_scan IS NULL
 		        OR EXISTS (
@@ -526,10 +565,10 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 	}
 	defer tx.Rollback(ctx)
 
-	var rkey, lkey, targetID *string
+	var rkey, lkey *string
 	var state string
-	err = tx.QueryRow(ctx, `SELECT state, raw_object_key, log_object_key, target_id FROM scans WHERE id = $1`, id).
-		Scan(&state, &rkey, &lkey, &targetID)
+	err = tx.QueryRow(ctx, `SELECT state, raw_object_key, log_object_key FROM scans WHERE id = $1`, id).
+		Scan(&state, &rkey, &lkey)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return "", "", ErrNotFound
@@ -539,6 +578,59 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 	if state == string(types.ScanQueued) || state == string(types.ScanRunning) {
 		return "", "", ErrConflict
 	}
+	affectedRows, err := tx.Query(ctx,
+		`WITH deleted_scan AS (
+		    SELECT target_id, spec
+		      FROM scans
+		     WHERE id = $1
+		 ),
+		 covered_templates AS (
+		    SELECT deleted_scan.target_id, ids.template_id
+		      FROM deleted_scan
+		      CROSS JOIN LATERAL jsonb_array_elements_text(
+		          CASE
+		              WHEN jsonb_typeof(deleted_scan.spec #> '{templates,template_ids}') = 'array'
+		              THEN deleted_scan.spec #> '{templates,template_ids}'
+		              ELSE '[]'::jsonb
+		          END
+		      ) AS ids(template_id)
+		    UNION
+		    SELECT deleted_scan.target_id, findings.template_id
+		      FROM deleted_scan
+		      JOIN findings ON findings.scan_id = $1
+		 )
+		 SELECT lifecycle.id
+		   FROM finding_lifecycle lifecycle
+		   JOIN covered_templates coverage ON coverage.template_id = lifecycle.template_id
+		  WHERE EXISTS (
+		      SELECT 1
+		        FROM findings associated
+		        JOIN scans associated_scan ON associated_scan.id = associated.scan_id
+		       WHERE associated.finding_id = lifecycle.id
+		         AND associated_scan.target_id IS NOT DISTINCT FROM coverage.target_id
+		  )
+		 UNION
+		 SELECT finding_id
+		   FROM findings
+		  WHERE scan_id = $1 AND finding_id IS NOT NULL`,
+		id)
+	if err != nil {
+		return "", "", fmt.Errorf("list affected lifecycle: %w", err)
+	}
+	var affectedLifecycle []int64
+	for affectedRows.Next() {
+		var lifecycleID int64
+		if err := affectedRows.Scan(&lifecycleID); err != nil {
+			affectedRows.Close()
+			return "", "", err
+		}
+		affectedLifecycle = append(affectedLifecycle, lifecycleID)
+	}
+	if err := affectedRows.Err(); err != nil {
+		affectedRows.Close()
+		return "", "", fmt.Errorf("list affected lifecycle: %w", err)
+	}
+	affectedRows.Close()
 	if _, err := tx.Exec(ctx, `DELETE FROM scans WHERE id = $1`, id); err != nil {
 		return "", "", err
 	}
@@ -547,10 +639,10 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 	// latest_occurrence_id pointer to it. Left alone, a finding whose
 	// times_mitigated / first_seen_scan survive from history that no longer
 	// exists would show a detection state (e.g. "resurfaced") the remaining
-	// scans can't actually justify. Recompute those fields for the target from
-	// only the scans that still exist, so every finding's story stays
-	// explainable from what's currently visible.
-	if err := repairLifecycleForTarget(ctx, tx, targetID); err != nil {
+	// scans can't actually justify. Recompute those fields for the affected
+	// global lifecycle rows from only the scans that still exist, so every
+	// finding's story stays explainable from what's currently visible.
+	if err := repairLifecycleFindings(ctx, tx, affectedLifecycle); err != nil {
 		return "", "", fmt.Errorf("repair lifecycle: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -560,11 +652,13 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 }
 
 // FindingRow is a single per-scan occurrence as returned to API callers (the
-// scan-detail view). FindingID links it to the deduplicated lifecycle entity so
-// the UI can navigate to the tracked finding.
+// scan-detail view). FindingID records its global lifecycle association, but the
+// scan UI opens this occurrence itself so exact historical evidence is never
+// substituted with a newer merged result.
 type FindingRow struct {
 	ID         int64     `json:"id"`
 	ScanID     string    `json:"scan_id"`
+	TargetID   *string   `json:"target_id,omitempty"`
 	FindingID  *int64    `json:"finding_id,omitempty"`
 	TemplateID string    `json:"template_id"`
 	Name       string    `json:"name"`
@@ -649,7 +743,7 @@ func (s *Store) ListFindings(ctx context.Context, f FindingFilter) ([]FindingRow
 	limitPH := push(f.Limit)
 	offsetPH := push(f.Offset)
 	query := fmt.Sprintf(
-		`SELECT id, scan_id, finding_id, template_id, name, severity, host, matched_at, type, cve, tags, created_at
+		`SELECT id, scan_id, target_id, finding_id, template_id, name, severity, host, matched_at, type, cve, tags, created_at
 		 FROM findings %s ORDER BY %s DESC, id DESC LIMIT $%d OFFSET $%d`,
 		where, severityOrder, limitPH, offsetPH)
 	rows, err := s.pool.Query(ctx, query, args...)
@@ -661,13 +755,45 @@ func (s *Store) ListFindings(ctx context.Context, f FindingFilter) ([]FindingRow
 	var out []FindingRow
 	for rows.Next() {
 		var fr FindingRow
-		if err := rows.Scan(&fr.ID, &fr.ScanID, &fr.FindingID, &fr.TemplateID, &fr.Name, &fr.Severity,
+		if err := rows.Scan(&fr.ID, &fr.ScanID, &fr.TargetID, &fr.FindingID, &fr.TemplateID, &fr.Name, &fr.Severity,
 			&fr.Host, &fr.MatchedAt, &fr.Type, &fr.CVE, &fr.Tags, &fr.CreatedAt); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, fr)
 	}
 	return out, total, rows.Err()
+}
+
+// OccurrenceDetail is one exact, immutable Nuclei result. Unlike a lifecycle
+// detail it never substitutes the latest globally merged result.
+type OccurrenceDetail struct {
+	FindingRow
+	Raw json.RawMessage `json:"raw"`
+}
+
+// GetOccurrence returns one immutable scan occurrence by id.
+func (s *Store) GetOccurrence(ctx context.Context, id int64) (OccurrenceDetail, error) {
+	var detail OccurrenceDetail
+	var raw string
+	err := s.pool.QueryRow(ctx,
+		`SELECT id, scan_id, target_id, finding_id, template_id, name, severity,
+		        host, matched_at, type, cve, tags, created_at,
+		        COALESCE(raw_line, raw::text)
+		   FROM findings
+		  WHERE id = $1`,
+		id).Scan(
+		&detail.ID, &detail.ScanID, &detail.TargetID, &detail.FindingID,
+		&detail.TemplateID, &detail.Name, &detail.Severity, &detail.Host,
+		&detail.MatchedAt, &detail.Type, &detail.CVE, &detail.Tags,
+		&detail.CreatedAt, &raw)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return OccurrenceDetail{}, ErrNotFound
+		}
+		return OccurrenceDetail{}, err
+	}
+	detail.Raw = json.RawMessage(raw)
+	return detail, nil
 }
 
 func deref(p *string) string {

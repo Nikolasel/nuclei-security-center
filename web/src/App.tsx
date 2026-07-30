@@ -6,6 +6,7 @@ import { Button, ErrorText, Spinner } from "./components/ui";
 import { FindingDetailPage } from "./pages/FindingDetailPage";
 import { FindingsPage } from "./pages/FindingsPage";
 import { NodesPage } from "./pages/NodesPage";
+import { OccurrenceDetailPage } from "./pages/OccurrenceDetailPage";
 import { ScanPoliciesPage } from "./pages/ScanPoliciesPage";
 import { ScansPage } from "./pages/ScansPage";
 import { ScanDetailPage } from "./pages/ScanDetailPage";
@@ -57,6 +58,7 @@ export default function App() {
         <Route path="/" element={<Navigate to="/findings" replace />} />
         <Route path="/findings" element={<FindingsPage />} />
         <Route path="/findings/:id" element={<FindingDetailPage />} />
+        <Route path="/occurrences/:id" element={<OccurrenceDetailPage />} />
         <Route path="/scans" element={<ScansPage />} />
         <Route path="/scans/:id" element={<ScanDetailPage />} />
         <Route path="/schedules" element={<SchedulesPage />} />

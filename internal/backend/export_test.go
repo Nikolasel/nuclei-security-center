@@ -14,7 +14,7 @@ func sampleRows() []store.LifecycleRow {
 	t0 := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	return []store.LifecycleRow{
 		{
-			ID:         101,
+			ID: 101, TargetIDs: []string{"target-a", "target-b"},
 			TemplateID: "cve-2021-1234", Name: "Example RCE", Severity: "high",
 			EffectiveSeverity: "high", Host: "scanme.sh", MatchedAt: "https://scanme.sh/x",
 			Type: "http", CVE: []string{"CVE-2021-1234"}, Tags: []string{"cve", "rce"},
@@ -55,11 +55,12 @@ func TestWriteFindingsCSV(t *testing.T) {
 	if len(recs) != 3 { // header + 2 rows
 		t.Fatalf("got %d records, want 3", len(recs))
 	}
-	// id leads the columns, then template_id; cve/tags shift right by one.
-	if recs[0][0] != "id" || recs[0][1] != "template_id" || recs[0][12] != "cve" {
+	// Preserve the established positional columns; target provenance is appended.
+	if recs[0][0] != "id" || recs[0][1] != "template_id" || recs[0][12] != "cve" || recs[0][16] != "target_ids" {
 		t.Errorf("unexpected header: %v", recs[0])
 	}
-	if recs[1][0] != "101" || recs[1][1] != "cve-2021-1234" || recs[1][12] != "CVE-2021-1234" {
+	if recs[1][0] != "101" || recs[1][1] != "cve-2021-1234" ||
+		recs[1][12] != "CVE-2021-1234" || recs[1][16] != "target-a;target-b" {
 		t.Errorf("unexpected first row: %v", recs[1])
 	}
 	// tags joined with ";"

@@ -95,6 +95,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/findings", s.requireRole(RoleViewer, s.handleListFindings))
 	mux.HandleFunc("GET /api/findings/export", s.requireRole(RoleViewer, s.handleExportFindings))
 	mux.HandleFunc("GET /api/findings/{id}", s.requireRole(RoleViewer, s.handleGetFinding))
+	mux.HandleFunc("GET /api/occurrences/{id}", s.requireRole(RoleViewer, s.handleGetOccurrence))
 	mux.HandleFunc("PATCH /api/findings/{id}/disposition", s.mutation(eventFindingTriaged, "finding.disposition", "finding", RoleOperator, s.handleSetDisposition))
 	mux.HandleFunc("PATCH /api/findings/{id}/severity", s.mutation(eventFindingTriaged, "finding.recast", "finding", RoleOperator, s.handleRecastSeverity))
 
@@ -681,6 +682,20 @@ func (s *Server) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+func (s *Server) handleGetOccurrence(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid occurrence id", http.StatusBadRequest)
+		return
+	}
+	detail, err := s.store.GetOccurrence(r.Context(), id)
+	if err != nil {
+		s.writeStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, detail)
 }
 
 // actorFrom returns a stable identifier for the authenticated caller (email,

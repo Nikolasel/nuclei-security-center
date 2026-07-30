@@ -11,8 +11,23 @@ gofmt -l .       # list unformatted files (fix with gofmt -w)
 
 Structured logging is via `log/slog` (JSON handler). Schema changes go in a new numbered file
 under `internal/store/migrations/`; the runner applies unseen files in filename order and records
-them in `schema_migrations`. Run `gofmt -w`, `go vet`, and `go test` before considering a change
-done.
+them with a SHA-256 checksum in `schema_migrations`. Once a database may have recorded a migration,
+its file is immutable; add a new forward/repair migration instead. The runner baselines legacy
+records that predate checksums because their original bytes are unknowable, so checksums guarantee
+immutability only from this release forward. Known historical drift needs an explicit repair;
+unknown drift in a disposable development database should be reset. The runner fails fast on
+later content drift. Run `gofmt -w`, `go vet`, and `go test` before considering a change done.
+
+Repair migration `0029a` intentionally drop/recreates the scan-history index on both historical
+starting states, including a clean install where 0029 just created it, so its definition converges.
+Migration `0031` removes helpers left by an earlier unmerged 0030, but cannot make data rebuilt by
+that development-only revision equivalent; reset such a disposable database if data convergence
+matters.
+
+Migration `0030_global_finding_identity.sql` atomically rebuilds lifecycle identities and relinks
+all tracked occurrences. Existing lifecycle IDs survive exact one-to-one identity mappings; real
+splits and merges receive new IDs. For a large finding history, schedule this upgrade in a
+maintenance window because the rewrite can hold table locks and generate substantial WAL.
 
 The template-aware finding-lifecycle regression is an explicit real-PostgreSQL integration test;
 regular CI stays free of service containers and skips it. Point local runs only at a disposable

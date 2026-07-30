@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"testing"
 	"time"
@@ -25,14 +27,7 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	st, err := Open(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(st.Close)
-	if err := st.Migrate(ctx); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	st := openIsolatedPostgres(t, ctx, dsn, "9999")
 
 	suffix := types.NewID()
 	target, err := st.CreateTarget(ctx, Target{
@@ -41,6 +36,13 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("create target: %v", err)
+	}
+	overlappingTarget, err := st.CreateTarget(ctx, Target{
+		Name:  "template-aware-overlap-" + suffix,
+		Hosts: []string{"issue88.invalid"},
+	})
+	if err != nil {
+		t.Fatalf("create overlapping target: %v", err)
 	}
 
 	var scanIDs []string
@@ -55,6 +57,9 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 		}
 		if deleteErr := st.DeleteTarget(cleanupCtx, target.ID); deleteErr != nil && !errors.Is(deleteErr, ErrNotFound) {
 			t.Errorf("cleanup target: %v", deleteErr)
+		}
+		if deleteErr := st.DeleteTarget(cleanupCtx, overlappingTarget.ID); deleteErr != nil && !errors.Is(deleteErr, ErrNotFound) {
+			t.Errorf("cleanup overlapping target: %v", deleteErr)
 		}
 	})
 
@@ -105,6 +110,68 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 			t.Fatalf("complete scan: %v", completeErr)
 		}
 		return scanID
+	}
+
+	createTLSScanRecord := func(scanTarget Target) string {
+		t.Helper()
+		spec := types.ScanSpec{
+			Targets: scanTarget.Hosts,
+			Templates: types.TemplateSelector{
+				TemplateIDs:     []string{"tls-version"},
+				TemplatesCommit: "integration-test",
+			},
+		}
+		scanID, createErr := st.CreateScan(ctx, spec, ScanLink{TargetID: scanTarget.ID})
+		if createErr != nil {
+			t.Fatalf("create TLS scan: %v", createErr)
+		}
+		scanIDs = append(scanIDs, scanID)
+		createdAt = createdAt.Add(time.Minute)
+		if _, updateErr := st.pool.Exec(ctx,
+			`UPDATE scans SET created_at = $2 WHERE id = $1`, scanID, createdAt); updateErr != nil {
+			t.Fatalf("order TLS scan: %v", updateErr)
+		}
+		return scanID
+	}
+	ingestTLSVersions := func(scanTarget Target, scanID string, versions ...string) {
+		t.Helper()
+		for _, version := range versions {
+			finding := types.NucleiFinding{
+				TemplateID: "tls-version",
+				Host:       "issue88.invalid",
+				MatchedAt:  "issue88.invalid:443",
+				Type:       "ssl",
+				Info: types.NucleiInfo{
+					Name:     "TLS version",
+					Severity: "info",
+				},
+			}
+			raw, marshalErr := json.Marshal(struct {
+				types.NucleiFinding
+				ExtractedResults []string `json:"extracted-results"`
+			}{
+				NucleiFinding:    finding,
+				ExtractedResults: []string{version},
+			})
+			if marshalErr != nil {
+				t.Fatalf("marshal TLS finding: %v", marshalErr)
+			}
+			if ingestErr := st.IngestFinding(ctx, scanID, scanTarget.ID, finding, raw); ingestErr != nil {
+				t.Fatalf("ingest TLS %s: %v", version, ingestErr)
+			}
+		}
+	}
+	createTLSScanFor := func(scanTarget Target, versions ...string) string {
+		t.Helper()
+		scanID := createTLSScanRecord(scanTarget)
+		ingestTLSVersions(scanTarget, scanID, versions...)
+		if completeErr := st.MarkComplete(ctx, scanID, "integration-test", "integration-test"); completeErr != nil {
+			t.Fatalf("complete TLS scan: %v", completeErr)
+		}
+		return scanID
+	}
+	createTLSScan := func(versions ...string) string {
+		return createTLSScanFor(target, versions...)
 	}
 
 	assertFindingAt := func(templateID, matchedAt, wantState string, wantMitigated int) {
@@ -189,4 +256,197 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 	if _, _, err := st.DeleteScan(ctx, repairTrigger); err != nil {
 		t.Fatalf("repair with malformed historical spec: %v", err)
 	}
+
+	// One template can intentionally emit multiple semantic results at the same
+	// endpoint. They remain independently navigable and stable across scans.
+	firstTLSScan := createTLSScan("tls12", "tls13")
+	tlsOccurrences, total, err := st.ListFindings(ctx, FindingFilter{ScanID: firstTLSScan, Limit: 50})
+	if err != nil {
+		t.Fatalf("list TLS occurrences: %v", err)
+	}
+	if total != 2 || len(tlsOccurrences) != 2 {
+		t.Fatalf("TLS occurrences = %d/%d, want 2/2", len(tlsOccurrences), total)
+	}
+	if tlsOccurrences[0].FindingID == nil || tlsOccurrences[1].FindingID == nil ||
+		*tlsOccurrences[0].FindingID == *tlsOccurrences[1].FindingID {
+		t.Fatalf("TLS variants did not split lifecycle ids: %#v", tlsOccurrences)
+	}
+	for _, occurrence := range tlsOccurrences {
+		detail, detailErr := st.GetOccurrence(ctx, occurrence.ID)
+		if detailErr != nil {
+			t.Fatalf("get exact occurrence %d: %v", occurrence.ID, detailErr)
+		}
+		if detail.ID != occurrence.ID || detail.ScanID != firstTLSScan {
+			t.Fatalf("exact occurrence metadata = %#v", detail)
+		}
+		var raw struct {
+			ExtractedResults []string `json:"extracted-results"`
+		}
+		if unmarshalErr := json.Unmarshal(detail.Raw, &raw); unmarshalErr != nil ||
+			len(raw.ExtractedResults) != 1 {
+			t.Fatalf("exact occurrence raw = %s (%v)", detail.Raw, unmarshalErr)
+		}
+	}
+	tlsQuery := FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{
+		{Field: "target", Op: "any_of", Values: []string{target.ID}},
+		{Field: "name", Op: "contains", Values: []string{"tls-version"}},
+	}}}}
+	rawExport, err := st.ExportLifecycleRaw(ctx, tlsQuery)
+	if err != nil {
+		t.Fatalf("export TLS lifecycle raw: %v", err)
+	}
+	exportedVersions := map[string]bool{}
+	for _, exported := range rawExport {
+		var raw struct {
+			ExtractedResults []string `json:"extracted-results"`
+		}
+		if unmarshalErr := json.Unmarshal(exported.Raw, &raw); unmarshalErr != nil ||
+			len(raw.ExtractedResults) != 1 {
+			t.Fatalf("decode exported TLS occurrence: %s (%v)", exported.Raw, unmarshalErr)
+		}
+		exportedVersions[raw.ExtractedResults[0]] = true
+	}
+	if len(rawExport) != 2 || !exportedVersions["tls12"] || !exportedVersions["tls13"] {
+		t.Fatalf("raw lifecycle export = %#v, want both TLS variants", exportedVersions)
+	}
+
+	createTLSScan("tls12", "tls13")
+	createTLSScan("tls13")
+	rows, _, err := st.ListLifecycleFindings(ctx, FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{{
+		Field: "target", Op: "any_of", Values: []string{target.ID},
+	}}}}}, 500, 0)
+	if err != nil {
+		t.Fatalf("list TLS lifecycle: %v", err)
+	}
+	tlsStates := map[string]string{}
+	for _, row := range rows {
+		if row.TemplateID != "tls-version" {
+			continue
+		}
+		detail, detailErr := st.GetLifecycleFinding(ctx, row.ID)
+		if detailErr != nil {
+			t.Fatalf("get TLS lifecycle %d: %v", row.ID, detailErr)
+		}
+		var raw struct {
+			ExtractedResults []string `json:"extracted-results"`
+		}
+		if unmarshalErr := json.Unmarshal(detail.Raw, &raw); unmarshalErr != nil {
+			t.Fatalf("decode TLS lifecycle %d: %v", row.ID, unmarshalErr)
+		}
+		if len(raw.ExtractedResults) != 1 {
+			t.Fatalf("TLS lifecycle %d results = %#v", row.ID, raw.ExtractedResults)
+		}
+		tlsStates[raw.ExtractedResults[0]] = row.DetectionState
+	}
+	if tlsStates["tls12"] != "mitigated" || tlsStates["tls13"] != "active" {
+		t.Fatalf("TLS lifecycle states = %#v, want tls12 mitigated / tls13 active", tlsStates)
+	}
+
+	// Target records are provenance, not lifecycle identity. The same concrete
+	// TLS 1.3 result from an overlapping target joins the existing global row.
+	overlapScan := createTLSScanFor(overlappingTarget, "tls13")
+	overlapOccurrences, total, err := st.ListFindings(ctx, FindingFilter{ScanID: overlapScan, Limit: 50})
+	if err != nil || total != 1 || len(overlapOccurrences) != 1 ||
+		overlapOccurrences[0].FindingID == nil {
+		t.Fatalf("overlap occurrences = %#v total=%d err=%v", overlapOccurrences, total, err)
+	}
+	var tls13LifecycleID int64
+	for _, row := range rows {
+		if row.TemplateID == "tls-version" {
+			detail, detailErr := st.GetLifecycleFinding(ctx, row.ID)
+			if detailErr != nil {
+				t.Fatalf("get candidate TLS lifecycle: %v", detailErr)
+			}
+			var raw struct {
+				ExtractedResults []string `json:"extracted-results"`
+			}
+			if unmarshalErr := json.Unmarshal(detail.Raw, &raw); unmarshalErr == nil &&
+				len(raw.ExtractedResults) == 1 && raw.ExtractedResults[0] == "tls13" {
+				tls13LifecycleID = row.ID
+				break
+			}
+		}
+	}
+	if *overlapOccurrences[0].FindingID != tls13LifecycleID {
+		t.Fatalf("overlap lifecycle = %d, want existing TLS 1.3 lifecycle %d",
+			*overlapOccurrences[0].FindingID, tls13LifecycleID)
+	}
+	detail, err := st.GetLifecycleFinding(ctx, tls13LifecycleID)
+	if err != nil {
+		t.Fatalf("get globally merged TLS 1.3 detail: %v", err)
+	}
+	if fmt.Sprint(detail.TargetIDs) != fmt.Sprint(sortedStrings(target.ID, overlappingTarget.ID)) {
+		t.Fatalf("globally merged targets = %v, want both target records", detail.TargetIDs)
+	}
+
+	// A slower, older scan finishing after a newer overlapping scan must not
+	// move last_seen backwards or manufacture a mitigation/resurface cycle.
+	olderScan := createTLSScanRecord(target)
+	newerScan := createTLSScanRecord(overlappingTarget)
+	ingestTLSVersions(overlappingTarget, newerScan, "tls11")
+	if err := st.MarkComplete(ctx, newerScan, "integration-test", "integration-test"); err != nil {
+		t.Fatalf("complete newer overlapping scan: %v", err)
+	}
+	ingestTLSVersions(target, olderScan, "tls11")
+	if err := st.MarkComplete(ctx, olderScan, "integration-test", "integration-test"); err != nil {
+		t.Fatalf("complete older overlapping scan: %v", err)
+	}
+	var lastSeen, lastCovering string
+	var timesMitigated int
+	var detectionState string
+	if err := st.pool.QueryRow(ctx,
+		`SELECT last_seen_scan, last_covering_scan, times_mitigated, `+lcDetectionExpr+`
+		   FROM finding_lifecycle l
+		  WHERE template_id = 'tls-version'
+		    AND result_discriminator = $1`,
+		mustResultDiscriminator(t, `{"extracted-results":["tls11"]}`),
+	).Scan(&lastSeen, &lastCovering, &timesMitigated, &detectionState); err != nil {
+		t.Fatalf("read out-of-order lifecycle: %v", err)
+	}
+	if lastSeen != newerScan || lastCovering != newerScan || timesMitigated != 0 || detectionState != "active" {
+		t.Fatalf("out-of-order lifecycle = seen:%s covering:%s mitigated:%d state:%s, want newer/newer/0/active",
+			lastSeen, lastCovering, timesMitigated, detectionState)
+	}
+
+	// Chronology is observed, observed, absent even though the absent scan
+	// completes before the second observation is ingested. The late observation
+	// predates the coverage gap, so it must not count as a resurfacing.
+	createTLSScanFor(target, "tls10")
+	lateObservedScan := createTLSScanRecord(target)
+	newerAbsentScan := createTLSScanRecord(target)
+	if err := st.MarkComplete(ctx, newerAbsentScan, "integration-test", "integration-test"); err != nil {
+		t.Fatalf("complete newer absent scan: %v", err)
+	}
+	ingestTLSVersions(target, lateObservedScan, "tls10")
+	if err := st.MarkComplete(ctx, lateObservedScan, "integration-test", "integration-test"); err != nil {
+		t.Fatalf("complete late older observation: %v", err)
+	}
+	if err := st.pool.QueryRow(ctx,
+		`SELECT last_seen_scan, last_covering_scan, times_mitigated, `+lcDetectionExpr+`
+		   FROM finding_lifecycle l
+		  WHERE template_id = 'tls-version'
+		    AND result_discriminator = $1`,
+		mustResultDiscriminator(t, `{"extracted-results":["tls10"]}`),
+	).Scan(&lastSeen, &lastCovering, &timesMitigated, &detectionState); err != nil {
+		t.Fatalf("read late observation before absence: %v", err)
+	}
+	if lastSeen != lateObservedScan || lastCovering != newerAbsentScan ||
+		timesMitigated != 0 || detectionState != "mitigated" {
+		t.Fatalf("late observation lifecycle = seen:%s covering:%s mitigated:%d state:%s, want older/newer/0/mitigated",
+			lastSeen, lastCovering, timesMitigated, detectionState)
+	}
+}
+
+func sortedStrings(values ...string) []string {
+	sort.Strings(values)
+	return values
+}
+
+func mustResultDiscriminator(t *testing.T, raw string) string {
+	t.Helper()
+	discriminator, err := resultDiscriminator([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return discriminator
 }

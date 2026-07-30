@@ -78,14 +78,23 @@ a `scan_policy_id`.
 Findings are **deduplicated** across scans and tracked over time with a **Tenable Security
 Center-style** lifecycle (design rationale in
 [ARCHITECTURE.md §3](ARCHITECTURE.md#3-data-model-core-tables)). `GET /api/findings` returns
-the deduplicated entities (keyed on `(target, template, matched_at)`). Each has:
+the globally deduplicated entities (keyed on `(template, matched_at, stable result variant)`;
+scan and target are occurrence provenance). The stable variant uses matcher/extractor names and
+canonicalized extracted results, so a template can track TLS 1.2 and TLS 1.3 independently
+without hashing volatile request/response/timestamp data. Extracted values are deliberately part
+of identity even when matcher/extractor names are absent: some multi-result templates (including
+TLS-version results) expose no other stable discriminator. Consequently, a template whose
+extracted value is inherently volatile will create distinct lifecycle entities; template authors
+should give such results a stable matcher/extractor or avoid volatile extraction when lifecycle
+continuity is desired. Each has:
 
 - a **detection state** — derived from scan observation, never stored. **Closure is
   evidence-driven — there is no manual "fixed."** The state is a function of whether the
-  finding is in the target's latest completed scan that actually included the finding's
-  concrete template id and how many times it has come back after disappearing
-  (`times_mitigated`). A scan using a narrower template set is not evidence that an omitted
-  finding was mitigated:
+  finding is in the latest completed scan, across scopes that have observed the global result,
+  that actually included the finding's concrete template id, and how many times it has come
+  back after disappearing (`times_mitigated`). A scan using a narrower template set is not
+  evidence that an omitted finding was mitigated. Endpoint-level reach evidence is not recorded
+  yet, so #91 remains a separate coverage follow-up:
 
   | Detection state | In latest covering scan? | Meaning |
   |---|---|---|
@@ -98,19 +107,27 @@ the deduplicated entities (keyed on `(target, template, matched_at)`). Each has:
   `resurfaced` is to `active` what `previously_mitigated` is to `mitigated`: same current
   presence, but "…and this has disappeared before." Both need attention a clean
   `active`/`mitigated` doesn't — a regressed fix, or a vuln that keeps reappearing.
+  Scan pointers use stable scan chronology (`scans.created_at`, then id), even when scans
+  finish out of order. The corresponding `_at` fields retain when the earliest/latest
+  qualifying result was ingested; a late-finishing older scan can therefore become
+  `first_seen_scan` without moving `first_seen_at` backward.
 - a manual **disposition** — `none` / `false_positive` / `accepted` (Accept Risk, with an
   optional `accept_expires_at`; an expired acceptance reverts to the detection state) — and an
   optional **`recast_severity`** (Recast Risk).
 - an **`effective_state`** and **`effective_severity`** overlaying the two (an `accepted` or
   `false_positive` disposition wins; otherwise you see the detection state).
 
-`GET /api/scans/{id}/findings` returns the immutable per-scan **occurrences** instead.
+`GET /api/scans/{id}/findings` returns the immutable per-scan **occurrences** instead. Each row
+has its own exact detail at `GET /api/occurrences/{occurrence_id}`. The scan UI opens that route
+directly; it never substitutes the lifecycle's latest occurrence.
 
 ```sh
 # deduplicated lifecycle list (paginated + filtered)
 curl -sb jar.txt "localhost:8080/api/findings" | jq
 # one tracked finding + full raw Nuclei output of its latest occurrence
 curl -sb jar.txt "localhost:8080/api/findings/<finding_id>" | jq
+# one exact immutable result from a concrete scan
+curl -sb jar.txt "localhost:8080/api/occurrences/<occurrence_id>" | jq
 # disposition (operator) — none | false_positive | accepted (+ optional accept_expires_at)
 curl -sb jar.txt -X PATCH localhost:8080/api/findings/<finding_id>/disposition \
   -H 'content-type: application/json' \
@@ -135,7 +152,9 @@ empty)*. Each condition is `{field, op, values}`:
 | `tag` | `any_of`, `none_of`, `is_empty`, `is_not_empty` |
 
 Fields and operators are allowlisted (an unknown one is a `400`); every value is bound as a SQL
-parameter, so a filter never concatenates user input into the query. Plus `limit`, `offset`.
+parameter, so a filter never concatenates user input into the query. `target none_of` also
+includes ad-hoc-only findings because they have no occurrence belonging to an excluded target.
+Plus `limit`, `offset`.
 
 ```sh
 # (critical OR high) AND host contains scanme  — one AND-group
@@ -157,7 +176,8 @@ via `GET /api/findings/export?format=…`. The export takes the *same* filter pa
 `/api/findings`, so you export exactly what you're looking at (unpaginated). CSV is a flat
 table for spreadsheets; SARIF is a valid 2.1.0 document (deduped rules + per-finding results,
 severity→level) for code-scanning / CI ingestion. The projected formats carry the lifecycle
-overlay — detection state, disposition, `times_mitigated`. **Raw JSONL** instead emits the
+overlay — detection state, disposition, `times_mitigated`, and all contributing `target_ids`.
+**Raw JSONL** instead emits the
 preserved Nuclei output of each finding's latest occurrence, one JSON object per line (Nuclei's
 native `out.jsonl` shape) — the full request/response, curl reproducer, and classification that
 the projected formats drop. PostgreSQL-backed exports replace invalid UTF-8 with U+FFFD; the

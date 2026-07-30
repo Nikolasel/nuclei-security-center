@@ -38,28 +38,30 @@ func contains(set []string, v string) bool {
 	return false
 }
 
-// dedupSep delimits the components of a dedup key. It is the ASCII unit separator,
-// which cannot appear in a target id, template id, or matched-at value.
+// dedupSep delimits the components of a dedup key. It is the ASCII unit
+// separator, which cannot appear in a template id or matched-at value.
 const dedupSep = "\x1f"
 
-// DedupKey is the stable identity of a deduplicated finding: (target, template,
-// matched_at) per ARCHITECTURE.md §3. Ad-hoc scans (no target) collapse to "-".
-// This MUST match the backfill formula in migration 0005 exactly for real data.
+// DedupKey is the global stable identity of a lifecycle finding:
+// (template, matched_at, result discriminator) per ARCHITECTURE.md §3. Scan and
+// target are occurrence provenance, not identity, so observations of the same
+// concrete result merge across both. The discriminator is empty for ordinary
+// single-result events.
 //
 // matched_at is influenced by the scanned host and is not otherwise validated for
 // control characters, so each component is first stripped of them — including the
 // 0x1f separator itself. Without this, a crafted matched_at embedding 0x1f could
 // shift the component boundaries and forge a collision with a different
-// (target, template, matched_at) tuple, merging/overwriting its lifecycle entity
+// (template, matched_at) tuple, merging/overwriting its lifecycle entity
 // (CWE-345/CWE-707). Real components (UUIDs, Nuclei template ids, URL matched-at)
-// carry no control characters, so this is a no-op for them and the key stays
-// byte-identical to the migration 0005 backfill.
-func DedupKey(targetID, templateID, matchedAt string) string {
-	t := targetID
-	if t == "" {
-		t = "-"
+// carry no control characters, so this is a no-op for them. Migration 0030
+// applies the identical sanitation while rebuilding the global keys.
+func DedupKey(templateID, matchedAt, resultDiscriminator string) string {
+	key := sanitizeKeyComponent(templateID) + dedupSep + sanitizeKeyComponent(matchedAt)
+	if resultDiscriminator != "" {
+		key += dedupSep + sanitizeKeyComponent(resultDiscriminator)
 	}
-	return sanitizeKeyComponent(t) + dedupSep + sanitizeKeyComponent(templateID) + dedupSep + sanitizeKeyComponent(matchedAt)
+	return key
 }
 
 // sanitizeKeyComponent drops ASCII control characters (C0 range plus DEL),
@@ -85,11 +87,15 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 	// DedupKey intentionally sees the parsed source fields before their database
 	// projection: it drops C0 controls (including NUL) to retain the established
 	// key semantics, while display columns render NUL visibly as "\0".
-	key := DedupKey(targetID, f.TemplateID, f.MatchedAt)
 	rawProjection, err := findingJSONBProjection(raw)
 	if err != nil {
 		return fmt.Errorf("project raw finding JSON: %w", err)
 	}
+	discriminator, err := resultDiscriminator(rawProjection)
+	if err != nil {
+		return fmt.Errorf("derive finding result identity: %w", err)
+	}
+	key := DedupKey(f.TemplateID, f.MatchedAt, discriminator)
 	rawLine := findingRawLine(raw)
 	f = findingTextProjection(f)
 	tx, err := s.pool.Begin(ctx)
@@ -98,41 +104,75 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 	}
 	defer tx.Rollback(ctx)
 
+	var scanCreatedAt time.Time
+	if err := tx.QueryRow(ctx, `SELECT created_at FROM scans WHERE id = $1`, scanID).Scan(&scanCreatedAt); err != nil {
+		return fmt.Errorf("read occurrence scan order: %w", err)
+	}
+
 	var occID int64
 	if err := tx.QueryRow(ctx,
-		`INSERT INTO findings (scan_id, target_id, dedup_key, template_id, name, severity, host, matched_at, type, cve, tags, raw, raw_line)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
-		scanID, nullStr(targetID), key, f.TemplateID, f.Info.Name, f.Info.Severity, f.Host, f.MatchedAt, f.Type,
-		orEmpty(f.CVEs()), orEmpty(f.Info.Tags), rawProjection, rawLine,
+		`INSERT INTO findings
+		   (scan_id, target_id, dedup_key, result_discriminator, template_id, name, severity,
+		    host, matched_at, type, cve, tags, raw, raw_line)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		 RETURNING id`,
+		scanID, nullStr(targetID), key, discriminator, f.TemplateID, f.Info.Name, f.Info.Severity,
+		f.Host, f.MatchedAt, f.Type, orEmpty(f.CVEs()), orEmpty(f.Info.Tags), rawProjection, rawLine,
 	).Scan(&occID); err != nil {
 		return fmt.Errorf("insert occurrence: %w", err)
 	}
 
 	var lcID int64
-	if err := tx.QueryRow(ctx,
+	// Scans can finish out of creation order. Lifecycle chronology follows the
+	// stable (scan.created_at, scan.id) order, never ingest/finish order, so a
+	// slower older scan cannot move last_seen backwards and manufacture a
+	// mitigation cycle after a newer scan has already completed.
+	const incomingNewer = `(finding_lifecycle.last_seen_scan IS NULL OR COALESCE((
+		SELECT (current_scan.created_at, current_scan.id) < ($13::timestamptz, $11::uuid)
+		  FROM scans current_scan
+		 WHERE current_scan.id = finding_lifecycle.last_seen_scan
+	), true))`
+	const incomingOlder = `(finding_lifecycle.first_seen_scan IS NULL OR COALESCE((
+		SELECT ($13::timestamptz, $11::uuid) < (current_scan.created_at, current_scan.id)
+		  FROM scans current_scan
+		 WHERE current_scan.id = finding_lifecycle.first_seen_scan
+	), true))`
+	const incomingAfterCovering = `COALESCE((
+		SELECT (current_scan.created_at, current_scan.id) < ($13::timestamptz, $11::uuid)
+		  FROM scans current_scan
+		 WHERE current_scan.id = finding_lifecycle.last_covering_scan
+	), true)`
+	upsertLifecycle := fmt.Sprintf(
 		`INSERT INTO finding_lifecycle
-		   (dedup_key, target_id, template_id, name, severity, host, matched_at, type, cve, tags,
-		    first_seen_scan, first_seen_at, last_seen_scan, last_seen_at, latest_occurrence_id)
+		   (dedup_key, result_discriminator, template_id, name, severity, host,
+		    matched_at, type, cve, tags, first_seen_scan, first_seen_at, last_seen_scan,
+		    last_seen_at, latest_occurrence_id)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), $11, now(), $12)
 		 ON CONFLICT (dedup_key) DO UPDATE SET
-		    last_seen_scan       = excluded.last_seen_scan,
-		    last_seen_at         = now(),
-		    name                 = excluded.name,
-		    severity             = excluded.severity,
-		    host                 = excluded.host,
-		    matched_at           = excluded.matched_at,
-		    type                 = excluded.type,
-		    cve                  = excluded.cve,
-		    tags                 = excluded.tags,
-		    latest_occurrence_id = excluded.latest_occurrence_id,
+		    first_seen_scan      = CASE WHEN %[2]s THEN excluded.first_seen_scan ELSE finding_lifecycle.first_seen_scan END,
+		    first_seen_at        = least(finding_lifecycle.first_seen_at, excluded.first_seen_at),
+		    last_seen_scan       = CASE WHEN %[1]s THEN excluded.last_seen_scan ELSE finding_lifecycle.last_seen_scan END,
+		    last_seen_at         = CASE WHEN %[1]s THEN now() ELSE finding_lifecycle.last_seen_at END,
+		    name                 = CASE WHEN %[1]s THEN excluded.name ELSE finding_lifecycle.name END,
+		    severity             = CASE WHEN %[1]s THEN excluded.severity ELSE finding_lifecycle.severity END,
+		    host                 = CASE WHEN %[1]s THEN excluded.host ELSE finding_lifecycle.host END,
+		    matched_at           = CASE WHEN %[1]s THEN excluded.matched_at ELSE finding_lifecycle.matched_at END,
+		    type                 = CASE WHEN %[1]s THEN excluded.type ELSE finding_lifecycle.type END,
+		    cve                  = CASE WHEN %[1]s THEN excluded.cve ELSE finding_lifecycle.cve END,
+		    tags                 = CASE WHEN %[1]s THEN excluded.tags ELSE finding_lifecycle.tags END,
+		    latest_occurrence_id = CASE WHEN %[1]s THEN excluded.latest_occurrence_id ELSE finding_lifecycle.latest_occurrence_id END,
 		    times_mitigated      = finding_lifecycle.times_mitigated + CASE
-		        WHEN finding_lifecycle.last_covering_scan IS NOT NULL
+		        WHEN %[1]s
+		         AND %[3]s
+		         AND finding_lifecycle.last_covering_scan IS NOT NULL
 		         AND finding_lifecycle.last_seen_scan IS DISTINCT FROM finding_lifecycle.last_covering_scan
 		         AND finding_lifecycle.last_seen_scan IS DISTINCT FROM excluded.last_seen_scan
 		        THEN 1 ELSE 0 END
 		 RETURNING id`,
-		key, nullStr(targetID), f.TemplateID, f.Info.Name, f.Info.Severity, f.Host, f.MatchedAt, f.Type,
-		orEmpty(f.CVEs()), orEmpty(f.Info.Tags), scanID, occID,
+		incomingNewer, incomingOlder, incomingAfterCovering)
+	if err := tx.QueryRow(ctx, upsertLifecycle,
+		key, discriminator, f.TemplateID, f.Info.Name, f.Info.Severity, f.Host, f.MatchedAt,
+		f.Type, orEmpty(f.CVEs()), orEmpty(f.Info.Tags), scanID, occID, scanCreatedAt,
 	).Scan(&lcID); err != nil {
 		return fmt.Errorf("upsert lifecycle: %w", err)
 	}
@@ -228,9 +268,9 @@ func postgresTexts(values []string) []string {
 // row reads even when a scan contains thousands of concrete template ids.
 const (
 	// lcDetectionExpr derives the Tenable-style detection state purely from scan
-	// observation. Ad-hoc findings (no target scope) are always "active".
+	// observation across every target/scan associated with this global finding.
 	lcDetectionExpr = `CASE
-		WHEN l.target_id IS NULL OR l.last_covering_scan IS NULL THEN 'active'
+		WHEN l.last_covering_scan IS NULL THEN 'active'
 		WHEN l.last_seen_scan IS DISTINCT FROM l.last_covering_scan
 			THEN CASE WHEN l.times_mitigated >= 1 THEN 'previously_mitigated' ELSE 'mitigated' END
 		WHEN l.first_seen_scan = l.last_covering_scan THEN 'new'
@@ -259,7 +299,7 @@ const (
 // history + disposition; EffectiveSeverity honours a recast.
 type LifecycleRow struct {
 	ID                 int64      `json:"id"`
-	TargetID           *string    `json:"target_id,omitempty"`
+	TargetIDs          []string   `json:"target_ids"`
 	TemplateID         string     `json:"template_id"`
 	Name               string     `json:"name"`
 	Severity           string     `json:"severity"`
@@ -292,18 +332,26 @@ type LifecycleDetail struct {
 	RecastNote      string          `json:"recast_note,omitempty"`
 	RecastBy        string          `json:"recast_by,omitempty"`
 	RecastAt        *time.Time      `json:"recast_at,omitempty"`
+	OccurrenceCount int             `json:"occurrence_count"`
 	Raw             json.RawMessage `json:"raw,omitempty"`
 }
 
 // lcSelectCols is the projection shared by list + detail (up to the raw payload).
-const lcSelectCols = `l.id, l.target_id, l.template_id, l.name, l.severity, l.recast_severity,
+const lcSelectCols = `l.id,
+	ARRAY(
+	    SELECT DISTINCT occurrence.target_id::text
+	      FROM findings occurrence
+	     WHERE occurrence.finding_id = l.id AND occurrence.target_id IS NOT NULL
+	     ORDER BY occurrence.target_id::text
+	) AS target_ids,
+	l.template_id, l.name, l.severity, l.recast_severity,
 	` + effSevExpr + ` AS eff_sev, l.host, l.matched_at, l.type, l.cve, l.tags,
 	l.disposition, l.accept_expires_at, ` + lcDetectionExpr + ` AS detection_state,
 	` + lcEffectiveExpr + ` AS effective_state, l.times_mitigated,
 	l.first_seen_scan, l.last_seen_scan, l.first_seen_at, l.last_seen_at, l.latest_occurrence_id`
 
 func scanLifecycleRow(row pgx.Row, r *LifecycleRow) error {
-	return row.Scan(&r.ID, &r.TargetID, &r.TemplateID, &r.Name, &r.Severity, &r.RecastSeverity,
+	return row.Scan(&r.ID, &r.TargetIDs, &r.TemplateID, &r.Name, &r.Severity, &r.RecastSeverity,
 		&r.EffectiveSeverity, &r.Host, &r.MatchedAt, &r.Type, &r.CVE, &r.Tags,
 		&r.Disposition, &r.AcceptExpiresAt, &r.DetectionState, &r.EffectiveState, &r.TimesMitigated,
 		&r.FirstSeenScan, &r.LastSeenScan, &r.FirstSeenAt, &r.LastSeenAt, &r.LatestOccurrenceID)
@@ -440,16 +488,20 @@ func (s *Store) GetLifecycleFinding(ctx context.Context, id int64) (LifecycleDet
 	var dNote, dBy, rNote, rBy, rawLine *string
 	query := fmt.Sprintf(
 		`SELECT %s, l.disposition_note, l.disposition_by, l.disposition_at,
-		        l.recast_note, l.recast_by, l.recast_at, COALESCE(o.raw_line, o.raw::text)
+		        l.recast_note, l.recast_by, l.recast_at,
+		        (SELECT count(*) FROM findings occurrence WHERE occurrence.finding_id = l.id),
+		        COALESCE(o.raw_line, o.raw::text)
 		 %s
 		 LEFT JOIN findings o ON o.id = l.latest_occurrence_id
-		 WHERE l.id = $1`, lcSelectCols, lifecycleFrom)
+		 WHERE l.id = $1`,
+		lcSelectCols, lifecycleFrom)
 	err := s.pool.QueryRow(ctx, query, id).Scan(
-		&d.ID, &d.TargetID, &d.TemplateID, &d.Name, &d.Severity, &d.RecastSeverity,
+		&d.ID, &d.TargetIDs, &d.TemplateID, &d.Name, &d.Severity, &d.RecastSeverity,
 		&d.EffectiveSeverity, &d.Host, &d.MatchedAt, &d.Type, &d.CVE, &d.Tags,
 		&d.Disposition, &d.AcceptExpiresAt, &d.DetectionState, &d.EffectiveState, &d.TimesMitigated,
 		&d.FirstSeenScan, &d.LastSeenScan, &d.FirstSeenAt, &d.LastSeenAt, &d.LatestOccurrenceID,
-		&dNote, &dBy, &d.DispositionAt, &rNote, &rBy, &d.RecastAt, &rawLine)
+		&dNote, &dBy, &d.DispositionAt, &rNote, &rBy, &d.RecastAt,
+		&d.OccurrenceCount, &rawLine)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return LifecycleDetail{}, ErrNotFound

@@ -224,6 +224,8 @@ export function FindingDetailPage() {
     else navigate("/findings");
   };
   const q = useQuery({ queryKey: ["finding", id], queryFn: () => api.getFinding(id) });
+  const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
+  const targetNames = new Map((targets.data ?? []).map((target) => [target.id, target.name]));
 
   if (q.isLoading) return <Spinner />;
   if (q.isError) return <ErrorText error={q.error} />;
@@ -261,6 +263,25 @@ export function FindingDetailPage() {
             <span className="font-mono text-xs">{raw["matched-at"] || f.matched_at || "—"}</span>
           </Meta>
           <Meta label="Type">{raw.type || f.type || "—"}</Meta>
+          <Meta label="Occurrences">{f.occurrence_count}</Meta>
+          <Meta label="Targets">
+            {(f.target_ids ?? []).length ? (
+              <div className="flex flex-wrap gap-1">
+                {(f.target_ids ?? []).map((targetID) => (
+                  <Link
+                    key={targetID}
+                    to={`/targets?target=${encodeURIComponent(targetID)}`}
+                    title={targetID}
+                    className="text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+                  >
+                    {targetNames.get(targetID) ?? targetID}
+                  </Link>
+                ))}
+              </div>
+            ) : (
+              <span className="text-neutral-400">ad-hoc only</span>
+            )}
+          </Meta>
           <Meta label="Template">
             <Link
               to={`/templates?template=${encodeURIComponent(f.template_id)}`}

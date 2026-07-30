@@ -325,6 +325,7 @@ export function scanLogUrl(id: string): string {
 export interface Occurrence {
   id: number;
   scan_id: string;
+  target_id?: string;
   finding_id?: number;
   template_id: string;
   name: string;
@@ -335,6 +336,10 @@ export interface Occurrence {
   cve: string[];
   tags: string[];
   created_at: string;
+}
+
+export interface OccurrenceDetail extends Occurrence {
+  raw: NucleiRaw;
 }
 
 export type Severity = "critical" | "high" | "medium" | "low" | "info";
@@ -378,12 +383,12 @@ export const STATE_LABELS: Record<EffectiveState, string> = {
   false_positive: "False positive",
 };
 
-// LifecycleFinding is the deduplicated, triageable entity keyed on
-// (target, template, matched_at). detection_state / effective_state and
-// effective_severity (recast-aware) are all derived server-side.
+// LifecycleFinding is the globally deduplicated, triageable entity keyed on
+// (template, matched_at, stable result variant). Scan/target are immutable
+// occurrence provenance, not lifecycle identity.
 export interface LifecycleFinding {
   id: number;
-  target_id?: string;
+  target_ids: string[];
   template_id: string;
   name: string;
   severity: string;
@@ -484,6 +489,7 @@ export interface NucleiRaw {
   "template-id"?: string;
   "template-url"?: string;
   "matcher-name"?: string;
+  "extractor-name"?: string;
   type?: string;
   host?: string;
   ip?: string;
@@ -522,6 +528,7 @@ export interface FindingDetail extends LifecycleFinding {
   recast_note?: string;
   recast_by?: string;
   recast_at?: string;
+  occurrence_count: number;
   raw?: NucleiRaw;
 }
 
@@ -764,6 +771,7 @@ export const api = {
     return request<Page<LifecycleFinding>>("GET", qs ? `/api/findings?${qs}` : "/api/findings");
   },
   getFinding: (id: number | string) => request<FindingDetail>("GET", `/api/findings/${id}`),
+  getOccurrence: (id: number | string) => request<OccurrenceDetail>("GET", `/api/occurrences/${id}`),
   // Analyst overlays (operator only). accept_expires_at applies to "accepted".
   setDisposition: (
     id: number | string,

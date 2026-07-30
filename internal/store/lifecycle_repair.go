@@ -7,36 +7,22 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// computeLifecycleTimeline recomputes one finding's derived history (the fields
-// lcDetectionExpr and the raw-occurrence join in lifecycle.go depend on) from
-// only the scans that still exist. scanIDs is the target's complete scans,
-// oldest first; templatesByScan holds each scan's concrete or positively
-// inferred template coverage; occByScan maps a scan id to the occurrence row id
-// this particular finding has in it.
-//
-// This does not try to reconstruct the *original* history: once a scan is
-// deleted, that information is gone. It instead re-derives history purely from
-// what remains, applying the same template-aware one-step-back rule
-// IngestFinding uses at ingest time (times_mitigated bumps when a finding
-// reappears after being missing from the immediately preceding scan that
-// covered its template). A legacy scan with an occurrence is positive coverage
-// evidence even when its spec predates concrete template ids. An uncovered scan
-// without an occurrence is ignored rather than treated as absence.
-func computeLifecycleTimeline(scanIDs []string, templateID string, templatesByScan map[string]map[string]struct{}, occByScan map[string]int64) (firstSeenScan, lastSeenScan *string, latestOccID *int64, lastCoveringScan *string, timesMitigated int) {
+// computeLifecycleTimeline recomputes one global finding's scan-derived history.
+// scanIDs is oldest first; covered reports whether a scan carried both relevant
+// template coverage and an occurrence-provenance scope associated with this
+// finding. occByScan maps scans that actually observed this exact result variant
+// to their immutable occurrence id.
+func computeLifecycleTimeline(scanIDs []string, covered func(string) bool, occByScan map[string]int64) (firstSeenScan, lastSeenScan *string, latestOccID *int64, lastCoveringScan *string, timesMitigated int) {
 	wasPresent := false
-	everPresent := false // true once the finding has appeared in any scan walked so far
+	everPresent := false
 	for _, scanID := range scanIDs {
 		occID, present := occByScan[scanID]
-		_, covered := templatesByScan[scanID][templateID]
-		if !covered && !present {
+		if !covered(scanID) {
 			continue
 		}
 		coveringID := scanID
 		lastCoveringScan = &coveringID
 		if present {
-			// Only a reappearance *after* an earlier presence is a mitigation
-			// cycle; a finding absent from every scan up to now (including the
-			// very first) is appearing for the first time, not regressing.
 			if everPresent && !wasPresent {
 				timesMitigated++
 			}
@@ -57,129 +43,155 @@ func computeLifecycleTimeline(scanIDs []string, templateID string, templatesBySc
 	return firstSeenScan, lastSeenScan, latestOccID, lastCoveringScan, timesMitigated
 }
 
-// repairLifecycleForTarget recomputes computeLifecycleTimeline's fields for
-// every finding_lifecycle row scoped to targetID (nil for ad-hoc/no-target
-// findings), from whatever scans and occurrences remain after a scan delete. A
-// row with zero surviving occurrences is deleted outright rather than reset to
-// nulls: once every scan that ever observed a finding is gone, the product
-// decision is that the system should behave as if it never saw that finding at
-// all — including any disposition/recast overlay on it — not display an entry
-// with no evidence behind it. A user who wants a finding's history to survive
-// keeps the scans that back it; deleting them all is deleting that history.
-// Call this inside the same transaction as the delete: the repair must be
-// atomic with it, so a target's lifecycle table is never left referencing a
-// scan that no longer exists.
-func repairLifecycleForTarget(ctx context.Context, tx pgx.Tx, targetID *string) error {
-	scanRows, err := tx.Query(ctx,
-		`SELECT id,
-		        ARRAY(
-		            SELECT jsonb_array_elements_text(
-		                CASE
-		                    WHEN jsonb_typeof(spec #> '{templates,template_ids}') = 'array'
-		                    THEN spec #> '{templates,template_ids}'
-		                    ELSE '[]'::jsonb
-		                END
-		            )
-		        )
-		   FROM scans
-		  WHERE target_id IS NOT DISTINCT FROM $1 AND state = 'complete'
-		  ORDER BY created_at ASC, id ASC`,
-		targetID)
-	if err != nil {
-		return fmt.Errorf("list surviving scans: %w", err)
-	}
-	defer scanRows.Close()
-	var scanIDs []string
-	templatesByScan := map[string]map[string]struct{}{}
-	for scanRows.Next() {
-		var id string
-		var templateIDs []string
-		if err := scanRows.Scan(&id, &templateIDs); err != nil {
-			return err
-		}
-		scanIDs = append(scanIDs, id)
-		templatesByScan[id] = make(map[string]struct{}, len(templateIDs))
-		for _, templateID := range templateIDs {
-			templatesByScan[id][templateID] = struct{}{}
-		}
-	}
-	if err := scanRows.Err(); err != nil {
-		return fmt.Errorf("list surviving scans: %w", err)
+// repairLifecycleFindings rebuilds only the global lifecycle rows affected by a
+// scan deletion. A scan covers a global finding when it ran the template in one
+// of the target/ad-hoc scopes that has observed that finding. This preserves the
+// existing fail-closed behavior for unknown scope/template coverage while
+// allowing observations from overlapping target records to share one lifecycle.
+//
+// A row with no surviving occurrence is deleted: deleting every scan that
+// observed a finding deletes the evidence and its analyst overlay with it.
+func repairLifecycleFindings(ctx context.Context, tx pgx.Tx, lifecycleIDs []int64) error {
+	if len(lifecycleIDs) == 0 {
+		return nil
 	}
 
-	// Every occurrence still on record for this target's findings, across the
-	// surviving scans: lifecycle id -> scan id -> occurrence id. An occurrence
-	// also proves scan-wide coverage of its template for legacy specs.
 	occRows, err := tx.Query(ctx,
-		`SELECT finding_id, scan_id, id, template_id
-		   FROM findings
-		  WHERE target_id IS NOT DISTINCT FROM $1 AND finding_id IS NOT NULL`,
-		targetID)
+		`SELECT occurrence.finding_id, occurrence.scan_id, occurrence.id,
+		        observed_scan.target_id
+		   FROM findings occurrence
+		   JOIN scans observed_scan ON observed_scan.id = occurrence.scan_id
+		  WHERE occurrence.finding_id = ANY($1)`,
+		lifecycleIDs)
 	if err != nil {
 		return fmt.Errorf("list surviving occurrences: %w", err)
 	}
-	defer occRows.Close()
 	byLifecycle := map[int64]map[string]int64{}
+	targetsByLifecycle := map[int64]map[string]struct{}{}
 	for occRows.Next() {
 		var lcID, occID int64
-		var scanID, templateID string
-		if err := occRows.Scan(&lcID, &scanID, &occID, &templateID); err != nil {
+		var scanID string
+		var targetID *string
+		if err := occRows.Scan(&lcID, &scanID, &occID, &targetID); err != nil {
+			occRows.Close()
 			return err
 		}
 		if byLifecycle[lcID] == nil {
 			byLifecycle[lcID] = map[string]int64{}
 		}
 		byLifecycle[lcID][scanID] = occID
-		if templates, ok := templatesByScan[scanID]; ok {
-			templates[templateID] = struct{}{}
+		if targetsByLifecycle[lcID] == nil {
+			targetsByLifecycle[lcID] = map[string]struct{}{}
 		}
+		targetsByLifecycle[lcID][targetScopeKey(targetID)] = struct{}{}
 	}
 	if err := occRows.Err(); err != nil {
+		occRows.Close()
 		return fmt.Errorf("list surviving occurrences: %w", err)
 	}
+	occRows.Close()
 
-	// Every lifecycle row on the target, including ones with zero surviving
-	// occurrences (all their scans were deleted) — those are deleted below,
-	// not merely reset.
-	lcRows, err := tx.Query(ctx,
-		`SELECT id, template_id FROM finding_lifecycle WHERE target_id IS NOT DISTINCT FROM $1`,
-		targetID)
+	// Restrict history to target/ad-hoc scopes that still have an occurrence of
+	// one of the affected global findings. Previously this loaded every
+	// completed scan and every concrete template id into memory for one delete.
+	// Positive legacy occurrence evidence comes from every finding in each
+	// selected scan, not only from the affected lifecycle subset.
+	scanRows, err := tx.Query(ctx,
+		`SELECT scans.id, scans.target_id,
+		        ARRAY(
+		            SELECT covered.template_id
+		              FROM (
+		                  SELECT jsonb_array_elements_text(
+		                      CASE
+		                          WHEN jsonb_typeof(scans.spec #> '{templates,template_ids}') = 'array'
+		                          THEN scans.spec #> '{templates,template_ids}'
+		                          ELSE '[]'::jsonb
+		                      END
+		                  ) AS template_id
+		                  UNION
+		                  SELECT occurrence.template_id
+		                    FROM findings occurrence
+		                   WHERE occurrence.scan_id = scans.id
+		              ) covered
+		        )
+		   FROM scans
+		  WHERE scans.state = 'complete'
+		    AND EXISTS (
+		        SELECT 1
+		          FROM findings associated
+		          JOIN scans observed_scan ON observed_scan.id = associated.scan_id
+		         WHERE associated.finding_id = ANY($1)
+		           AND observed_scan.target_id IS NOT DISTINCT FROM scans.target_id
+		    )
+		  ORDER BY scans.created_at ASC, scans.id ASC`,
+		lifecycleIDs)
 	if err != nil {
-		return fmt.Errorf("list target lifecycle rows: %w", err)
+		return fmt.Errorf("list surviving scans: %w", err)
 	}
-	defer lcRows.Close()
-	var lcIDs []int64
+	var scanIDs []string
+	targetByScan := map[string]string{}
+	templatesByScan := map[string]map[string]struct{}{}
+	for scanRows.Next() {
+		var id string
+		var targetID *string
+		var templateIDs []string
+		if err := scanRows.Scan(&id, &targetID, &templateIDs); err != nil {
+			scanRows.Close()
+			return err
+		}
+		scanIDs = append(scanIDs, id)
+		targetByScan[id] = targetScopeKey(targetID)
+		templatesByScan[id] = make(map[string]struct{}, len(templateIDs))
+		for _, templateID := range templateIDs {
+			templatesByScan[id][templateID] = struct{}{}
+		}
+	}
+	if err := scanRows.Err(); err != nil {
+		scanRows.Close()
+		return fmt.Errorf("list surviving scans: %w", err)
+	}
+	scanRows.Close()
+
+	lcRows, err := tx.Query(ctx,
+		`SELECT id, template_id FROM finding_lifecycle WHERE id = ANY($1)`,
+		lifecycleIDs)
+	if err != nil {
+		return fmt.Errorf("list affected lifecycle rows: %w", err)
+	}
 	templateByLifecycle := map[int64]string{}
+	var existingIDs []int64
 	for lcRows.Next() {
 		var id int64
 		var templateID string
 		if err := lcRows.Scan(&id, &templateID); err != nil {
+			lcRows.Close()
 			return err
 		}
-		lcIDs = append(lcIDs, id)
+		existingIDs = append(existingIDs, id)
 		templateByLifecycle[id] = templateID
 	}
 	if err := lcRows.Err(); err != nil {
-		return fmt.Errorf("list target lifecycle rows: %w", err)
+		lcRows.Close()
+		return fmt.Errorf("list affected lifecycle rows: %w", err)
 	}
+	lcRows.Close()
 
-	for _, lcID := range lcIDs {
-		firstSeenScan, lastSeenScan, latestOccID, lastCoveringScan, timesMitigated := computeLifecycleTimeline(
-			scanIDs, templateByLifecycle[lcID], templatesByScan, byLifecycle[lcID])
+	for _, lcID := range existingIDs {
+		templateID := templateByLifecycle[lcID]
+		covered := func(scanID string) bool {
+			if _, ok := templatesByScan[scanID][templateID]; !ok {
+				return false
+			}
+			_, ok := targetsByLifecycle[lcID][targetByScan[scanID]]
+			return ok
+		}
+		firstSeenScan, lastSeenScan, latestOccID, lastCoveringScan, timesMitigated :=
+			computeLifecycleTimeline(scanIDs, covered, byLifecycle[lcID])
 		if lastSeenScan == nil {
-			// No surviving scan ever observed this finding — nothing left to
-			// derive a state from, so the row itself goes. findings.finding_id
-			// referencing it is ON DELETE SET NULL, so any stray occurrence row
-			// from a non-complete scan is simply unlinked, not an error.
 			if _, err := tx.Exec(ctx, `DELETE FROM finding_lifecycle WHERE id = $1`, lcID); err != nil {
 				return fmt.Errorf("drop evidence-free lifecycle %d: %w", lcID, err)
 			}
 			continue
-		}
-		// Ad-hoc lifecycle rows have no stable target scope and always remain
-		// active, so they intentionally carry no comparison-scan pointer.
-		if targetID == nil {
-			lastCoveringScan = nil
 		}
 		if _, err := tx.Exec(ctx,
 			`UPDATE finding_lifecycle
@@ -191,4 +203,11 @@ func repairLifecycleForTarget(ctx context.Context, tx pgx.Tx, targetID *string) 
 		}
 	}
 	return nil
+}
+
+func targetScopeKey(targetID *string) string {
+	if targetID == nil {
+		return ""
+	}
+	return *targetID
 }

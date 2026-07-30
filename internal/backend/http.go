@@ -204,13 +204,12 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, identityFrom(r.Context()))
 }
 
-// createScanRequest launches a scan by selecting a scan policy (#87) — the
-// policy is the central, reusable scan configuration, carrying the target,
-// template set, and execution knobs. There is no ad-hoc target/spec path: every
-// scan names a policy, so scope is guaranteed by construction (a policy always
-// references a stored target).
+// createScanRequest launches a scan by selecting an approved stored target and a
+// reusable scan policy (#137). There is no ad-hoc host/spec path: target_id is an
+// FK-backed allowlist record, so scope remains guaranteed by construction.
 type createScanRequest struct {
 	ScanPolicyID string `json:"scan_policy_id"`
+	TargetID     string `json:"target_id"`
 }
 
 func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
@@ -238,22 +237,22 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildScanSpec resolves a createScanRequest into a concrete spec + config link.
-// Every scan is launched from a scan policy, so this just requires one and
-// delegates to resolvePolicySpec.
+// Every scan names both its approved scope and reusable configuration.
 func (s *Server) buildScanSpec(ctx context.Context, req createScanRequest) (types.ScanSpec, store.ScanLink, error) {
 	if req.ScanPolicyID == "" {
 		return types.ScanSpec{}, store.ScanLink{}, errors.New("scan_policy_id is required")
 	}
-	return s.resolvePolicySpec(ctx, req.ScanPolicyID)
+	if req.TargetID == "" {
+		return types.ScanSpec{}, store.ScanLink{}, errors.New("target_id is required")
+	}
+	return s.resolvePolicySpec(ctx, req.ScanPolicyID, req.TargetID)
 }
 
-// resolvePolicySpec builds a scan spec + config link from a scan policy: it
-// resolves the policy's target + required template set exactly like a
-// config-driven scan, then overlays the policy's execution knobs. Shared by the
-// ad-hoc dispatch and the scheduler, so both dispatch identical scans from the
-// same policy. The scope guardrail (§6) holds by construction — the policy always
-// references a stored target, so a scan can't name an out-of-scope host.
-func (s *Server) resolvePolicySpec(ctx context.Context, policyID string) (types.ScanSpec, store.ScanLink, error) {
+// resolvePolicySpec builds a concrete spec from a target-independent policy and
+// an approved stored target. Shared by ad-hoc and scheduled dispatch. The scope
+// guardrail (§6) holds because targetID can reference only the target allowlist;
+// callers still cannot submit an arbitrary host/spec.
+func (s *Server) resolvePolicySpec(ctx context.Context, policyID, targetID string) (types.ScanSpec, store.ScanLink, error) {
 	pol, err := s.store.GetScanPolicy(ctx, policyID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -261,7 +260,7 @@ func (s *Server) resolvePolicySpec(ctx context.Context, policyID string) (types.
 		}
 		return types.ScanSpec{}, store.ScanLink{}, err
 	}
-	spec, link, err := s.resolveConfigSpec(ctx, pol.TargetID, pol.TemplateSetID)
+	spec, link, err := s.resolveConfigSpec(ctx, targetID, pol.TemplateSetID)
 	if err != nil {
 		return types.ScanSpec{}, store.ScanLink{}, err
 	}

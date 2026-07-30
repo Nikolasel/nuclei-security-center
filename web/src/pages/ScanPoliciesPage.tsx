@@ -56,10 +56,8 @@ function portsInvalid(s: string): boolean {
 
 function ScanPolicyModal({ existing, onClose }: { existing?: ScanPolicy; onClose: () => void }) {
   const qc = useQueryClient();
-  const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
   const templateSets = useQuery({ queryKey: ["template-sets"], queryFn: () => api.listTemplateSets() });
   const [name, setName] = useState(existing?.name ?? "");
-  const [targetId, setTargetId] = useState(existing?.target_id ?? "");
   const [templateSetId, setTemplateSetId] = useState(existing?.template_set_id ?? "");
   const [rateLimit, setRateLimit] = useState(existing?.rate_limit != null ? String(existing.rate_limit) : "");
   const [concurrency, setConcurrency] = useState(
@@ -100,13 +98,12 @@ function ScanPolicyModal({ existing, onClose }: { existing?: ScanPolicy; onClose
         knobInvalid(discoveryRate) ||
         knobInvalid(discoveryProbeTimeoutMs) ||
         knobInvalid(discoveryRetries)));
-  const canSave = name.trim() !== "" && targetId !== "" && templateSetId !== "" && !anyInvalid;
+  const canSave = name.trim() !== "" && templateSetId !== "" && !anyInvalid;
 
   const save = useMutation({
     mutationFn: () => {
       const body: Partial<ScanPolicy> = {
         name: name.trim(),
-        target_id: targetId,
         template_set_id: templateSetId,
         rate_limit: parseKnob(rateLimit),
         concurrency: parseKnob(concurrency),
@@ -138,16 +135,6 @@ function ScanPolicyModal({ existing, onClose }: { existing?: ScanPolicy; onClose
       <div className="space-y-4">
         <Field label="Name">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="fragile-device" />
-        </Field>
-        <Field label="Target (scope allowlist)">
-          <Select value={targetId} onChange={(e) => setTargetId(e.target.value)} className="w-full">
-            <option value="">Select a target…</option>
-            {(targets.data ?? []).map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name} ({t.host_count} host{t.host_count === 1 ? "" : "s"})
-              </option>
-            ))}
-          </Select>
         </Field>
         <Field label="Template set">
           <Select value={templateSetId} onChange={(e) => setTemplateSetId(e.target.value)} className="w-full">
@@ -350,9 +337,7 @@ export function ScanPoliciesPage() {
   const [editing, setEditing] = useState<ScanPolicy | "new" | null>(null);
 
   const q = useQuery({ queryKey: ["scan-policies"], queryFn: () => api.listScanPolicies() });
-  const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
   const templateSets = useQuery({ queryKey: ["template-sets"], queryFn: () => api.listTemplateSets() });
-  const targetName = (id: string) => targets.data?.find((t) => t.id === id)?.name ?? id.slice(0, 8);
   const templateSetName = (id?: string) =>
     id ? (templateSets.data?.find((t) => t.id === id)?.name ?? id.slice(0, 8)) : "missing";
   const del = useMutation({
@@ -366,8 +351,7 @@ export function ScanPoliciesPage() {
         <div>
           <h1 className="text-xl font-semibold">Scan Policies</h1>
           <p className="text-sm text-neutral-500">
-            The reusable scan configuration — target, template set, and execution knobs. Every scan and
-            schedule runs a policy.
+            Reusable template and execution settings. Choose the approved target when running or scheduling.
           </p>
         </div>
         {canWrite && (
@@ -388,7 +372,6 @@ export function ScanPoliciesPage() {
               <thead>
                 <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
                   <th className="px-3 py-2 font-medium">Name</th>
-                  <th className="px-3 py-2 font-medium">Target</th>
                   <th className="px-3 py-2 font-medium">Template set</th>
                   <th className="px-3 py-2 font-medium">Rate limit</th>
                   <th className="px-3 py-2 font-medium">Concurrency</th>
@@ -402,7 +385,6 @@ export function ScanPoliciesPage() {
                 {(q.data ?? []).map((p) => (
                   <tr key={p.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
                     <td className="px-3 py-2 font-medium">{p.name}</td>
-                    <td className="px-3 py-2 text-neutral-600 dark:text-neutral-400">{targetName(p.target_id)}</td>
                     <td className="px-3 py-2 text-neutral-600 dark:text-neutral-400">
                       {templateSetName(p.template_set_id)}
                     </td>
@@ -435,7 +417,7 @@ export function ScanPoliciesPage() {
                 ))}
                 {(q.data ?? []).length === 0 && (
                   <tr>
-                    <td colSpan={9} className="px-3 py-8 text-center text-neutral-400">
+                    <td colSpan={7 + (canWrite || canDelete ? 1 : 0)} className="px-3 py-8 text-center text-neutral-400">
                       No scan policies yet.
                     </td>
                   </tr>

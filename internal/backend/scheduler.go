@@ -130,7 +130,7 @@ func (s *Scheduler) dispatch(ctx context.Context, sc store.Schedule, now time.Ti
 	}
 
 	scanID := ""
-	spec, link, err := s.srv.resolvePolicySpec(ctx, sc.ScanPolicyID)
+	spec, link, err := s.srv.resolvePolicySpec(ctx, sc.ScanPolicyID, sc.TargetID)
 	if err != nil {
 		log.Error("resolve schedule scan policy", "err", err)
 	} else {

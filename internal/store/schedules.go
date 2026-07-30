@@ -11,9 +11,8 @@ import (
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
-// Schedule ties a scan policy to a cron expression (#87 — the policy carries the
-// target, template set, and execution knobs, so the schedule just picks one and a
-// cadence). The backend ticker dispatches schedules whose NextRunAt has arrived;
+// Schedule ties an approved target and reusable scan policy to a cron expression
+// (#137). The backend ticker dispatches schedules whose NextRunAt has arrived;
 // cron parsing and NextRunAt computation live in the backend layer, so this
 // struct just stores the results. LastScanID/LastRunAt record the most recent
 // dispatch.
@@ -21,6 +20,7 @@ type Schedule struct {
 	ID           string     `json:"id"`
 	Name         string     `json:"name"`
 	ScanPolicyID string     `json:"scan_policy_id"`
+	TargetID     string     `json:"target_id"`
 	Cron         string     `json:"cron"`
 	Enabled      bool       `json:"enabled"`
 	NextRunAt    *time.Time `json:"next_run_at,omitempty"`
@@ -31,14 +31,14 @@ type Schedule struct {
 	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
-const scheduleCols = `id, name, scan_policy_id, cron, enabled,
+const scheduleCols = `id, name, scan_policy_id, target_id, cron, enabled,
 	next_run_at, last_run_at, last_scan_id, created_by, created_at, updated_at`
 
 // scanSchedule reads one schedule row (column order must match scheduleCols).
 func scanSchedule(row pgx.Row) (Schedule, error) {
 	var s Schedule
 	var lastScanID, createdBy *string
-	err := row.Scan(&s.ID, &s.Name, &s.ScanPolicyID, &s.Cron, &s.Enabled,
+	err := row.Scan(&s.ID, &s.Name, &s.ScanPolicyID, &s.TargetID, &s.Cron, &s.Enabled,
 		&s.NextRunAt, &s.LastRunAt, &lastScanID, &createdBy, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		return Schedule{}, err
@@ -53,10 +53,10 @@ func scanSchedule(row pgx.Row) (Schedule, error) {
 func (s *Store) CreateSchedule(ctx context.Context, in Schedule) (Schedule, error) {
 	in.ID = types.NewID()
 	row := s.pool.QueryRow(ctx,
-		`INSERT INTO schedules (id, name, scan_policy_id, cron, enabled, next_run_at, created_by)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`INSERT INTO schedules (id, name, scan_policy_id, target_id, cron, enabled, next_run_at, created_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 RETURNING `+scheduleCols,
-		in.ID, in.Name, in.ScanPolicyID, in.Cron, in.Enabled, in.NextRunAt, nullStr(in.CreatedBy),
+		in.ID, in.Name, in.ScanPolicyID, in.TargetID, in.Cron, in.Enabled, in.NextRunAt, nullStr(in.CreatedBy),
 	)
 	out, err := scanSchedule(row)
 	if err != nil {
@@ -107,10 +107,10 @@ func (s *Store) ListSchedules(ctx context.Context) ([]Schedule, error) {
 func (s *Store) UpdateSchedule(ctx context.Context, id string, in Schedule) (Schedule, error) {
 	row := s.pool.QueryRow(ctx,
 		`UPDATE schedules
-		 SET name = $2, scan_policy_id = $3, cron = $4, enabled = $5, next_run_at = $6, updated_at = now()
+		 SET name = $2, scan_policy_id = $3, target_id = $4, cron = $5, enabled = $6, next_run_at = $7, updated_at = now()
 		 WHERE id = $1
 		 RETURNING `+scheduleCols,
-		id, in.Name, in.ScanPolicyID, in.Cron, in.Enabled, in.NextRunAt,
+		id, in.Name, in.ScanPolicyID, in.TargetID, in.Cron, in.Enabled, in.NextRunAt,
 	)
 	out, err := scanSchedule(row)
 	if err != nil {

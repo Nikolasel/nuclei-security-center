@@ -168,16 +168,14 @@ export interface TemplateSyncStatus {
   template_count: number;
 }
 
-// ScanPolicy (#87) is the central, reusable scan configuration: it bundles
-// EVERYTHING a scan needs — the target to scan (target_id, required — the scope),
-// a required template set (including the dynamic all-active mode), and Nuclei's
-// execution knobs. Every scan (ad-hoc or scheduled) is launched by selecting a
-// policy. Each knob is optional: a null field means "use the built-in default"
+// ScanPolicy (#87, reshaped by #137) is the reusable HOW-to-scan configuration:
+// required templates plus Nuclei/discovery knobs. The approved target is chosen
+// independently at ad-hoc launch or stored on a schedule. Each knob is optional:
+// a null field means "use the built-in default"
 // (rate 150 / concurrency 25 / timeout 600s / max-host-error Nuclei's own 30).
 export interface ScanPolicy {
   id: string;
   name: string;
-  target_id: string;
   template_set_id: string;
   rate_limit?: number | null;
   concurrency?: number | null;
@@ -205,14 +203,15 @@ export interface ScanPolicy {
   updated_at: string;
 }
 
-// Schedule pairs a scan policy with a cron cadence (#87 — the policy carries the
-// target, template set, and knobs). The backend ticker dispatches schedules whose
+// Schedule pairs an approved target with a reusable scan policy and cron cadence
+// (#137). The backend ticker dispatches schedules whose
 // next_run_at has arrived. next_run_at is null when disabled; last_run_at/
 // last_scan_id record the most recent run.
 export interface Schedule {
   id: string;
   name: string;
   scan_policy_id: string;
+  target_id: string;
   cron: string;
   enabled: boolean;
   next_run_at?: string;
@@ -772,7 +771,7 @@ export const api = {
 
   listScans: () => request<Scan[]>("GET", "/api/scans"),
   getScan: (id: string) => request<Scan>("GET", `/api/scans/${id}`),
-  createScan: (body: { scan_policy_id: string }) =>
+  createScan: (body: { scan_policy_id: string; target_id: string }) =>
     request<{ scan_id: string }>("POST", "/api/scans", body),
   cancelScan: (id: string) => request<void>("POST", `/api/scans/${id}/cancel`),
   deleteScan: (id: string) => request<void>("DELETE", `/api/scans/${id}`),

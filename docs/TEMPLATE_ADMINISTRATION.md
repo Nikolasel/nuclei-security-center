@@ -10,8 +10,8 @@ product owner can verify the design through the web UI without using the API.
    - **custom** — organization-authored YAML stored byte-for-byte.
 2. **Template sets are exact selections.** Filters help find templates in the editor, but a saved
    set records explicit IDs. A later upstream sync does not silently add newly matching templates.
-3. **Scan policies choose the templates.** A policy references one target and optionally one
-   template set. No set means all active templates.
+3. **Scan policies choose the templates.** A policy references one required template set (exact
+   membership or dynamic all-active). The approved target is selected when launching or scheduling.
 4. **Scanner nodes receive the full active catalog.** Before a scan, the backend ensures the chosen
    node has the current content-addressed bundle. The node selects the policy's exact IDs from that
    verified bundle.

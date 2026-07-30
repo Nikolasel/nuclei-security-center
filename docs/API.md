@@ -13,15 +13,15 @@ config writes need `operator`, deletes need `admin`.
 ## Scans
 
 A scan is launched by selecting a **scan policy** (`scan_policy_id`) — the central, reusable
-scan configuration that carries the target, template set, and execution knobs (see
-[Scan policies](#config-scan-policies)). There is no ad-hoc target/spec path: every scan names
-a policy, so scope is guaranteed by construction (a policy always references a stored target).
-Create a policy first, then:
+template and execution configuration — and an approved **target** (`target_id`; see
+[Scan policies](#config-scan-policies)). There is no ad-hoc host/spec path: every scan names a
+stored target, so scope is guaranteed by construction. Create a policy and target first, then:
 
 ```sh
-# start a scan from a scan policy
+# start a scan using a policy against an approved target
 curl -sb jar.txt -X POST localhost:8080/api/scans \
-  -H 'content-type: application/json' -d '{"scan_policy_id":"<id>"}'   # => {"scan_id":"..."}
+  -H 'content-type: application/json' \
+  -d '{"scan_policy_id":"<policy_id>","target_id":"<target_id>"}'   # => {"scan_id":"..."}
 # check scan state (queued → running → complete)
 curl -sb jar.txt localhost:8080/api/scans/<scan_id>
 # occurrences observed by one scan (paginated envelope: {items,total,limit,offset})
@@ -30,7 +30,7 @@ curl -sb jar.txt "localhost:8080/api/scans/<scan_id>/findings" | jq
 
 Each scan record carries the `scan_policy_id` / `scan_policy_name` it ran, the
 `template_set_id` / `template_set_name` selected at dispatch, plus the `target_id` /
-`target_name` / `target_host_count` the policy resolved to (linked fields are absent once their
+`target_name` / `target_host_count` selected at dispatch (linked fields are absent once their
 source row has been deleted — scan history survives), so a queued/running scan is identifiable
 before any findings appear. `target_host_count` (and a
 target's own `host_count` from [Config](#config-targets--template-sets)) is the real
@@ -53,9 +53,8 @@ multi-host scan — still ingests whatever Nuclei had already written to its JSO
 being killed, rather than discarding it. The scan record stays `failed` (it's honest that the run
 didn't finish), but findings from hosts that completed before the timeout aren't lost.
 
-An empty body (or an unknown `scan_policy_id`) is rejected `400` — there is no implicit default
-scan, and because a policy always references a stored target, a scan can't be pointed at an
-out-of-scope asset.
+An empty body, missing ID, or unknown `scan_policy_id` / `target_id` is rejected `400` — there is
+no implicit default scan and no path to submit an arbitrary host.
 
 **Stop / delete.** A queued or running scan can be stopped (operator); the backend marks it
 `cancelled` and best-effort signals the node to abort the run. A terminal scan can be deleted
@@ -69,9 +68,8 @@ curl -sb jar.txt -X POST localhost:8080/api/scans/<scan_id>/cancel   # => 204
 curl -sb jar.txt -X DELETE localhost:8080/api/scans/<scan_id>        # => 204
 ```
 
-To tune what/how a scan runs — a different target, template selection, or execution knobs —
-edit or create a [scan policy](#config-scan-policies) and select it; the scan itself takes only
-a `scan_policy_id`.
+To tune how a scan runs, edit or create a [scan policy](#config-scan-policies). Select the target
+separately at launch, so the same policy can be reused across approved scopes.
 
 ## Findings lifecycle
 
@@ -254,20 +252,21 @@ the other system's API) applied to a different consumer.
 
 ## Schedules
 
-A schedule pairs a **scan policy** with a **cron** cadence and runs it unattended (the policy
-carries the target, template set, and knobs — the schedule just picks one and a cadence). A
-backend ticker wakes each minute and dispatches the schedules whose next fire time has arrived —
+A schedule pairs a **scan policy** and approved **target** with a **cron** cadence and runs them
+unattended. The policy supplies the template set and execution knobs; the schedule supplies the
+target and cadence. A backend ticker wakes each minute and dispatches due schedules —
 through the same path as an ad-hoc scan, so scheduled scans are tracked in the finding lifecycle
 exactly like manual ones (a scheduled scan carries `source: "schedule"`). Postgres is the source
 of truth: enable/disable and the next-run time persist across restarts, and a run missed while
 the backend was down fires once on the next tick, then reschedules forward.
 
 ```sh
-# create a schedule: run a scan policy at 03:00 nightly (5-field cron; also
+# create a schedule: run a policy against a target at 03:00 nightly (5-field cron; also
 # accepts @hourly/@daily/… and "@every 30m").
 curl -sb jar.txt -X POST localhost:8080/api/schedules -H 'content-type: application/json' -d '{
   "name": "nightly-prod",
   "scan_policy_id": "<scan_policy_id>",
+  "target_id": "<target_id>",
   "cron": "0 3 * * *",
   "enabled": true
 }'
@@ -275,7 +274,7 @@ curl -sb jar.txt -X POST localhost:8080/api/schedules -H 'content-type: applicat
 curl -sb jar.txt localhost:8080/api/schedules | jq
 # pause a schedule (edit) — enabled:false clears its next run
 curl -sb jar.txt -X PUT localhost:8080/api/schedules/<id> -H 'content-type: application/json' \
-  -d '{"name":"nightly-prod","scan_policy_id":"<scan_policy_id>","cron":"0 3 * * *","enabled":false}'
+  -d '{"name":"nightly-prod","scan_policy_id":"<scan_policy_id>","target_id":"<target_id>","cron":"0 3 * * *","enabled":false}'
 # dispatch once now, off-schedule (leaves the cron cadence untouched)
 curl -sb jar.txt -X POST localhost:8080/api/schedules/<id>/run     # => {"scan_id":"..."}
 curl -sb jar.txt -X DELETE localhost:8080/api/schedules/<id>       # remove
@@ -303,8 +302,8 @@ but a CIDR entry expands to its full address-range size (`"hosts":["10.0.0.0/24"
 
 Both resources support the full REST set: `GET|POST /api/targets`,
 `GET|PUT|DELETE /api/targets/{id}` (and likewise `/api/template-sets`). Deleting a target or
-template set nulls the link on past scans but never deletes scan history. A target still in use
-by a scan policy can't be deleted out from under it — the policy references it (see below).
+template set nulls the link on past scans but never deletes scan history. Deleting a target also
+cascades its future schedules; reusable scan policies are unaffected.
 
 ### Template-set membership
 
@@ -472,12 +471,11 @@ validated; it omits `validation` when the conflict policy selected no custom wri
 
 ## Config: scan policies
 
-A **scan policy** is the central, reusable **scan configuration** — it bundles *everything* a
-scan needs: the **target** (`target_id`, required — the scope), a required **template set**
-(`template_set_id`, exact or dynamic all-active), and Nuclei's execution knobs
-(`rate_limit` / `concurrency` / `timeout_sec` / `max_host_error`). **Every scan and schedule is
-launched by selecting a policy** — the scan/schedule body carries only a `scan_policy_id`. Each
-knob is optional: a `null` (omitted) field means "use the built-in default" (rate `150` /
+A **scan policy** is the central, reusable **how to scan** configuration. It bundles a required
+**template set** (`template_set_id`, exact or dynamic all-active) and Nuclei's execution knobs
+(`rate_limit` / `concurrency` / `timeout_sec` / `max_host_error`). Every scan and schedule
+selects both a policy and an approved target, allowing one policy to be reused across scopes.
+Each knob is optional: a `null` (omitted) field means "use the built-in default" (rate `150` /
 concurrency `25` / timeout `600`s / `max_host_error` Nuclei's own `30`), so a policy can tune
 just one knob and leave the rest alone.
 
@@ -488,25 +486,25 @@ lowering the rate, is the fix for scanning fragile devices that trip the default
 alone.
 
 ```sh
-# a policy for a fragile device: which target/templates + slow it down, tolerate more host errors
+# a policy for fragile devices: select templates, slow down, tolerate more host errors
 curl -sb jar.txt -X POST localhost:8080/api/scan-policies -H 'content-type: application/json' -d '{
   "name": "fragile-device",
-  "target_id": "<target_id>",
   "template_set_id": "<template_set_id>",
   "rate_limit": 20,
   "concurrency": 5,
   "max_host_error": 100
 }'
-# launch a scan with it
-curl -sb jar.txt -X POST localhost:8080/api/scans -d '{"scan_policy_id":"<id>"}'
+# launch it against an approved target
+curl -sb jar.txt -X POST localhost:8080/api/scans \
+  -d '{"scan_policy_id":"<policy_id>","target_id":"<target_id>"}'
 ```
 
 Full REST set: `GET|POST /api/scan-policies`, `GET|PUT|DELETE /api/scan-policies/{id}` (reads
 `viewer`, create/edit `operator`, delete `admin`, audited as `config_changed`). The
-`target_id`/`template_set_id` must reference existing rows (`400` otherwise). Deleting a policy
-nulls the link on past scans (history survives) and **cascades away any schedules built on it**;
-deleting a policy's target cascades the policy away too. A template set referenced by a policy
-cannot be deleted until the policy is changed or removed.
+`template_set_id` must reference an existing row (`400` otherwise). Deleting a policy nulls the
+link on past scans (history survives) and **cascades away any schedules built on it**. Deleting a
+target cascades schedules for that target but leaves policies intact. A template set referenced
+by a policy cannot be deleted until the policy is changed or removed.
 
 ## Scanner nodes
 
@@ -563,15 +561,13 @@ while a later cadence retries a skipped periodic push. Audited `config_changed`
 
 A scan may only target hosts that fall inside an **approved target record**. This is the most
 important guardrail: for an active scanner, accidentally aiming at out-of-scope or third-party
-assets is the difference between a tool and an incident. Every scan is launched from a **scan
-policy**, and a policy always references a stored target — so a scan is **in scope by
-construction**: there is no path to name a host that isn't already an approved target. (Targets
-remain a first-class resource so `host_count` and the allowlist stay meaningful, and so several
-policies can reuse the same approved scope.)
+assets is the difference between a tool and an incident. Every scan selects a **scan policy**
+and a stored **target**, so it is **in scope by construction**: there is no path to name a host
+that isn't already an approved target. (Targets remain a first-class resource so `host_count`
+and the allowlist stay meaningful, and policies can be reused across approved scopes.)
 
 Target hosts themselves are still validated as hostnames/IPs/CIDRs/URLs when a target is
-created. The allowlist **fails closed** — with no approved targets there is nothing to build a
-policy from, so no scan can run until you add one.
+created. The allowlist **fails closed** — with no approved targets, no scan can run.
 
 ## Service accounts
 

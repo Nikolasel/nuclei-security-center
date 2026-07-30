@@ -200,11 +200,11 @@ func (s *Server) handleUpdateScanPolicy(w http.ResponseWriter, r *http.Request) 
 }
 
 // writeScanPolicyErr maps store sentinels for scan-policy writes. A bad
-// target_id/template_set_id surfaces as ErrInvalidRef (an FK violation), reported
+// template_set_id surfaces as ErrInvalidRef (an FK violation), reported
 // as a 400 distinct from a 404 on the policy itself; everything else falls through.
 func (s *Server) writeScanPolicyErr(w http.ResponseWriter, err error) {
 	if errors.Is(err, store.ErrInvalidRef) {
-		http.Error(w, "unknown target_id or template_set_id", http.StatusBadRequest)
+		http.Error(w, "unknown template_set_id", http.StatusBadRequest)
 		return
 	}
 	s.writeStoreErr(w, err)

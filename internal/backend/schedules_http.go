@@ -96,7 +96,7 @@ func (s *Server) handleRunSchedule(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreErr(w, err)
 		return
 	}
-	spec, link, err := s.resolvePolicySpec(r.Context(), sc.ScanPolicyID)
+	spec, link, err := s.resolvePolicySpec(r.Context(), sc.ScanPolicyID, sc.TargetID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -112,11 +112,11 @@ func (s *Server) handleRunSchedule(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeScheduleErr maps store sentinels for schedule writes. An unknown target
-// or template set surfaces as ErrInvalidRef (a FK violation), reported as a 400
+// or scan policy surfaces as ErrInvalidRef (a FK violation), reported as a 400
 // distinct from a 404 on the schedule itself; everything else falls through.
 func (s *Server) writeScheduleErr(w http.ResponseWriter, err error) {
 	if errors.Is(err, store.ErrInvalidRef) {
-		http.Error(w, "unknown scan_policy_id", http.StatusBadRequest)
+		http.Error(w, "unknown scan_policy_id or target_id", http.StatusBadRequest)
 		return
 	}
 	s.writeStoreErr(w, err)

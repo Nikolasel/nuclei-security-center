@@ -97,7 +97,7 @@ func repairLifecycleFindings(ctx context.Context, tx pgx.Tx, lifecycleIDs []int6
 	// Positive legacy occurrence evidence comes from every finding in each
 	// selected scan, not only from the affected lifecycle subset.
 	scanRows, err := tx.Query(ctx,
-		`SELECT scans.id, scans.target_id,
+		`SELECT scans.id, scans.target_id, scans.covered_hosts,
 		        ARRAY(
 		            SELECT covered.template_id
 		              FROM (
@@ -131,11 +131,12 @@ func repairLifecycleFindings(ctx context.Context, tx pgx.Tx, lifecycleIDs []int6
 	var scanIDs []string
 	targetByScan := map[string]string{}
 	templatesByScan := map[string]map[string]struct{}{}
+	coveredHostsByScan := map[string]map[string]struct{}{}
 	for scanRows.Next() {
 		var id string
 		var targetID *string
-		var templateIDs []string
-		if err := scanRows.Scan(&id, &targetID, &templateIDs); err != nil {
+		var templateIDs, coveredHosts []string
+		if err := scanRows.Scan(&id, &targetID, &coveredHosts, &templateIDs); err != nil {
 			scanRows.Close()
 			return err
 		}
@@ -145,6 +146,12 @@ func repairLifecycleFindings(ctx context.Context, tx pgx.Tx, lifecycleIDs []int6
 		for _, templateID := range templateIDs {
 			templatesByScan[id][templateID] = struct{}{}
 		}
+		if coveredHosts != nil {
+			coveredHostsByScan[id] = make(map[string]struct{}, len(coveredHosts))
+			for _, host := range coveredHosts {
+				coveredHostsByScan[id][host] = struct{}{}
+			}
+		}
 	}
 	if err := scanRows.Err(); err != nil {
 		scanRows.Close()
@@ -153,22 +160,24 @@ func repairLifecycleFindings(ctx context.Context, tx pgx.Tx, lifecycleIDs []int6
 	scanRows.Close()
 
 	lcRows, err := tx.Query(ctx,
-		`SELECT id, template_id FROM finding_lifecycle WHERE id = ANY($1)`,
+		`SELECT id, template_id, endpoint_host FROM finding_lifecycle WHERE id = ANY($1)`,
 		lifecycleIDs)
 	if err != nil {
 		return fmt.Errorf("list affected lifecycle rows: %w", err)
 	}
 	templateByLifecycle := map[int64]string{}
+	hostByLifecycle := map[int64]string{}
 	var existingIDs []int64
 	for lcRows.Next() {
 		var id int64
-		var templateID string
-		if err := lcRows.Scan(&id, &templateID); err != nil {
+		var templateID, endpointHost string
+		if err := lcRows.Scan(&id, &templateID, &endpointHost); err != nil {
 			lcRows.Close()
 			return err
 		}
 		existingIDs = append(existingIDs, id)
 		templateByLifecycle[id] = templateID
+		hostByLifecycle[id] = endpointHost
 	}
 	if err := lcRows.Err(); err != nil {
 		lcRows.Close()
@@ -182,7 +191,17 @@ func repairLifecycleFindings(ctx context.Context, tx pgx.Tx, lifecycleIDs []int6
 			if _, ok := templatesByScan[scanID][templateID]; !ok {
 				return false
 			}
-			_, ok := targetsByLifecycle[lcID][targetByScan[scanID]]
+			if _, ok := targetsByLifecycle[lcID][targetByScan[scanID]]; !ok {
+				return false
+			}
+			if _, present := byLifecycle[lcID][scanID]; present {
+				return true
+			}
+			hosts, known := coveredHostsByScan[scanID]
+			if !known || hostByLifecycle[lcID] == "" {
+				return false
+			}
+			_, ok := hosts[hostByLifecycle[lcID]]
 			return ok
 		}
 		firstSeenScan, lastSeenScan, latestOccID, lastCoveringScan, timesMitigated :=

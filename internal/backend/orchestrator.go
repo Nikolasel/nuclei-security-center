@@ -281,6 +281,12 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 	if err := o.store.SetScanDiscovered(ctx, scanID, status.DiscoveredTargets); err != nil {
 		log.Warn("record discovered targets", "err", err)
 	}
+	// Persist Nuclei request-trace coverage before ingest/completion. Ingest uses
+	// the previous covering pointer to detect resurfacing; MarkComplete then
+	// advances it only for lifecycle rows whose host was actually reached (#91).
+	if err := o.store.SetScanCovered(ctx, scanID, status.CoveredHosts); err != nil {
+		log.Warn("record covered hosts", "err", err)
+	}
 	// Archive the node's execution log regardless of outcome (it's most useful
 	// on failure). pollToDone only returns on a terminal node state, so the log
 	// is complete on the node by now. Best-effort, like the raw archive.

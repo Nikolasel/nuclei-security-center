@@ -536,6 +536,82 @@ func TestOccurrenceScanScopeUpgradePostgres(t *testing.T) {
 	}
 }
 
+func TestEndpointCoverageUpgradePostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openIsolatedPostgres(t, ctx, dsn, "0032_occurrence_scan_scope.sql")
+
+	targetID := types.NewID()
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO targets (id, name, hosts)
+		 VALUES ($1, 'endpoint-coverage-upgrade', ARRAY['2001:db8::1'])`,
+		targetID,
+	); err != nil {
+		t.Fatalf("insert target: %v", err)
+	}
+	firstScan, absentScan := types.NewID(), types.NewID()
+	spec := `{"targets":["[2001:db8::1]"],"templates":{"template_ids":["tls-version"]}}`
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO scans (id, state, spec, target_id, created_at, finished_at) VALUES
+		     ($1, 'complete', $4::jsonb, $3, now() - interval '2 minutes', now() - interval '2 minutes'),
+		     ($2, 'complete', $4::jsonb, $3, now() - interval '1 minute', now() - interval '1 minute')`,
+		firstScan, absentScan, targetID, spec,
+	); err != nil {
+		t.Fatalf("insert scans: %v", err)
+	}
+	var lifecycleID int64
+	if err := st.pool.QueryRow(ctx,
+		`INSERT INTO finding_lifecycle
+		     (dedup_key, result_discriminator, template_id, name, severity, host, matched_at,
+		      first_seen_scan, last_seen_scan, first_seen_at, last_seen_at,
+		      last_covering_scan, times_mitigated)
+		 VALUES ('tls-version' || E'\x1f' || 'https://[2001:0db8::1]:443/path',
+		         '', 'tls-version', 'TLS version', 'info', '[2001:db8::1]',
+		         'https://[2001:0db8::1]:443/path', $1, $1, now(), now(), $2, 2)
+		 RETURNING id`,
+		firstScan, absentScan,
+	).Scan(&lifecycleID); err != nil {
+		t.Fatalf("insert lifecycle: %v", err)
+	}
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO findings
+		     (scan_id, target_id, finding_id, dedup_key, result_discriminator,
+		      template_id, matched_at, raw)
+		 VALUES ($1, $2, $3, 'tls-version' || E'\x1f' || 'https://[2001:0db8::1]:443/path',
+		         '', 'tls-version', 'https://[2001:0db8::1]:443/path', '{}'::jsonb)`,
+		firstScan, targetID, lifecycleID,
+	); err != nil {
+		t.Fatalf("insert occurrence: %v", err)
+	}
+
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("upgrade through endpoint coverage: %v", err)
+	}
+	var endpointHost, lastCovering string
+	var timesMitigated int
+	var coveredHosts []string
+	if err := st.pool.QueryRow(ctx,
+		`SELECT lifecycle.endpoint_host, lifecycle.last_covering_scan,
+		        lifecycle.times_mitigated, scan.covered_hosts
+		   FROM finding_lifecycle lifecycle
+		   JOIN scans scan ON scan.id = $2
+		  WHERE lifecycle.id = $1`,
+		lifecycleID, absentScan,
+	).Scan(&endpointHost, &lastCovering, &timesMitigated, &coveredHosts); err != nil {
+		t.Fatalf("read upgraded coverage: %v", err)
+	}
+	if endpointHost != "2001:db8::1" || lastCovering != firstScan ||
+		timesMitigated != 0 || coveredHosts != nil {
+		t.Fatalf("upgraded coverage = host:%q covering:%s mitigated:%d hosts:%#v",
+			endpointHost, lastCovering, timesMitigated, coveredHosts)
+	}
+}
+
 func applyMigrationsThrough(t *testing.T, ctx context.Context, st *Store, last string) {
 	t.Helper()
 	if _, err := st.pool.Exec(ctx, `

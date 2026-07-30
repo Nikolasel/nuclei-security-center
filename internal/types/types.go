@@ -97,6 +97,11 @@ type ScanStatus struct {
 	// the scan's life on the node; the backend persists it so the UI can show which
 	// endpoints were actually scanned. Empty when discovery was disabled.
 	DiscoveredTargets []string `json:"discovered_targets,omitempty"`
+	// CoveredHosts is the deduplicated host set for which Nuclei's request trace
+	// recorded at least one successful request. nil means telemetry is unavailable
+	// and must fail closed; an empty non-nil slice means the trace was read
+	// successfully but no host was reached.
+	CoveredHosts []string `json:"covered_hosts"`
 }
 
 // ScanPhase distinguishes the two execution stages the node reports live progress

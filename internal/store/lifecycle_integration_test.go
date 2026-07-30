@@ -64,7 +64,7 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 	})
 
 	createdAt := time.Now().UTC().Add(-time.Hour)
-	createScan := func(templateIDs []string, findingTemplates ...string) string {
+	createScanWithCoverage := func(coveredHosts []string, templateIDs []string, findingTemplates ...string) string {
 		t.Helper()
 		spec := types.ScanSpec{
 			Targets: target.Hosts,
@@ -106,10 +106,16 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 				t.Fatalf("ingest %s: %v", findingTemplate, ingestErr)
 			}
 		}
+		if coverageErr := st.SetScanCovered(ctx, scanID, coveredHosts); coverageErr != nil {
+			t.Fatalf("set scan coverage: %v", coverageErr)
+		}
 		if completeErr := st.MarkComplete(ctx, scanID, "integration-test", "integration-test"); completeErr != nil {
 			t.Fatalf("complete scan: %v", completeErr)
 		}
 		return scanID
+	}
+	createScan := func(templateIDs []string, findingTemplates ...string) string {
+		return createScanWithCoverage([]string{"issue88.invalid"}, templateIDs, findingTemplates...)
 	}
 
 	createTLSScanRecord := func(scanTarget Target) string {
@@ -130,6 +136,9 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 		if _, updateErr := st.pool.Exec(ctx,
 			`UPDATE scans SET created_at = $2 WHERE id = $1`, scanID, createdAt); updateErr != nil {
 			t.Fatalf("order TLS scan: %v", updateErr)
+		}
+		if coverageErr := st.SetScanCovered(ctx, scanID, []string{"issue88.invalid"}); coverageErr != nil {
+			t.Fatalf("set TLS scan coverage: %v", coverageErr)
 		}
 		return scanID
 	}
@@ -207,8 +216,18 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 	createScan([]string{"template-b"})
 	assertFinding("template-a", "new", 0)
 
-	// A scan that did include template-a and did not observe it is real
-	// mitigation evidence.
+	// Template inclusion alone cannot mitigate template-a when Nuclei reached
+	// only a different host.
+	createScanWithCoverage([]string{"other.invalid"}, []string{"template-a"})
+	assertFinding("template-a", "new", 0)
+
+	// Unknown legacy telemetry also fails closed rather than treating target-level
+	// completion as endpoint evidence.
+	createScanWithCoverage(nil, []string{"template-a"})
+	assertFinding("template-a", "new", 0)
+
+	// A scan that included template-a, reached its host, and did not observe the
+	// result is real mitigation evidence.
 	mitigationScan := createScan([]string{"template-a"})
 	assertFinding("template-a", "mitigated", 0)
 

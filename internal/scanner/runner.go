@@ -215,6 +215,7 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templatePaths []st
 		}
 		j.setDiscoveredTargets(live)
 		if len(live) == 0 {
+			j.setCoveredHosts([]string{})
 			j.complete(0)
 			return
 		}
@@ -234,7 +235,11 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templatePaths []st
 	j.setCancel(cancel)
 	defer cancel()
 
-	args := buildArgs(nucleiTargets, j.resultsPath, templatePaths, spec)
+	tracePath := filepath.Join(dir, "requests-trace.jsonl")
+	// The trace can contain full request URLs. It is reduced to host keys only
+	// and never served or archived, so remove it as soon as this run returns.
+	defer os.Remove(tracePath)
+	args := buildArgs(nucleiTargets, j.resultsPath, tracePath, templatePaths, spec)
 	cmd := exec.CommandContext(ctx, r.nucleiPath, args...)
 	// Run in its own process group so Cancel/timeout kills nuclei and any child.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -262,6 +267,12 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templatePaths []st
 
 	err := cmd.Run()
 	sw.flush()
+	coveredHosts, coverageErr := coveredHostsFromTrace(tracePath)
+	if coverageErr != nil {
+		_, _ = fmt.Fprintf(logw, "[WRN] endpoint coverage unavailable: %v\n", coverageErr)
+	} else {
+		j.setCoveredHosts(coveredHosts)
+	}
 	if err != nil {
 		// A timeout is its own clean message: the OS reason (`signal: killed`) and
 		// the stderr tail (a batch of per-host "Skipped … unresponsive" diagnostics)
@@ -283,11 +294,15 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templatePaths []st
 }
 
 // buildArgs assembles the Nuclei command line from the spec.
-func buildArgs(targetsFile, out string, templatePaths []string, spec types.ScanSpec) []string {
+func buildArgs(targetsFile, out, tracePath string, templatePaths []string, spec types.ScanSpec) []string {
 	args := []string{
 		"-list", targetsFile,
 		"-jsonl",
 		"-output", out,
+		// Nuclei's structured request trace is the authoritative host-reachability
+		// evidence for lifecycle mitigation (#91). It records both successful
+		// requests and connection errors without duplicating response bodies.
+		"-trace-log", tracePath,
 		// Deliberately NOT -silent: that flag prints findings to stdout but
 		// suppresses Nuclei's diagnostic logs (template-load warnings, host
 		// errors) — the opposite of what the execution-log archive (#94) needs.
@@ -397,6 +412,12 @@ func (j *job) setDiscoveryProgress(hosts, ports int) {
 func (j *job) setDiscoveredTargets(t []string) {
 	j.mu.Lock()
 	j.status.DiscoveredTargets = t
+	j.mu.Unlock()
+}
+
+func (j *job) setCoveredHosts(hosts []string) {
+	j.mu.Lock()
+	j.status.CoveredHosts = append([]string{}, hosts...)
 	j.mu.Unlock()
 }
 

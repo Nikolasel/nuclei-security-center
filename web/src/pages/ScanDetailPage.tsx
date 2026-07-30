@@ -256,6 +256,7 @@ export function ScanDetailPage() {
             {scan.data.discovered_targets && scan.data.discovered_targets.length > 0 && (
               <DiscoveredEndpoints targets={scan.data.discovered_targets} />
             )}
+            {scan.data.state !== "running" && <CoveredHosts hosts={scan.data.covered_hosts} />}
           </Card>
         )
       )}
@@ -264,6 +265,46 @@ export function ScanDetailPage() {
         <p className="text-sm text-neutral-500">Findings appear here once the scan finishes.</p>
       ) : (
         <ScanFindingsView scanId={id} />
+      )}
+    </div>
+  );
+}
+
+// CoveredHosts is the durable lifecycle evidence introduced by #91. Keep
+// "unknown" distinct from a known empty trace: old scans must fail closed, while
+// a completed scan that reached nothing has an explicit, explainable result.
+function CoveredHosts({ hosts }: { hosts?: string[] | null }) {
+  if (hosts == null) {
+    return (
+      <p className="mt-4 text-xs text-amber-600 dark:text-amber-400">
+        Host coverage unavailable · this scan cannot mark absent findings as mitigated
+      </p>
+    );
+  }
+  const visibleHosts = hosts.slice(0, 500);
+  return (
+    <div className="mt-4">
+      <p className="text-xs font-medium text-neutral-500">
+        Hosts reached by Nuclei · {hosts.length} {hosts.length === 1 ? "host" : "hosts"}
+      </p>
+      {hosts.length === 0 ? (
+        <p className="mt-1 text-xs text-neutral-400">No host answered a Nuclei request.</p>
+      ) : (
+        <div className="mt-2 flex max-h-40 flex-wrap gap-1 overflow-y-auto">
+          {visibleHosts.map((host) => (
+            <span
+              key={host}
+              className="rounded bg-neutral-100 px-2 py-1 font-mono text-xs text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
+            >
+              {host}
+            </span>
+          ))}
+          {hosts.length > visibleHosts.length && (
+            <span className="px-2 py-1 text-xs text-neutral-400">
+              +{(hosts.length - visibleHosts.length).toLocaleString()} more
+            </span>
+          )}
+        </div>
       )}
     </div>
   );

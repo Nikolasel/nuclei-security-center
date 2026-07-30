@@ -303,6 +303,9 @@ export interface Scan {
    *  persisted at completion, served live during the scanning phase. Empty when
    *  discovery was disabled. */
   discovered_targets?: string[];
+  /** hosts for which Nuclei recorded at least one successful request (#91).
+   *  null/undefined means coverage telemetry is unavailable; [] is known zero. */
+  covered_hosts?: string[] | null;
   created_at: string;
   finished_at?: string;
 }

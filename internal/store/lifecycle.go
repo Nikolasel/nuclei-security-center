@@ -98,6 +98,7 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 	key := DedupKey(f.TemplateID, f.MatchedAt, discriminator)
 	rawLine := findingRawLine(raw)
 	f = findingTextProjection(f)
+	endpointHost := postgresText(types.HostKey(f.MatchedAt))
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -128,26 +129,26 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 	// slower older scan cannot move last_seen backwards and manufacture a
 	// mitigation cycle after a newer scan has already completed.
 	const incomingNewer = `(finding_lifecycle.last_seen_scan IS NULL OR COALESCE((
-		SELECT (current_scan.created_at, current_scan.id) < ($13::timestamptz, $11::uuid)
+		SELECT (current_scan.created_at, current_scan.id) < ($14::timestamptz, $12::uuid)
 		  FROM scans current_scan
 		 WHERE current_scan.id = finding_lifecycle.last_seen_scan
 	), true))`
 	const incomingOlder = `(finding_lifecycle.first_seen_scan IS NULL OR COALESCE((
-		SELECT ($13::timestamptz, $11::uuid) < (current_scan.created_at, current_scan.id)
+		SELECT ($14::timestamptz, $12::uuid) < (current_scan.created_at, current_scan.id)
 		  FROM scans current_scan
 		 WHERE current_scan.id = finding_lifecycle.first_seen_scan
 	), true))`
 	const incomingAfterCovering = `COALESCE((
-		SELECT (current_scan.created_at, current_scan.id) < ($13::timestamptz, $11::uuid)
+		SELECT (current_scan.created_at, current_scan.id) < ($14::timestamptz, $12::uuid)
 		  FROM scans current_scan
 		 WHERE current_scan.id = finding_lifecycle.last_covering_scan
 	), true)`
 	upsertLifecycle := fmt.Sprintf(
 		`INSERT INTO finding_lifecycle
 		   (dedup_key, result_discriminator, template_id, name, severity, host,
-		    matched_at, type, cve, tags, first_seen_scan, first_seen_at, last_seen_scan,
+		    matched_at, endpoint_host, type, cve, tags, first_seen_scan, first_seen_at, last_seen_scan,
 		    last_seen_at, latest_occurrence_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), $11, now(), $12)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now(), $12, now(), $13)
 		 ON CONFLICT (dedup_key) DO UPDATE SET
 		    first_seen_scan      = CASE WHEN %[2]s THEN excluded.first_seen_scan ELSE finding_lifecycle.first_seen_scan END,
 		    first_seen_at        = least(finding_lifecycle.first_seen_at, excluded.first_seen_at),
@@ -157,6 +158,7 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 		    severity             = CASE WHEN %[1]s THEN excluded.severity ELSE finding_lifecycle.severity END,
 		    host                 = CASE WHEN %[1]s THEN excluded.host ELSE finding_lifecycle.host END,
 		    matched_at           = CASE WHEN %[1]s THEN excluded.matched_at ELSE finding_lifecycle.matched_at END,
+		    endpoint_host        = CASE WHEN %[1]s THEN excluded.endpoint_host ELSE finding_lifecycle.endpoint_host END,
 		    type                 = CASE WHEN %[1]s THEN excluded.type ELSE finding_lifecycle.type END,
 		    cve                  = CASE WHEN %[1]s THEN excluded.cve ELSE finding_lifecycle.cve END,
 		    tags                 = CASE WHEN %[1]s THEN excluded.tags ELSE finding_lifecycle.tags END,
@@ -172,7 +174,7 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 		incomingNewer, incomingOlder, incomingAfterCovering)
 	if err := tx.QueryRow(ctx, upsertLifecycle,
 		key, discriminator, f.TemplateID, f.Info.Name, f.Info.Severity, f.Host, f.MatchedAt,
-		f.Type, orEmpty(f.CVEs()), orEmpty(f.Info.Tags), scanID, occID, scanCreatedAt,
+		endpointHost, f.Type, orEmpty(f.CVEs()), orEmpty(f.Info.Tags), scanID, occID, scanCreatedAt,
 	).Scan(&lcID); err != nil {
 		return fmt.Errorf("upsert lifecycle: %w", err)
 	}

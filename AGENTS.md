@@ -133,6 +133,11 @@ host:port list is reported as
 `ScanStatus.DiscoveredTargets`, cached live by the orchestrator during the scanning phase and
 persisted to `scans.discovered_targets` (migration 0019, `TEXT[]`) at completion, so the scan
 detail can show which endpoints were actually scanned.
+Nuclei also runs with `-trace-log` and the node reduces error-free request records to normalized
+host keys (`ScanStatus.CoveredHosts`). The backend persists that evidence to
+`scans.covered_hosts` (migration 0033; NULL = unknown/fail closed, empty = known zero). Lifecycle
+mitigation requires both template coverage and the finding's `endpoint_host` in that host set;
+an exact occurrence remains positive evidence for itself.
 
 **Scheduling:** `schedules` (migration 0007; reshaped by 0017) pairs a
 `scan_policy_id` (required, FK `ON DELETE CASCADE`) with a `cron` expression — the policy
@@ -172,8 +177,8 @@ logic treats `scans.target_id` as authoritative. Ingest inserts an occurrence an
   evidence pointer, not a stored state, and avoids scanning JSONB history on lifecycle reads.
   **Closure is evidence-driven; there is no manual "fixed."** `times_mitigated` is bumped at
   ingest when a finding reappears after being absent from the previous scan that covered its
-  template. This does not prove that the concrete endpoint was attempted; #91 remains open until
-  endpoint-level coverage evidence exists.
+  template and successfully reached its normalized host. Request-trace telemetry is fail-closed:
+  legacy/unparseable coverage cannot mitigate an absent finding.
 - **Disposition** (manual overlay, the only stored state): `none` / `false_positive` /
   `accepted` (Accept Risk; `accept_expires_at` optional — an expired acceptance falls back
   to the detection state) + `recast_severity` (Recast Risk). `effective_state` /

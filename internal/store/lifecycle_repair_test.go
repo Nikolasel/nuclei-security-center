@@ -106,7 +106,7 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 			// nothing and is ignored.
 			name:          "legacy occurrences prove coverage",
 			scanIDs:       []string{"s1", "s2", "s3"},
-			coveredByScan: map[string]bool{},
+			coveredByScan: map[string]bool{"s1": true, "s3": true},
 			occByScan:     map[string]int64{"s1": 1, "s3": 3},
 			wantFirst:     str("s1"), wantLast: str("s3"), wantOcc: i64(3), wantMitigated: 0,
 			wantCovering: str("s3"),
@@ -122,15 +122,9 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 					coveredByScan[scanID] = true
 				}
 			}
-			templatesByScan := make(map[string]map[string]struct{}, len(c.scanIDs))
-			for _, scanID := range c.scanIDs {
-				templatesByScan[scanID] = map[string]struct{}{}
-				if coveredByScan[scanID] {
-					templatesByScan[scanID]["template"] = struct{}{}
-				}
-			}
+			covered := func(scanID string) bool { return coveredByScan[scanID] }
 			gotFirst, gotLast, gotOcc, gotCovering, gotMitigated := computeLifecycleTimeline(
-				c.scanIDs, "template", templatesByScan, c.occByScan)
+				c.scanIDs, covered, c.occByScan)
 			if !strPtrEqual(gotFirst, c.wantFirst) {
 				t.Errorf("firstSeenScan = %s, want %s", fmtStrPtr(gotFirst), fmtStrPtr(c.wantFirst))
 			}

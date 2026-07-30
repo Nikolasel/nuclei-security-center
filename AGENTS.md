@@ -151,13 +151,19 @@ logic in SQL or long-lived in-memory schedulers. Endpoints: `GET/POST /api/sched
 because PostgreSQL TEXT requires valid UTF-8, plus a NUL-safe JSONB projection in `raw` for
 ad-hoc operator SQL; readers fall back to `raw::text` for historical rows; the object archive
 remains byte-exact; answers "what did scan X observe");
-`finding_lifecycle` is the **deduplicated** entity keyed on `(target_id, template_id,
-matched_at)` that users triage. Ingest inserts an occurrence and upserts the lifecycle row
-(`store.IngestFinding`). The lifecycle follows **Tenable Security Center's model**, two
-dimensions:
+`finding_lifecycle` is the **globally deduplicated** entity keyed on `(template_id,
+matched_at, stable result discriminator)` that users triage. The discriminator hashes stable
+`matcher-name` / `extractor-name` / canonicalized `extracted-results`, not volatile timestamps
+or request/response bytes. Scan and target are occurrence provenance, not lifecycle identity;
+the same concrete result merges across target records, while distinct results from one template
+and endpoint remain separate. `findings.target_id` is a denormalized copy used for indexed
+projection/filtering; a composite FK constrains non-NULL scope to the owning scan, and coverage
+logic treats `scans.target_id` as authoritative. Ingest inserts an occurrence and upserts the lifecycle row
+(`store.IngestFinding`). The lifecycle follows **Tenable Security Center's model**, two dimensions:
 
-- **Detection state** — derived at read time (vs. the target's latest completed scan whose
-  concrete `template_ids` includes the finding's template) plus a stored `times_mitigated`
+- **Detection state** — derived at read time (vs. the latest completed scan, across scopes
+  that have observed the global result, whose concrete `template_ids` includes the finding's
+  template) plus a stored `times_mitigated`
   counter, never a stored state: `new` / `active` / `resurfaced` (still detected) and
   `mitigated` / `previously_mitigated` (gone). A narrower scan that omitted the template is
   not mitigation evidence; legacy occurrences prove positive coverage while an absence
@@ -166,14 +172,17 @@ dimensions:
   evidence pointer, not a stored state, and avoids scanning JSONB history on lifecycle reads.
   **Closure is evidence-driven; there is no manual "fixed."** `times_mitigated` is bumped at
   ingest when a finding reappears after being absent from the previous scan that covered its
-  template.
+  template. This does not prove that the concrete endpoint was attempted; #91 remains open until
+  endpoint-level coverage evidence exists.
 - **Disposition** (manual overlay, the only stored state): `none` / `false_positive` /
   `accepted` (Accept Risk; `accept_expires_at` optional — an expired acceptance falls back
   to the detection state) + `recast_severity` (Recast Risk). `effective_state` /
   `effective_severity` overlay disposition on detection.
 
 `GET /api/findings` = lifecycle view (`state`/`disposition`/severity/… filters);
-`GET /api/scans/{id}/findings` = occurrences; `PATCH /api/findings/{id}/disposition` and
+`GET /api/scans/{id}/findings` = occurrences; `GET /api/occurrences/{id}` = one exact immutable
+occurrence (the scan UI opens this, never the merged latest result);
+`PATCH /api/findings/{id}/disposition` and
 `PATCH /api/findings/{id}/severity` = analyst overlays (operator);
 `GET /api/findings/export?format=json|csv|sarif|raw` = the lifecycle list exported in the same
 filters (SARIF is a hand-built 2.1.0 doc via `encoding/json`; `raw` emits the preserved Nuclei
@@ -290,6 +299,9 @@ dev mode used in headless `curl` testing.
 - Errors wrapped with `%w` and context; HTTP handlers return plain-text errors + status.
 - New schema changes go in a new numbered file under `internal/store/migrations/`; the
   runner applies unseen files in filename order and records them in `schema_migrations`.
+  Applied migration files are immutable: never revise one after any database may have
+  recorded it. Add a separately named repair/forward migration instead. The runner stores
+  SHA-256 checksums and fails fast if a checksummed migration's contents change.
 - Run `gofmt -w`, `go vet`, and `go test` before considering a change done.
 - **Dependency review (recurring):** at a natural review boundary, scan for hand-rolled code
   that duplicates a mature library (per invariant #5) and for unused/heavy deps to drop.

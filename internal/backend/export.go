@@ -130,7 +130,7 @@ func writeFindingsCSV(w io.Writer, rows []store.LifecycleRow) {
 	writeCSVRecord(cw, []string{
 		"id", "template_id", "name", "severity", "effective_severity", "host", "matched_at",
 		"type", "detection_state", "effective_state", "disposition", "times_mitigated",
-		"cve", "tags", "first_seen_at", "last_seen_at",
+		"cve", "tags", "first_seen_at", "last_seen_at", "target_ids",
 	})
 	for _, r := range rows {
 		writeCSVRecord(cw, []string{
@@ -139,6 +139,7 @@ func writeFindingsCSV(w io.Writer, rows []store.LifecycleRow) {
 			r.Type, r.DetectionState, r.EffectiveState, r.Disposition, strconv.Itoa(r.TimesMitigated),
 			strings.Join(r.CVE, ";"), strings.Join(r.Tags, ";"),
 			r.FirstSeenAt.UTC().Format(time.RFC3339), r.LastSeenAt.UTC().Format(time.RFC3339),
+			strings.Join(r.TargetIDs, ";"),
 		})
 	}
 }
@@ -276,6 +277,7 @@ func writeFindingsSARIF(w io.Writer, rows []store.LifecycleRow) {
 				"effective_state":    r.EffectiveState,
 				"disposition":        r.Disposition,
 				"times_mitigated":    r.TimesMitigated,
+				"target_ids":         r.TargetIDs,
 				"host":               r.Host,
 				"first_seen_at":      r.FirstSeenAt.UTC().Format(time.RFC3339),
 				"last_seen_at":       r.LastSeenAt.UTC().Format(time.RFC3339),

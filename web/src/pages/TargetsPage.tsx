@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api, type Target } from "../api";
 import { hasRole, useMe } from "../auth";
 import { Button, Card, ErrorText, Field, Input, Modal, Spinner } from "../components/ui";
@@ -58,8 +59,13 @@ export function TargetsPage() {
   const canDelete = hasRole(me.data ?? undefined, "admin");
   const qc = useQueryClient();
   const [editing, setEditing] = useState<Target | "new" | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedTargetID = searchParams.get("target") ?? "";
 
   const q = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
+  const visibleTargets = selectedTargetID
+    ? (q.data ?? []).filter((target) => target.id === selectedTargetID)
+    : (q.data ?? []);
   const del = useMutation({
     mutationFn: (id: string) => api.deleteTarget(id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["targets"] }),
@@ -75,6 +81,15 @@ export function TargetsPage() {
           </Button>
         )}
       </div>
+
+      {selectedTargetID && (
+        <div className="flex items-center justify-between rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-800 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-200">
+          <span>Showing the linked target.</span>
+          <Button variant="ghost" onClick={() => setSearchParams({})}>
+            Show all
+          </Button>
+        </div>
+      )}
 
       {q.isLoading ? (
         <Spinner />
@@ -93,8 +108,13 @@ export function TargetsPage() {
                 </tr>
               </thead>
               <tbody>
-                {(q.data ?? []).map((t) => (
-                  <tr key={t.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
+                {visibleTargets.map((t) => (
+                  <tr
+                    key={t.id}
+                    className={`border-b border-neutral-100 last:border-0 dark:border-neutral-800/60 ${
+                      t.id === selectedTargetID ? "bg-indigo-50 dark:bg-indigo-950/30" : ""
+                    }`}
+                  >
                     <td className="px-3 py-2 font-medium">{t.name}</td>
                     <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">
                       {t.hosts.join(", ")}
@@ -122,10 +142,10 @@ export function TargetsPage() {
                     )}
                   </tr>
                 ))}
-                {(q.data ?? []).length === 0 && (
+                {visibleTargets.length === 0 && (
                   <tr>
                     <td colSpan={4} className="px-3 py-8 text-center text-neutral-400">
-                      No targets yet.
+                      {selectedTargetID ? "The linked target no longer exists." : "No targets yet."}
                     </td>
                   </tr>
                 )}

@@ -16,7 +16,7 @@ const sevChip: Record<string, string> = {
 };
 
 /** ScanFindingsView lists the immutable occurrences a single scan observed. Rows
- *  link through to the deduplicated lifecycle finding for triage. */
+ *  open that exact raw occurrence, independent of the global lifecycle view. */
 export function ScanFindingsView({ scanId }: { scanId: string }) {
   const navigate = useNavigate();
 
@@ -108,10 +108,10 @@ export function ScanFindingsView({ scanId }: { scanId: string }) {
                   {items.map((f) => (
                     <tr
                       key={f.id}
-                      onClick={() => f.finding_id != null && navigate(`/findings/${f.finding_id}`)}
+                      onClick={() => navigate(`/occurrences/${f.id}`)}
                       className={cn(
                         "border-b border-neutral-100 last:border-0 dark:border-neutral-800/60",
-                        f.finding_id != null && "cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-800/40",
+                        "cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-800/40",
                       )}
                     >
                       <td className="px-3 py-2">

@@ -41,6 +41,7 @@ const (
 	kindText                       // scalar substring (host)
 	kindTextTwo                    // substring over two columns (name OR template)
 	kindTextArray                  // text[] membership/substring (cve, tag)
+	kindTarget                     // occurrence provenance target membership
 )
 
 // fieldSpec maps a filter field name to the SQL it filters on. expr is the column
@@ -62,7 +63,7 @@ var findingFields = map[string]fieldSpec{
 	"severity":    {kind: kindEnum, expr: effSevExpr, lowered: true},
 	"state":       {kind: kindEnum, expr: "(" + lcEffectiveExpr + ")"},
 	"disposition": {kind: kindEnum, expr: "l.disposition"},
-	"target":      {kind: kindEnum, expr: "l.target_id::text"},
+	"target":      {kind: kindTarget},
 	"host":        {kind: kindText, expr: "l.host"},
 	"cve":         {kind: kindTextArray, expr: "l.cve"},
 	"tag":         {kind: kindTextArray, expr: "l.tags"},
@@ -74,6 +75,7 @@ var opsForKind = map[fieldKind]map[string]bool{
 	kindText:      {"contains": true, "not_contains": true, "starts_with": true, "is_empty": true, "is_not_empty": true},
 	kindTextTwo:   {"contains": true, "starts_with": true},
 	kindTextArray: {"any_of": true, "none_of": true, "contains": true, "not_contains": true, "is_empty": true, "is_not_empty": true},
+	kindTarget:    {"any_of": true, "none_of": true},
 }
 
 // ValidateFindingQuery reports whether a query compiles (all fields/operators
@@ -182,6 +184,18 @@ func compileCondition(c FindingCondition, push func(any) int) (string, error) {
 		case "not_contains":
 			return fmt.Sprintf("NOT EXISTS (SELECT 1 FROM unnest(%s) e WHERE e ILIKE ANY($%d))", spec.expr, push(likeWrap(vals, "%%%s%%"))), nil
 		}
+
+	case kindTarget:
+		ph := push(vals)
+		matches := fmt.Sprintf(
+			`EXISTS (SELECT 1 FROM findings occurrence
+			          WHERE occurrence.finding_id = l.id
+			            AND occurrence.target_id::text = ANY($%d))`,
+			ph)
+		if c.Op == "none_of" {
+			return "NOT (" + matches + ")", nil
+		}
+		return matches, nil
 	}
 	return "", fmt.Errorf("operator %q not valid for field %q", c.Op, c.Field)
 }

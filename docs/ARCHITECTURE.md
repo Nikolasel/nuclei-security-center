@@ -108,20 +108,33 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   template set are resolved and recorded on the scan at dispatch (so findings keep working and
   history survives `scan_policy_id` being nulled on policy delete — `ON DELETE SET NULL`).
 - **findings** (occurrences) — the immutable per-scan observation log: `id, scan_id,
-  target_id, dedup_key, template_id, name, severity, host, matched_at, raw_line, raw`.
+  target_id, finding_id, dedup_key, result_discriminator, template_id, name, severity,
+  host, matched_at, raw_line, raw`.
   `raw_line` preserves valid Nuclei JSONL text (invalid UTF-8 becomes U+FFFD; the object
   archive remains byte-exact); `raw` is a NUL-safe JSONB projection retained for ad-hoc
   operator SQL because affected source lines cannot be cast to JSONB. Historical rows may
   leave `raw_line` NULL and readers fall back to `raw::text`, avoiding a blocking backfill.
   Answers "what did scan X observe"; feeds the raw archive in object storage.
 - **finding_lifecycle** — the **deduplicated, triageable** entity keyed on
-  `(target_id, template_id, matched_at)` so lifecycle survives across scans. Models a
+  `(template_id, matched_at, stable result discriminator)` **globally across scans and
+  target records**. Scan/target are occurrence provenance, not identity. The discriminator
+  hashes only stable result dimensions (`matcher-name`, `extractor-name`, and sorted
+  `extracted-results`); volatile timestamps/request/response bytes never fragment lifecycle
+  continuity. Occurrence `target_id` is a denormalized copy retained for indexed lifecycle
+  projection/filtering; targeted occurrences are constrained to their owning scan's scope,
+  while coverage logic uses `scans.target_id` as its authority. This lets a multi-result template keep, for example, TLS 1.2 and TLS 1.3 as
+  distinct entities even when both share one endpoint. Extracted values remain part of the
+  fallback identity because Nuclei templates can emit distinct results without matcher or
+  extractor names; a template that extracts volatile values therefore intentionally produces
+  distinct lifecycle entities and should be authored with a stable discriminator when continuity
+  is wanted. Models a
   **Tenable Security Center-style** two-dimensional lifecycle:
   - *Detection state* — **derived at read time** from scan observation, never stored:
     **New / Active / Resurfaced** (cumulative — still detected) and **Mitigated /
-    Previously Mitigated** (no longer detected). The comparison scan is the target's
-    latest completed scan whose persisted concrete `template_ids` includes this
-    finding's template; a narrower scan that omitted it is not evidence of mitigation.
+    Previously Mitigated** (no longer detected). The comparison scan is the latest
+    completed scan, across target/ad-hoc scopes that have previously observed this global
+    result, whose persisted concrete `template_ids` includes the finding's template; a
+    narrower scan that omitted it is not evidence of mitigation.
     Legacy scans with an occurrence prove positive coverage, while an absence without
     concrete ids proves nothing and fails closed. The latest covering scan's id is
     materialized on each lifecycle row when a scan completes (and rebuilt after scan
@@ -129,11 +142,14 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
     lifecycle reads independent of scan-history/template-array size. `times_mitigated`
     (maintained at ingest with the same coverage rule) distinguishes a first
     disappearance from a flapping one. **Closure is evidence-driven — there is no
-    manual "fixed."**
+    manual "fixed."** This still does not prove that the specific endpoint was attempted;
+    endpoint-level coverage telemetry remains required by #91.
   - *Disposition* — the analyst overlay (the only manual state): **Accept Risk** (with an
     optional `accept_expires_at` — an expired acceptance falls back to its detection
     state) and **False Positive**, plus **Recast Risk** (a `recast_severity` override).
-    Each carries a note/actor/timestamp audit trio.
+    Each carries a note/actor/timestamp audit trio. Migration from the former target-scoped
+    identity resolves collisions by taking the most recent disposition action and most
+    recent recast action independently, including an explicit clear.
   - The **effective state** (what the UI shows) overlays disposition on detection:
     accepted / false_positive win, else the detection state.
 There is deliberately **no `audit_log` table**: the audit trail is emitted as structured
@@ -232,8 +248,8 @@ so scans survive a busy or briefly-unreachable node.
    then pulls `GET /v1/scans/{id}/results` (NDJSON stream) once the node reports
    `complete`. Pull-only: the flow is strictly backend → node, and in-flight scans resume
    from Postgres if the backend restarts. No node → backend inbound path exists.
-6. **Ingest (on backend)** — the backend parses the JSONL and upserts `findings`,
-   updating `first_seen`/`last_seen` and flipping resolved findings not seen this run.
+6. **Ingest (on backend)** — the backend parses the JSONL, inserts immutable occurrence
+   rows, and upserts global lifecycle rows, updating first/last-seen evidence.
    **All dedup/lifecycle lives here** — the node stays stateless.
 7. **Persist** — upload raw `out.jsonl` (+ optional SARIF) to object storage; mark scan
    `complete`; write audit entries.

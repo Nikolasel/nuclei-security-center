@@ -415,6 +415,9 @@ export interface LifecycleFinding {
   detection_state: DetectionState;
   effective_state: EffectiveState;
   times_mitigated: number;
+  /** false when matched_at has no network host:port, so absence cannot
+   *  automatically become mitigation evidence. */
+  auto_mitigation_eligible: boolean;
   first_seen_scan?: string;
   last_seen_scan?: string;
   first_seen_at: string;

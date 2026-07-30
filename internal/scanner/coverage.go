@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
@@ -184,11 +185,19 @@ done:
 	return coverageResult{Endpoints: out, Warning: strings.Join(warnings, "; ")}
 }
 
-func coveredEndpointsFromTraceFIFO(path string, templateIDByPath map[string]string) coverageResult {
-	f, err := os.Open(path)
+// openCoverageTraceFIFO installs the reader before Nuclei can attempt to open
+// the writer. The read/write anchor avoids both sides of the FIFO handshake
+// blocking; Runner closes it after Nuclei exits so the reader receives EOF even
+// when Nuclei failed before opening its own writer.
+func openCoverageTraceFIFO(path string) (reader, anchor *os.File, err error) {
+	anchor, err = os.OpenFile(path, os.O_RDWR|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return coverageResult{Warning: fmt.Sprintf("endpoint coverage unavailable: open trace pipe: %v", err)}
+		return nil, nil, fmt.Errorf("open trace pipe anchor: %w", err)
 	}
-	defer f.Close()
-	return coveredEndpointsFromTrace(f, templateIDByPath)
+	reader, err = os.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		_ = anchor.Close()
+		return nil, nil, fmt.Errorf("open trace pipe reader: %w", err)
+	}
+	return reader, anchor, nil
 }

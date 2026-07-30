@@ -307,33 +307,39 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 		       SET state = $1, nuclei_version = $2, templates_commit = $3, finished_at = now()
 		     WHERE id = $4 AND state <> $5
 		     RETURNING id, target_id, covered_endpoints, created_at
+		 ),
+		 coverage_pairs AS MATERIALIZED (
+		    SELECT pair->>'template_id' AS template_id,
+		           pair->>'endpoint' AS endpoint
+		      FROM completed_scan
+		      CROSS JOIN LATERAL jsonb_array_elements(
+		          COALESCE(completed_scan.covered_endpoints, '[]'::jsonb)
+		      ) AS pair
+		     WHERE jsonb_typeof(pair) = 'object'
+		 ),
+		 candidate_lifecycle AS MATERIALIZED (
+		    SELECT lifecycle.id
+		      FROM coverage_pairs coverage
+		      JOIN finding_lifecycle lifecycle
+		        ON lifecycle.template_id = coverage.template_id
+		       AND lifecycle.endpoint_key = coverage.endpoint
+		     WHERE lifecycle.endpoint_key <> ''
+		    UNION
+		    SELECT observed.finding_id
+		      FROM completed_scan
+		      JOIN findings observed ON observed.scan_id = completed_scan.id
+		     WHERE observed.finding_id IS NOT NULL
 		 )
 		 UPDATE finding_lifecycle lifecycle
 		    SET last_covering_scan = completed_scan.id
-		   FROM completed_scan
-		  WHERE EXISTS (
+		   FROM completed_scan, candidate_lifecycle candidate
+		  WHERE lifecycle.id = candidate.id
+		    AND EXISTS (
 		        SELECT 1
 		          FROM findings associated
 		          JOIN scans associated_scan ON associated_scan.id = associated.scan_id
 		         WHERE associated.finding_id = lifecycle.id
 		           AND associated_scan.target_id IS NOT DISTINCT FROM completed_scan.target_id
-		    )
-		    AND (
-		        EXISTS (
-		            SELECT 1
-		              FROM findings observed
-		             WHERE observed.scan_id = completed_scan.id
-		               AND observed.finding_id = lifecycle.id
-		        )
-		        OR (
-		            completed_scan.covered_endpoints IS NOT NULL
-		            AND lifecycle.endpoint_key <> ''
-		            AND completed_scan.covered_endpoints @>
-		                jsonb_build_array(jsonb_build_object(
-		                    'template_id', lifecycle.template_id,
-		                    'endpoint', lifecycle.endpoint_key
-		                ))
-		        )
 		    )
 		    AND (
 		        lifecycle.last_covering_scan IS NULL
@@ -617,34 +623,34 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 		    SELECT target_id, covered_endpoints
 		      FROM scans
 		     WHERE id = $1
+		 ),
+		 coverage_pairs AS MATERIALIZED (
+		    SELECT pair->>'template_id' AS template_id,
+		           pair->>'endpoint' AS endpoint
+		      FROM deleted_scan
+		      CROSS JOIN LATERAL jsonb_array_elements(
+		          COALESCE(deleted_scan.covered_endpoints, '[]'::jsonb)
+		      ) AS pair
+		     WHERE jsonb_typeof(pair) = 'object'
+		 ),
+		 covered_lifecycle AS MATERIALIZED (
+		    SELECT lifecycle.id
+		      FROM coverage_pairs coverage
+		      JOIN finding_lifecycle lifecycle
+		        ON lifecycle.template_id = coverage.template_id
+		       AND lifecycle.endpoint_key = coverage.endpoint
+		     WHERE lifecycle.endpoint_key <> ''
 		 )
-		 SELECT lifecycle.id
-		   FROM finding_lifecycle lifecycle
+		 SELECT covered.id
+		   FROM covered_lifecycle covered
 		   CROSS JOIN deleted_scan
 		  WHERE EXISTS (
 		      SELECT 1
 		        FROM findings associated
 		        JOIN scans associated_scan ON associated_scan.id = associated.scan_id
-		       WHERE associated.finding_id = lifecycle.id
+		       WHERE associated.finding_id = covered.id
 		         AND associated_scan.target_id IS NOT DISTINCT FROM deleted_scan.target_id
 		  )
-		    AND (
-		        EXISTS (
-		            SELECT 1
-		              FROM findings observed
-		             WHERE observed.scan_id = $1
-		               AND observed.finding_id = lifecycle.id
-		        )
-		        OR (
-		            deleted_scan.covered_endpoints IS NOT NULL
-		            AND lifecycle.endpoint_key <> ''
-		            AND deleted_scan.covered_endpoints @>
-		                jsonb_build_array(jsonb_build_object(
-		                    'template_id', lifecycle.template_id,
-		                    'endpoint', lifecycle.endpoint_key
-		                ))
-		        )
-		    )
 		 UNION
 		 SELECT finding_id
 		   FROM findings

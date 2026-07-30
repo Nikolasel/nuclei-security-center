@@ -98,7 +98,10 @@ continuity is desired. Each has:
   evidence. `covered_endpoints: null` means telemetry is unavailable (including legacy scans)
   and fails closed; `[]` means the trace was read successfully but no template/endpoint pair
   completed successfully. `coverage_warning`, when present, explains skipped or unavailable
-  trace evidence and is shown on scan detail:
+  trace evidence and is shown on scan detail. Lifecycle findings also expose
+  `auto_mitigation_eligible`: `false` means `matched_at` has no normalizable network
+  host:port (for example a `file`/`code` result), so scan absence deliberately cannot close
+  that finding and the UI labels the limitation:
 
   | Detection state | In latest covering scan? | Meaning |
   |---|---|---|

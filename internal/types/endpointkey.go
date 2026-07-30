@@ -34,8 +34,7 @@ func EndpointKey(raw, protocol string) string {
 	if i := strings.LastIndexByte(authority, '@'); i >= 0 {
 		authority = authority[i+1:]
 	}
-	if host, _, err := net.SplitHostPort(authority); err == nil {
-		_, port, _ := net.SplitHostPort(authority)
+	if host, port, err := net.SplitHostPort(authority); err == nil {
 		return canonicalEndpoint(host, port)
 	}
 	if addr, err := netip.ParseAddr(strings.Trim(authority, "[]")); err == nil {
@@ -75,6 +74,10 @@ func defaultEndpointPort(scheme, protocol string) string {
 		return "443"
 	}
 	switch strings.ToLower(protocol) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
 	case "ssl", "tls":
 		return "443"
 	case "dns":

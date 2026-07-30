@@ -300,28 +300,32 @@ const (
 // view). DetectionState and EffectiveState are derived server-side from scan
 // history + disposition; EffectiveSeverity honours a recast.
 type LifecycleRow struct {
-	ID                 int64      `json:"id"`
-	TargetIDs          []string   `json:"target_ids"`
-	TemplateID         string     `json:"template_id"`
-	Name               string     `json:"name"`
-	Severity           string     `json:"severity"`
-	RecastSeverity     *string    `json:"recast_severity,omitempty"`
-	EffectiveSeverity  string     `json:"effective_severity"`
-	Host               string     `json:"host"`
-	MatchedAt          string     `json:"matched_at"`
-	Type               string     `json:"type"`
-	CVE                []string   `json:"cve"`
-	Tags               []string   `json:"tags"`
-	Disposition        string     `json:"disposition"`
-	AcceptExpiresAt    *time.Time `json:"accept_expires_at,omitempty"`
-	DetectionState     string     `json:"detection_state"`
-	EffectiveState     string     `json:"effective_state"`
-	TimesMitigated     int        `json:"times_mitigated"`
-	FirstSeenScan      *string    `json:"first_seen_scan,omitempty"`
-	LastSeenScan       *string    `json:"last_seen_scan,omitempty"`
-	FirstSeenAt        time.Time  `json:"first_seen_at"`
-	LastSeenAt         time.Time  `json:"last_seen_at"`
-	LatestOccurrenceID *int64     `json:"latest_occurrence_id,omitempty"`
+	ID                int64      `json:"id"`
+	TargetIDs         []string   `json:"target_ids"`
+	TemplateID        string     `json:"template_id"`
+	Name              string     `json:"name"`
+	Severity          string     `json:"severity"`
+	RecastSeverity    *string    `json:"recast_severity,omitempty"`
+	EffectiveSeverity string     `json:"effective_severity"`
+	Host              string     `json:"host"`
+	MatchedAt         string     `json:"matched_at"`
+	Type              string     `json:"type"`
+	CVE               []string   `json:"cve"`
+	Tags              []string   `json:"tags"`
+	Disposition       string     `json:"disposition"`
+	AcceptExpiresAt   *time.Time `json:"accept_expires_at,omitempty"`
+	DetectionState    string     `json:"detection_state"`
+	EffectiveState    string     `json:"effective_state"`
+	TimesMitigated    int        `json:"times_mitigated"`
+	// AutoMitigationEligible is false when matched_at cannot be normalized to a
+	// network host:port (for example file/code findings). Such rows deliberately
+	// fail closed and require analyst disposition rather than inferred closure.
+	AutoMitigationEligible bool      `json:"auto_mitigation_eligible"`
+	FirstSeenScan          *string   `json:"first_seen_scan,omitempty"`
+	LastSeenScan           *string   `json:"last_seen_scan,omitempty"`
+	FirstSeenAt            time.Time `json:"first_seen_at"`
+	LastSeenAt             time.Time `json:"last_seen_at"`
+	LatestOccurrenceID     *int64    `json:"latest_occurrence_id,omitempty"`
 }
 
 // LifecycleDetail is one deduplicated finding with its disposition/recast audit
@@ -350,12 +354,14 @@ const lcSelectCols = `l.id,
 	` + effSevExpr + ` AS eff_sev, l.host, l.matched_at, l.type, l.cve, l.tags,
 	l.disposition, l.accept_expires_at, ` + lcDetectionExpr + ` AS detection_state,
 	` + lcEffectiveExpr + ` AS effective_state, l.times_mitigated,
+	(l.endpoint_key <> '') AS auto_mitigation_eligible,
 	l.first_seen_scan, l.last_seen_scan, l.first_seen_at, l.last_seen_at, l.latest_occurrence_id`
 
 func scanLifecycleRow(row pgx.Row, r *LifecycleRow) error {
 	return row.Scan(&r.ID, &r.TargetIDs, &r.TemplateID, &r.Name, &r.Severity, &r.RecastSeverity,
 		&r.EffectiveSeverity, &r.Host, &r.MatchedAt, &r.Type, &r.CVE, &r.Tags,
 		&r.Disposition, &r.AcceptExpiresAt, &r.DetectionState, &r.EffectiveState, &r.TimesMitigated,
+		&r.AutoMitigationEligible,
 		&r.FirstSeenScan, &r.LastSeenScan, &r.FirstSeenAt, &r.LastSeenAt, &r.LatestOccurrenceID)
 }
 
@@ -501,6 +507,7 @@ func (s *Store) GetLifecycleFinding(ctx context.Context, id int64) (LifecycleDet
 		&d.ID, &d.TargetIDs, &d.TemplateID, &d.Name, &d.Severity, &d.RecastSeverity,
 		&d.EffectiveSeverity, &d.Host, &d.MatchedAt, &d.Type, &d.CVE, &d.Tags,
 		&d.Disposition, &d.AcceptExpiresAt, &d.DetectionState, &d.EffectiveState, &d.TimesMitigated,
+		&d.AutoMitigationEligible,
 		&d.FirstSeenScan, &d.LastSeenScan, &d.FirstSeenAt, &d.LastSeenAt, &d.LatestOccurrenceID,
 		&dNote, &dBy, &d.DispositionAt, &rNote, &rBy, &d.RecastAt,
 		&d.OccurrenceCount, &rawLine)

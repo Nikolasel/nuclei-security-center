@@ -6,6 +6,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
@@ -84,9 +85,15 @@ func TestCoveredEndpointsFromTraceFIFO(t *testing.T) {
 	if err := syscall.Mkfifo(path, 0o600); err != nil {
 		t.Fatalf("create trace FIFO: %v", err)
 	}
+	reader, anchor, err := openCoverageTraceFIFO(path)
+	if err != nil {
+		t.Fatalf("open trace FIFO reader before writer: %v", err)
+	}
+	defer reader.Close()
+	defer anchor.Close()
 	resultCh := make(chan coverageResult, 1)
 	go func() {
-		resultCh <- coveredEndpointsFromTraceFIFO(path, map[string]string{
+		resultCh <- coveredEndpointsFromTrace(reader, map[string]string{
 			"/bundle/a.yaml": "template-a",
 		})
 	}()
@@ -102,10 +109,40 @@ func TestCoveredEndpointsFromTraceFIFO(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatalf("close trace FIFO: %v", err)
 	}
+	if err := anchor.Close(); err != nil {
+		t.Fatalf("close trace FIFO anchor: %v", err)
+	}
 	got := <-resultCh
 	want := types.EndpointCoverage{TemplateID: "template-a", Endpoint: "h.invalid:8080"}
 	if len(got.Endpoints) != 1 || got.Endpoints[0] != want || got.Warning != "" {
 		t.Fatalf("FIFO coverage = %#v, want %#v", got, want)
+	}
+}
+
+func TestCoverageFIFOWithoutNucleiWriterCompletes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "trace.pipe")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatalf("create trace FIFO: %v", err)
+	}
+	reader, anchor, err := openCoverageTraceFIFO(path)
+	if err != nil {
+		t.Fatalf("prepare trace FIFO: %v", err)
+	}
+	defer reader.Close()
+	resultCh := make(chan coverageResult, 1)
+	go func() {
+		resultCh <- coveredEndpointsFromTrace(reader, nil)
+	}()
+	if err := anchor.Close(); err != nil {
+		t.Fatalf("close trace FIFO anchor: %v", err)
+	}
+	select {
+	case got := <-resultCh:
+		if got.Endpoints == nil || len(got.Endpoints) != 0 || got.Warning != "" {
+			t.Fatalf("no-writer coverage = %#v, want known empty", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("trace reducer remained blocked without a Nuclei writer")
 	}
 }
 

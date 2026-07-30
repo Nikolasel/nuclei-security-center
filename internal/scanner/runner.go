@@ -44,6 +44,8 @@ type job struct {
 	cancel      context.CancelFunc
 }
 
+const coverageDrainTimeout = 5 * time.Second
+
 // NewRunner prepares a Runner. workRoot is where per-scan temp dirs live.
 // naabuPath is the naabu binary used for the optional port-discovery pre-pass
 // (#86); it is only invoked when a scan spec opts into discovery. scanType is the
@@ -251,9 +253,16 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 		return
 	}
 	defer os.Remove(tracePath)
+	traceReader, traceAnchor, err := openCoverageTraceFIFO(tracePath)
+	if err != nil {
+		j.fail(fmt.Errorf("prepare endpoint coverage pipe: %w", err))
+		return
+	}
+	defer traceReader.Close()
+	defer traceAnchor.Close()
 	coverageCh := make(chan coverageResult, 1)
 	go func() {
-		coverageCh <- coveredEndpointsFromTraceFIFO(tracePath, templateIDByPath)
+		coverageCh <- coveredEndpointsFromTrace(traceReader, templateIDByPath)
 	}()
 
 	args := buildArgs(nucleiTargets, j.resultsPath, tracePath, templatePaths, spec)
@@ -282,14 +291,25 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 	cmd.Stderr = sw
 	cmd.Stdout = io.Discard
 
-	err := cmd.Run()
+	err = cmd.Run()
 	sw.flush()
-	// If Nuclei failed before opening the FIFO, connect a non-blocking writer and
-	// close it so the coverage reader observes EOF instead of waiting forever.
-	if unblock, openErr := os.OpenFile(tracePath, os.O_WRONLY|syscall.O_NONBLOCK, 0o600); openErr == nil {
-		_ = unblock.Close()
+	// Release the handshake anchor after Nuclei exits. This is the last writer
+	// when Nuclei failed before opening -trace-log, and therefore guarantees EOF.
+	_ = traceAnchor.Close()
+	var coverage coverageResult
+	coverageTimer := time.NewTimer(coverageDrainTimeout)
+	select {
+	case coverage = <-coverageCh:
+		if !coverageTimer.Stop() {
+			<-coverageTimer.C
+		}
+	case <-coverageTimer.C:
+		_ = traceReader.Close()
+		coverage.Warning = fmt.Sprintf(
+			"endpoint coverage unavailable: trace reducer did not finish within %s",
+			coverageDrainTimeout,
+		)
 	}
-	coverage := <-coverageCh
 	findingCount := countLines(j.resultsPath)
 	coverage = validateCoverageAgainstFindings(coverage, findingCount)
 	if coverage.Warning != "" {

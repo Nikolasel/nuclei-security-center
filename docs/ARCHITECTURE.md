@@ -147,7 +147,11 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
     disappearance from a flapping one. **Closure is evidence-driven — there is no
     manual "fixed."** `scans.covered_endpoints` stores the deduplicated
     `{template_id, endpoint}` positive trace evidence: NULL means unavailable and fails
-    closed, while an empty array is known zero coverage.
+    closed, while an empty array is known zero coverage. Endpoint normalization uses
+    scheme defaults and Nuclei's `type` (`http`→80, `https`/TLS→443, DNS→53,
+    WHOIS→43). Findings such as `file`/`code` results that have no network host:port
+    deliberately remain ineligible for automatic mitigation; the API/UI exposes this as
+    `auto_mitigation_eligible=false` rather than silently implying they can close.
     Exact occurrences always remain positive evidence for their own lifecycle entity.
   - *Disposition* — the analyst overlay (the only manual state): **Accept Risk** (with an
     optional `accept_expires_at` — an expired acceptance falls back to its detection
@@ -250,7 +254,9 @@ so scans survive a busy or briefly-unreachable node.
    rate-limit / concurrency / timeout flags from the spec. When discovery ran,
    `targets.txt` is the narrowed `host:port` list from step 3a. Nuclei also writes its
    structured `-trace-log` into a private FIFO and reduces it while Nuclei runs, avoiding an
-   unbounded trace file on node disk. Successful (`error = "none"`) requests become exact
+   unbounded trace file on node disk. A read/write anchor installs the reader before process
+   launch and guarantees EOF even if Nuclei never opens the trace; a bounded post-process wait
+   fails closed rather than wedging the scan. Successful (`error = "none"`) requests become exact
    `{template_id, endpoint(host:port)}` pairs returned as `covered_endpoints`; connection
    errors do not count, so another port or a template skipped by `max-host-error` cannot make
    an absent finding look mitigated. Malformed or unmapped records are skipped and surfaced
@@ -263,8 +269,10 @@ so scans survive a busy or briefly-unreachable node.
    rows, and upserts global lifecycle rows, updating first/last-seen evidence.
    **All dedup/lifecycle lives here** — the node stays stateless.
 7. **Persist** — store `covered_endpoints` and any `coverage_warning`, upload raw `out.jsonl`
-   (+ optional SARIF) to object storage, then atomically mark the scan complete and advance
-   only exact template+endpoint-matched lifecycle coverage pointers; write audit entries.
+   (+ optional SARIF) to object storage, then atomically mark the scan complete. Completion
+   expands coverage JSON once and joins it through the indexed lifecycle
+   `(template_id, endpoint_key)` pair before advancing matching evidence pointers; write audit
+   entries.
 8. **Failure path** — node timeout/non-zero exit, or dispatch/poll failure → status
    `failed`, capture stderr tail and the reason.
 

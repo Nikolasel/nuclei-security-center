@@ -138,7 +138,10 @@ to exact `{template_id, endpoint(host:port)}` pairs (`ScanStatus.CoveredEndpoint
 persists that evidence to `scans.covered_endpoints` (migration 0034; NULL = unknown/fail closed,
 empty = known zero) plus an optional surfaced `coverage_warning`. Lifecycle mitigation requires
 an exact pair for the finding's `endpoint_key`; another port or a template skipped by
-`max-host-error` proves nothing. An exact occurrence remains positive evidence for itself.
+`max-host-error` proves nothing. Scheme/type defaults normalize HTTP→80, HTTPS/TLS→443, DNS→53,
+and WHOIS→43; non-network findings expose `auto_mitigation_eligible=false` and never auto-close.
+Completion expands the JSON pairs once and uses the migration-0035
+`(template_id, endpoint_key)` index. An exact occurrence remains positive evidence for itself.
 
 **Scheduling:** `schedules` (migration 0007; reshaped by 0017) pairs a
 `scan_policy_id` (required, FK `ON DELETE CASCADE`) with a `cron` expression — the policy

@@ -41,7 +41,8 @@ the upgrade accordingly; subsequent successful traced scans re-establish mitigat
 Migration `0034` is the immutable forward correction from the development-time host-only
 representation to exact template + host:port pairs. It removes the superseded columns after
 backfilling lifecycle endpoint keys. Do not edit `0033` on databases that may already have
-recorded its checksum.
+recorded its checksum. Migration `0035` repairs scheme-less HTTP/HTTPS endpoint keys and adds
+the composite lifecycle lookup index used when scan completion expands exact coverage pairs.
 
 The template-aware finding-lifecycle regression is an explicit real-PostgreSQL integration test;
 regular CI stays free of service containers and skips it. Point local runs only at a disposable

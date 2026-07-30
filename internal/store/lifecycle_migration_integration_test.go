@@ -588,6 +588,20 @@ func TestEndpointCoverageUpgradePostgres(t *testing.T) {
 	); err != nil {
 		t.Fatalf("insert occurrence: %v", err)
 	}
+	var schemeLessLifecycleID int64
+	if err := st.pool.QueryRow(ctx,
+		`INSERT INTO finding_lifecycle
+		     (dedup_key, result_discriminator, template_id, name, severity, host, matched_at, type,
+		      first_seen_scan, last_seen_scan, first_seen_at, last_seen_at,
+		      last_covering_scan, times_mitigated)
+		 VALUES ('http-probe' || E'\x1f' || 'scheme-less.invalid',
+		         '', 'http-probe', 'HTTP probe', 'info', 'scheme-less.invalid',
+		         'scheme-less.invalid', 'http', $1, $1, now(), now(), $1, 0)
+		 RETURNING id`,
+		firstScan,
+	).Scan(&schemeLessLifecycleID); err != nil {
+		t.Fatalf("insert scheme-less HTTP lifecycle: %v", err)
+	}
 
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("upgrade through endpoint coverage: %v", err)
@@ -623,6 +637,28 @@ func TestEndpointCoverageUpgradePostgres(t *testing.T) {
 	}
 	if supersededColumns != 0 {
 		t.Fatalf("superseded coverage columns remaining = %d, want 0", supersededColumns)
+	}
+	var schemeLessEndpoint string
+	if err := st.pool.QueryRow(ctx,
+		`SELECT endpoint_key FROM finding_lifecycle WHERE id = $1`,
+		schemeLessLifecycleID,
+	).Scan(&schemeLessEndpoint); err != nil {
+		t.Fatalf("read scheme-less HTTP endpoint key: %v", err)
+	}
+	if schemeLessEndpoint != "scheme-less.invalid:80" {
+		t.Fatalf("scheme-less HTTP endpoint = %q, want scheme-less.invalid:80", schemeLessEndpoint)
+	}
+	var lookupIndex string
+	if err := st.pool.QueryRow(ctx,
+		`SELECT indexdef
+		   FROM pg_indexes
+		  WHERE schemaname = current_schema()
+		    AND indexname = 'finding_lifecycle_template_endpoint_idx'`,
+	).Scan(&lookupIndex); err != nil {
+		t.Fatalf("read endpoint coverage lookup index: %v", err)
+	}
+	if !strings.Contains(lookupIndex, "(template_id, endpoint_key)") {
+		t.Fatalf("endpoint coverage lookup index = %q", lookupIndex)
 	}
 }
 

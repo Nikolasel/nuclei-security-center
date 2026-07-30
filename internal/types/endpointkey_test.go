@@ -29,9 +29,11 @@ func TestEndpointKeyProtocolDefaults(t *testing.T) {
 		input, protocol, want string
 	}{
 		{"example.com", "ssl", "example.com:443"},
+		{"example.com", "http", "example.com:80"},
+		{"example.com", "https", "example.com:443"},
 		{"example.com", "dns", "example.com:53"},
 		{"2001:db8::1", "ssl", "[2001:db8::1]:443"},
-		{"example.com", "http", ""},
+		{"example.com", "file", ""},
 	} {
 		if got := EndpointKey(tc.input, tc.protocol); got != tc.want {
 			t.Errorf("EndpointKey(%q, %q) = %q, want %q", tc.input, tc.protocol, got, tc.want)

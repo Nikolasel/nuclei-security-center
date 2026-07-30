@@ -82,7 +82,7 @@ func (r *Runner) Start(spec types.ScanSpec) (string, error) {
 	if len(spec.Targets) == 0 {
 		return "", fmt.Errorf("scan spec has no targets")
 	}
-	templatePaths, unlockTemplates, err := r.bundle.lockTemplates(
+	templates, unlockTemplates, err := r.bundle.lockTemplates(
 		spec.Templates.TemplateIDs,
 		spec.Templates.TemplatesCommit,
 	)
@@ -109,7 +109,7 @@ func (r *Runner) Start(spec types.ScanSpec) (string, error) {
 	r.scans[id] = j
 	r.mu.Unlock()
 
-	go r.run(j, spec, dir, templatePaths, unlockTemplates)
+	go r.run(j, spec, dir, templates, unlockTemplates)
 	return id, nil
 }
 
@@ -166,7 +166,7 @@ func (r *Runner) Cancel(id string) bool {
 	return true
 }
 
-func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templatePaths []string, unlockTemplates func()) {
+func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []lockedTemplate, unlockTemplates func()) {
 	// Start acquired the active bundle's shared lock after validating the
 	// manifest. Hold it across discovery and Nuclei so no bundle activation can
 	// swap the selected files under this scan.
@@ -215,7 +215,7 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templatePaths []st
 		}
 		j.setDiscoveredTargets(live)
 		if len(live) == 0 {
-			j.setCoveredHosts([]string{})
+			j.setCoverage([]types.EndpointCoverage{}, "")
 			j.complete(0)
 			return
 		}
@@ -235,10 +235,27 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templatePaths []st
 	j.setCancel(cancel)
 	defer cancel()
 
-	tracePath := filepath.Join(dir, "requests-trace.jsonl")
-	// The trace can contain full request URLs. It is reduced to host keys only
-	// and never served or archived, so remove it as soon as this run returns.
+	templatePaths := make([]string, 0, len(templates))
+	templateIDByPath := make(map[string]string, len(templates))
+	for _, template := range templates {
+		templatePaths = append(templatePaths, template.Path)
+		templateIDByPath[filepath.Clean(template.Path)] = template.ID
+	}
+
+	// Nuclei requires a path for -trace-log. Use a FIFO instead of a regular
+	// file: coverage is reduced concurrently while Nuclei runs, so templates ×
+	// targets request volume can never consume unbounded node disk (#91 review).
+	tracePath := filepath.Join(dir, "requests-trace.pipe")
+	if err := syscall.Mkfifo(tracePath, 0o600); err != nil {
+		j.fail(fmt.Errorf("create endpoint coverage pipe: %w", err))
+		return
+	}
 	defer os.Remove(tracePath)
+	coverageCh := make(chan coverageResult, 1)
+	go func() {
+		coverageCh <- coveredEndpointsFromTraceFIFO(tracePath, templateIDByPath)
+	}()
+
 	args := buildArgs(nucleiTargets, j.resultsPath, tracePath, templatePaths, spec)
 	cmd := exec.CommandContext(ctx, r.nucleiPath, args...)
 	// Run in its own process group so Cancel/timeout kills nuclei and any child.
@@ -267,12 +284,18 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templatePaths []st
 
 	err := cmd.Run()
 	sw.flush()
-	coveredHosts, coverageErr := coveredHostsFromTrace(tracePath)
-	if coverageErr != nil {
-		_, _ = fmt.Fprintf(logw, "[WRN] endpoint coverage unavailable: %v\n", coverageErr)
-	} else {
-		j.setCoveredHosts(coveredHosts)
+	// If Nuclei failed before opening the FIFO, connect a non-blocking writer and
+	// close it so the coverage reader observes EOF instead of waiting forever.
+	if unblock, openErr := os.OpenFile(tracePath, os.O_WRONLY|syscall.O_NONBLOCK, 0o600); openErr == nil {
+		_ = unblock.Close()
 	}
+	coverage := <-coverageCh
+	findingCount := countLines(j.resultsPath)
+	coverage = validateCoverageAgainstFindings(coverage, findingCount)
+	if coverage.Warning != "" {
+		_, _ = fmt.Fprintf(logw, "[WRN] %s\n", coverage.Warning)
+	}
+	j.setCoverage(coverage.Endpoints, coverage.Warning)
 	if err != nil {
 		// A timeout is its own clean message: the OS reason (`signal: killed`) and
 		// the stderr tail (a batch of per-host "Skipped … unresponsive" diagnostics)
@@ -289,8 +312,7 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templatePaths []st
 		return
 	}
 
-	count := countLines(j.resultsPath)
-	j.complete(count)
+	j.complete(findingCount)
 }
 
 // buildArgs assembles the Nuclei command line from the spec.
@@ -415,10 +437,27 @@ func (j *job) setDiscoveredTargets(t []string) {
 	j.mu.Unlock()
 }
 
-func (j *job) setCoveredHosts(hosts []string) {
+func (j *job) setCoverage(endpoints []types.EndpointCoverage, warning string) {
 	j.mu.Lock()
-	j.status.CoveredHosts = append([]string{}, hosts...)
+	j.status.CoveredEndpoints = append([]types.EndpointCoverage{}, endpoints...)
+	j.status.CoverageWarning = warning
 	j.mu.Unlock()
+}
+
+func appendCoverageWarning(existing, warning string) string {
+	if existing == "" {
+		return warning
+	}
+	return existing + "; " + warning
+}
+
+func validateCoverageAgainstFindings(coverage coverageResult, findingCount int) coverageResult {
+	if findingCount > 0 && coverage.Endpoints != nil && len(coverage.Endpoints) == 0 {
+		coverage.Endpoints = nil
+		coverage.Warning = appendCoverageWarning(coverage.Warning,
+			fmt.Sprintf("endpoint coverage unavailable: scan produced %d findings but trace recorded no successful template/endpoint pairs", findingCount))
+	}
+	return coverage
 }
 
 func (j *job) fail(err error) {

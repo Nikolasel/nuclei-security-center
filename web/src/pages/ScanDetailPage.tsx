@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { api, scanLogUrl, scanRawUrl } from "../api";
+import { api, scanLogUrl, scanRawUrl, type EndpointCoverage } from "../api";
 import { hasRole, useMe } from "../auth";
 import { ScanFindingsView } from "../components/ScanFindingsView";
 import { Button, Card, ErrorText, ProgressBar, Spinner, StateBadge } from "../components/ui";
@@ -256,7 +256,12 @@ export function ScanDetailPage() {
             {scan.data.discovered_targets && scan.data.discovered_targets.length > 0 && (
               <DiscoveredEndpoints targets={scan.data.discovered_targets} />
             )}
-            {scan.data.state !== "running" && <CoveredHosts hosts={scan.data.covered_hosts} />}
+            {scan.data.state !== "running" && (
+              <CoveredEndpoints
+                endpoints={scan.data.covered_endpoints}
+                warning={scan.data.coverage_warning}
+              />
+            )}
           </Card>
         )
       )}
@@ -270,38 +275,53 @@ export function ScanDetailPage() {
   );
 }
 
-// CoveredHosts is the durable lifecycle evidence introduced by #91. Keep
+// CoveredEndpoints is the durable lifecycle evidence introduced by #91. Keep
 // "unknown" distinct from a known empty trace: old scans must fail closed, while
 // a completed scan that reached nothing has an explicit, explainable result.
-function CoveredHosts({ hosts }: { hosts?: string[] | null }) {
-  if (hosts == null) {
+function CoveredEndpoints({
+  endpoints,
+  warning,
+}: {
+  endpoints?: EndpointCoverage[] | null;
+  warning?: string;
+}) {
+  if (endpoints == null) {
     return (
-      <p className="mt-4 text-xs text-amber-600 dark:text-amber-400">
-        Host coverage unavailable · this scan cannot mark absent findings as mitigated
-      </p>
+      <div className="mt-4 rounded bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+        <p>Endpoint coverage unavailable · this scan cannot mark absent findings as mitigated</p>
+        {warning && <p className="mt-1 break-words">{warning}</p>}
+      </div>
     );
   }
-  const visibleHosts = hosts.slice(0, 500);
+  const visibleEndpoints = endpoints.slice(0, 500);
   return (
     <div className="mt-4">
       <p className="text-xs font-medium text-neutral-500">
-        Hosts reached by Nuclei · {hosts.length} {hosts.length === 1 ? "host" : "hosts"}
+        Template/endpoint checks completed · {endpoints.length.toLocaleString()}{" "}
+        {endpoints.length === 1 ? "pair" : "pairs"}
       </p>
-      {hosts.length === 0 ? (
-        <p className="mt-1 text-xs text-neutral-400">No host answered a Nuclei request.</p>
+      {warning && (
+        <p className="mt-1 rounded bg-amber-50 px-2 py-1 text-xs break-words text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+          {warning}
+        </p>
+      )}
+      {endpoints.length === 0 ? (
+        <p className="mt-1 text-xs text-neutral-400">
+          No template/endpoint pair completed a successful request.
+        </p>
       ) : (
         <div className="mt-2 flex max-h-40 flex-wrap gap-1 overflow-y-auto">
-          {visibleHosts.map((host) => (
+          {visibleEndpoints.map((pair) => (
             <span
-              key={host}
+              key={`${pair.template_id}\u001f${pair.endpoint}`}
               className="rounded bg-neutral-100 px-2 py-1 font-mono text-xs text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
             >
-              {host}
+              {pair.template_id} · {pair.endpoint}
             </span>
           ))}
-          {hosts.length > visibleHosts.length && (
+          {endpoints.length > visibleEndpoints.length && (
             <span className="px-2 py-1 text-xs text-neutral-400">
-              +{(hosts.length - visibleHosts.length).toLocaleString()} more
+              +{(endpoints.length - visibleEndpoints.length).toLocaleString()} more
             </span>
           )}
         </div>

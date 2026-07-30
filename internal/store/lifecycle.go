@@ -98,7 +98,7 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 	key := DedupKey(f.TemplateID, f.MatchedAt, discriminator)
 	rawLine := findingRawLine(raw)
 	f = findingTextProjection(f)
-	endpointHost := postgresText(types.HostKey(f.MatchedAt))
+	endpointKey := postgresText(types.EndpointKey(f.MatchedAt, f.Type))
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -146,7 +146,7 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 	upsertLifecycle := fmt.Sprintf(
 		`INSERT INTO finding_lifecycle
 		   (dedup_key, result_discriminator, template_id, name, severity, host,
-		    matched_at, endpoint_host, type, cve, tags, first_seen_scan, first_seen_at, last_seen_scan,
+		    matched_at, endpoint_key, type, cve, tags, first_seen_scan, first_seen_at, last_seen_scan,
 		    last_seen_at, latest_occurrence_id)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now(), $12, now(), $13)
 		 ON CONFLICT (dedup_key) DO UPDATE SET
@@ -158,7 +158,7 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 		    severity             = CASE WHEN %[1]s THEN excluded.severity ELSE finding_lifecycle.severity END,
 		    host                 = CASE WHEN %[1]s THEN excluded.host ELSE finding_lifecycle.host END,
 		    matched_at           = CASE WHEN %[1]s THEN excluded.matched_at ELSE finding_lifecycle.matched_at END,
-		    endpoint_host        = CASE WHEN %[1]s THEN excluded.endpoint_host ELSE finding_lifecycle.endpoint_host END,
+		    endpoint_key         = CASE WHEN %[1]s THEN excluded.endpoint_key ELSE finding_lifecycle.endpoint_key END,
 		    type                 = CASE WHEN %[1]s THEN excluded.type ELSE finding_lifecycle.type END,
 		    cve                  = CASE WHEN %[1]s THEN excluded.cve ELSE finding_lifecycle.cve END,
 		    tags                 = CASE WHEN %[1]s THEN excluded.tags ELSE finding_lifecycle.tags END,
@@ -174,7 +174,7 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 		incomingNewer, incomingOlder, incomingAfterCovering)
 	if err := tx.QueryRow(ctx, upsertLifecycle,
 		key, discriminator, f.TemplateID, f.Info.Name, f.Info.Severity, f.Host, f.MatchedAt,
-		endpointHost, f.Type, orEmpty(f.CVEs()), orEmpty(f.Info.Tags), scanID, occID, scanCreatedAt,
+		endpointKey, f.Type, orEmpty(f.CVEs()), orEmpty(f.Info.Tags), scanID, occID, scanCreatedAt,
 	).Scan(&lcID); err != nil {
 		return fmt.Errorf("upsert lifecycle: %w", err)
 	}

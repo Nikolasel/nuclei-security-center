@@ -91,12 +91,14 @@ continuity is desired. Each has:
 - a **detection state** — derived from scan observation, never stored. **Closure is
   evidence-driven — there is no manual "fixed."** The state is a function of whether the
   finding is in the latest completed scan, across scopes that have observed the global result,
-  that actually included the finding's concrete template id **and** successfully reached the
-  finding's normalized host, and how many times it has come back after disappearing
+  whose request trace proves the exact template id + normalized host:port pair, and how many
+  times it has come back after disappearing
   (`times_mitigated`). A scan using a narrower template set, or one whose Nuclei request trace
-  shows the host only failed/unreachable, is not mitigation evidence. `covered_hosts: null`
-  means telemetry is unavailable (including legacy scans) and fails closed; `[]` means the
-  trace was read successfully but no host answered:
+  shows only another port, another template, or a failed/unreachable request, is not mitigation
+  evidence. `covered_endpoints: null` means telemetry is unavailable (including legacy scans)
+  and fails closed; `[]` means the trace was read successfully but no template/endpoint pair
+  completed successfully. `coverage_warning`, when present, explains skipped or unavailable
+  trace evidence and is shown on scan detail:
 
   | Detection state | In latest covering scan? | Meaning |
   |---|---|---|

@@ -592,23 +592,37 @@ func TestEndpointCoverageUpgradePostgres(t *testing.T) {
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("upgrade through endpoint coverage: %v", err)
 	}
-	var endpointHost, lastCovering string
+	var endpointKey, lastCovering string
 	var timesMitigated int
-	var coveredHosts []string
+	var coveredEndpoints []byte
+	var coverageWarning *string
 	if err := st.pool.QueryRow(ctx,
-		`SELECT lifecycle.endpoint_host, lifecycle.last_covering_scan,
-		        lifecycle.times_mitigated, scan.covered_hosts
+		`SELECT lifecycle.endpoint_key, lifecycle.last_covering_scan,
+		        lifecycle.times_mitigated, scan.covered_endpoints, scan.coverage_warning
 		   FROM finding_lifecycle lifecycle
 		   JOIN scans scan ON scan.id = $2
 		  WHERE lifecycle.id = $1`,
 		lifecycleID, absentScan,
-	).Scan(&endpointHost, &lastCovering, &timesMitigated, &coveredHosts); err != nil {
+	).Scan(&endpointKey, &lastCovering, &timesMitigated, &coveredEndpoints, &coverageWarning); err != nil {
 		t.Fatalf("read upgraded coverage: %v", err)
 	}
-	if endpointHost != "2001:db8::1" || lastCovering != firstScan ||
-		timesMitigated != 0 || coveredHosts != nil {
-		t.Fatalf("upgraded coverage = host:%q covering:%s mitigated:%d hosts:%#v",
-			endpointHost, lastCovering, timesMitigated, coveredHosts)
+	if endpointKey != "[2001:db8::1]:443" || lastCovering != firstScan ||
+		timesMitigated != 0 || coveredEndpoints != nil || coverageWarning != nil {
+		t.Fatalf("upgraded coverage = endpoint:%q covering:%s mitigated:%d endpoints:%s warning:%v",
+			endpointKey, lastCovering, timesMitigated, coveredEndpoints, coverageWarning)
+	}
+	var supersededColumns int
+	if err := st.pool.QueryRow(ctx,
+		`SELECT count(*)
+		   FROM information_schema.columns
+		  WHERE table_schema = current_schema()
+		    AND ((table_name = 'scans' AND column_name = 'covered_hosts')
+		      OR (table_name = 'finding_lifecycle' AND column_name = 'endpoint_host'))`,
+	).Scan(&supersededColumns); err != nil {
+		t.Fatalf("check superseded coverage columns: %v", err)
+	}
+	if supersededColumns != 0 {
+		t.Fatalf("superseded coverage columns remaining = %d, want 0", supersededColumns)
 	}
 }
 

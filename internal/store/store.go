@@ -292,11 +292,9 @@ func (s *Store) FailOrphanedScans(ctx context.Context, reason string) (int64, er
 // pointer once, at completion, avoiding a per-row JSONB scan-history lookup on
 // every lifecycle read. The scan must cover the template and belong to a target
 // (or ad-hoc scope) that has observed this global finding before, and its
-// request trace must show that the finding's endpoint host answered. A concrete
-// template id proves template coverage; for legacy specs, any occurrence of a
-// template proves that template ran scan-wide. The exact occurrence itself is
-// always positive coverage evidence. Absence without host + template evidence
-// fails closed.
+// request trace must contain the exact (template id, canonical host:port) pair.
+// The exact occurrence itself is always positive coverage evidence. Absence
+// without pair-level evidence fails closed.
 //
 // The scan transition and coverage update are one statement, so readers cannot
 // observe a complete scan without its lifecycle evidence. Like MarkFailed this
@@ -308,47 +306,33 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 		    UPDATE scans
 		       SET state = $1, nuclei_version = $2, templates_commit = $3, finished_at = now()
 		     WHERE id = $4 AND state <> $5
-		     RETURNING id, target_id, spec, covered_hosts, created_at
-		 ),
-		 covered_templates AS (
-		    SELECT completed_scan.id AS scan_id, completed_scan.target_id,
-		           completed_scan.covered_hosts, completed_scan.created_at, ids.template_id
-		      FROM completed_scan
-		      CROSS JOIN LATERAL jsonb_array_elements_text(
-		          CASE
-		              WHEN jsonb_typeof(completed_scan.spec #> '{templates,template_ids}') = 'array'
-		              THEN completed_scan.spec #> '{templates,template_ids}'
-		              ELSE '[]'::jsonb
-		          END
-		      ) AS ids(template_id)
-		    UNION
-		    SELECT completed_scan.id, completed_scan.target_id,
-		           completed_scan.covered_hosts, completed_scan.created_at, findings.template_id
-		      FROM completed_scan
-		      JOIN findings ON findings.scan_id = completed_scan.id
+		     RETURNING id, target_id, covered_endpoints, created_at
 		 )
 		 UPDATE finding_lifecycle lifecycle
-		    SET last_covering_scan = covered_templates.scan_id
-		   FROM covered_templates
-		  WHERE lifecycle.template_id = covered_templates.template_id
-		    AND EXISTS (
+		    SET last_covering_scan = completed_scan.id
+		   FROM completed_scan
+		  WHERE EXISTS (
 		        SELECT 1
 		          FROM findings associated
 		          JOIN scans associated_scan ON associated_scan.id = associated.scan_id
 		         WHERE associated.finding_id = lifecycle.id
-		           AND associated_scan.target_id IS NOT DISTINCT FROM covered_templates.target_id
+		           AND associated_scan.target_id IS NOT DISTINCT FROM completed_scan.target_id
 		    )
 		    AND (
 		        EXISTS (
 		            SELECT 1
 		              FROM findings observed
-		             WHERE observed.scan_id = covered_templates.scan_id
+		             WHERE observed.scan_id = completed_scan.id
 		               AND observed.finding_id = lifecycle.id
 		        )
 		        OR (
-		            covered_templates.covered_hosts IS NOT NULL
-		            AND lifecycle.endpoint_host <> ''
-		            AND lifecycle.endpoint_host = ANY(covered_templates.covered_hosts)
+		            completed_scan.covered_endpoints IS NOT NULL
+		            AND lifecycle.endpoint_key <> ''
+		            AND completed_scan.covered_endpoints @>
+		                jsonb_build_array(jsonb_build_object(
+		                    'template_id', lifecycle.template_id,
+		                    'endpoint', lifecycle.endpoint_key
+		                ))
 		        )
 		    )
 		    AND (
@@ -358,7 +342,7 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 		              FROM scans previous
 		             WHERE previous.id = lifecycle.last_covering_scan
 		               AND (previous.created_at, previous.id) <
-		                   (covered_templates.created_at, covered_templates.scan_id)
+		                   (completed_scan.created_at, completed_scan.id)
 		        )
 		    )`,
 		types.ScanComplete, nucleiVersion, templatesCommit, scanID, types.ScanCancelled,
@@ -378,15 +362,22 @@ func (s *Store) SetScanDiscovered(ctx context.Context, scanID string, targets []
 	return err
 }
 
-// SetScanCovered persists host-level positive request evidence from Nuclei's
-// trace (#91). nil means coverage telemetry is unavailable and leaves the DB
-// NULL (fail closed); a non-nil empty slice is deliberately stored as '{}'.
-func (s *Store) SetScanCovered(ctx context.Context, scanID string, hosts []string) error {
-	if hosts == nil {
-		return nil
+// SetScanCoverage persists exact template+endpoint evidence and any fail-closed
+// trace warning (#91). nil evidence remains SQL NULL; non-nil empty becomes [].
+func (s *Store) SetScanCoverage(ctx context.Context, scanID string, endpoints []types.EndpointCoverage, warning string) error {
+	var raw []byte
+	var err error
+	if endpoints != nil {
+		raw, err = json.Marshal(endpoints)
+		if err != nil {
+			return fmt.Errorf("marshal endpoint coverage: %w", err)
+		}
 	}
-	_, err := s.pool.Exec(ctx,
-		`UPDATE scans SET covered_hosts = $1 WHERE id = $2`, hosts, scanID)
+	_, err = s.pool.Exec(ctx,
+		`UPDATE scans
+		    SET covered_endpoints = $2::jsonb, coverage_warning = $3
+		  WHERE id = $1`,
+		scanID, raw, nullStr(warning))
 	return err
 }
 
@@ -471,10 +462,10 @@ type ScanRow struct {
 	// (#86), persisted at completion. For a still-running scan the API layer fills
 	// it from the orchestrator's live cache instead. Empty when discovery was off.
 	DiscoveredTargets []string `json:"discovered_targets,omitempty"`
-	// CoveredHosts is host-level positive evidence from Nuclei's request trace
-	// (#91). nil means unavailable (legacy/parser failure); empty means the trace
-	// was read successfully and no host answered.
-	CoveredHosts []string `json:"covered_hosts"`
+	// CoveredEndpoints is exact template+host:port positive evidence (#91).
+	// nil means unavailable; empty means the trace was valid but nothing answered.
+	CoveredEndpoints []types.EndpointCoverage `json:"covered_endpoints"`
+	CoverageWarning  string                   `json:"coverage_warning,omitempty"`
 	// Progress is live scan progress (#66), attached by the API layer for running
 	// scans from the orchestrator's in-memory cache — never read from or written
 	// to the database.
@@ -490,7 +481,8 @@ const scanSelect = `
 	SELECT s.id, s.state, s.target_id, t.name, t.hosts, s.template_set_id, ts.name,
 	       s.scan_policy_id, sp.name, s.node_id, n.name,
 	       s.nuclei_version, s.templates_commit, s.error, s.raw_object_key, s.log_object_key,
-	       s.created_at, s.finished_at, s.discovered_targets, s.covered_hosts
+	       s.created_at, s.finished_at, s.discovered_targets,
+	       s.covered_endpoints, s.coverage_warning
 	  FROM scans s
 	  LEFT JOIN targets t ON t.id = s.target_id
 	  LEFT JOIN template_sets ts ON ts.id = s.template_set_id
@@ -502,13 +494,22 @@ const scanCancellableStates = `('queued', 'running')`
 
 func scanScan(row pgx.Row) (ScanRow, error) {
 	var r ScanRow
-	var targetID, targetName, templateSetID, templateSetName, scanPolicyID, scanPolicyName, nodeID, nodeName, nucleiVersion, templatesCommit, errStr, rawKey, logKey *string
+	var targetID, targetName, templateSetID, templateSetName, scanPolicyID, scanPolicyName, nodeID, nodeName, nucleiVersion, templatesCommit, errStr, rawKey, logKey, coverageWarning *string
 	var hosts []string
+	var coveredJSON []byte
 	if err := row.Scan(&r.ID, &r.State, &targetID, &targetName, &hosts, &templateSetID, &templateSetName,
 		&scanPolicyID, &scanPolicyName, &nodeID, &nodeName,
 		&nucleiVersion, &templatesCommit, &errStr, &rawKey, &logKey, &r.CreatedAt, &r.FinishedAt,
-		&r.DiscoveredTargets, &r.CoveredHosts); err != nil {
+		&r.DiscoveredTargets, &coveredJSON, &coverageWarning); err != nil {
 		return ScanRow{}, err
+	}
+	if coveredJSON != nil {
+		if err := json.Unmarshal(coveredJSON, &r.CoveredEndpoints); err != nil {
+			return ScanRow{}, fmt.Errorf("decode endpoint coverage: %w", err)
+		}
+		if r.CoveredEndpoints == nil {
+			r.CoveredEndpoints = []types.EndpointCoverage{}
+		}
 	}
 	r.TargetID = deref(targetID)
 	r.TargetName = deref(targetName)
@@ -522,6 +523,7 @@ func scanScan(row pgx.Row) (ScanRow, error) {
 	r.NucleiVersion = deref(nucleiVersion)
 	r.TemplatesCommit = deref(templatesCommit)
 	r.Error = deref(errStr)
+	r.CoverageWarning = deref(coverageWarning)
 	r.HasRaw = rawKey != nil
 	r.HasLog = logKey != nil
 	return r, nil
@@ -612,34 +614,19 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 	}
 	affectedRows, err := tx.Query(ctx,
 		`WITH deleted_scan AS (
-		    SELECT target_id, spec, covered_hosts
+		    SELECT target_id, covered_endpoints
 		      FROM scans
 		     WHERE id = $1
-		 ),
-		 covered_templates AS (
-		    SELECT deleted_scan.target_id, deleted_scan.covered_hosts, ids.template_id
-		      FROM deleted_scan
-		      CROSS JOIN LATERAL jsonb_array_elements_text(
-		          CASE
-		              WHEN jsonb_typeof(deleted_scan.spec #> '{templates,template_ids}') = 'array'
-		              THEN deleted_scan.spec #> '{templates,template_ids}'
-		              ELSE '[]'::jsonb
-		          END
-		      ) AS ids(template_id)
-		    UNION
-		    SELECT deleted_scan.target_id, deleted_scan.covered_hosts, findings.template_id
-		      FROM deleted_scan
-		      JOIN findings ON findings.scan_id = $1
 		 )
 		 SELECT lifecycle.id
 		   FROM finding_lifecycle lifecycle
-		   JOIN covered_templates coverage ON coverage.template_id = lifecycle.template_id
+		   CROSS JOIN deleted_scan
 		  WHERE EXISTS (
 		      SELECT 1
 		        FROM findings associated
 		        JOIN scans associated_scan ON associated_scan.id = associated.scan_id
 		       WHERE associated.finding_id = lifecycle.id
-		         AND associated_scan.target_id IS NOT DISTINCT FROM coverage.target_id
+		         AND associated_scan.target_id IS NOT DISTINCT FROM deleted_scan.target_id
 		  )
 		    AND (
 		        EXISTS (
@@ -649,9 +636,13 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 		               AND observed.finding_id = lifecycle.id
 		        )
 		        OR (
-		            coverage.covered_hosts IS NOT NULL
-		            AND lifecycle.endpoint_host <> ''
-		            AND lifecycle.endpoint_host = ANY(coverage.covered_hosts)
+		            deleted_scan.covered_endpoints IS NOT NULL
+		            AND lifecycle.endpoint_key <> ''
+		            AND deleted_scan.covered_endpoints @>
+		                jsonb_build_array(jsonb_build_object(
+		                    'template_id', lifecycle.template_id,
+		                    'endpoint', lifecycle.endpoint_key
+		                ))
 		        )
 		    )
 		 UNION

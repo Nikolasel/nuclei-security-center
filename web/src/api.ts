@@ -303,11 +303,19 @@ export interface Scan {
    *  persisted at completion, served live during the scanning phase. Empty when
    *  discovery was disabled. */
   discovered_targets?: string[];
-  /** hosts for which Nuclei recorded at least one successful request (#91).
-   *  null/undefined means coverage telemetry is unavailable; [] is known zero. */
-  covered_hosts?: string[] | null;
+  /** exact template+host:port pairs for which Nuclei recorded a successful
+   *  request (#91). null/undefined means coverage telemetry is unavailable;
+   *  [] is known zero. */
+  covered_endpoints?: EndpointCoverage[] | null;
+  /** fail-closed diagnostics when request-trace evidence was incomplete. */
+  coverage_warning?: string;
   created_at: string;
   finished_at?: string;
+}
+
+export interface EndpointCoverage {
+  template_id: string;
+  endpoint: string;
 }
 
 /** scanRawUrl is the download URL for a scan's archived raw Nuclei output

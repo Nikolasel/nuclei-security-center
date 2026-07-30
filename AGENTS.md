@@ -133,11 +133,12 @@ host:port list is reported as
 `ScanStatus.DiscoveredTargets`, cached live by the orchestrator during the scanning phase and
 persisted to `scans.discovered_targets` (migration 0019, `TEXT[]`) at completion, so the scan
 detail can show which endpoints were actually scanned.
-Nuclei also runs with `-trace-log` and the node reduces error-free request records to normalized
-host keys (`ScanStatus.CoveredHosts`). The backend persists that evidence to
-`scans.covered_hosts` (migration 0033; NULL = unknown/fail closed, empty = known zero). Lifecycle
-mitigation requires both template coverage and the finding's `endpoint_host` in that host set;
-an exact occurrence remains positive evidence for itself.
+Nuclei also runs with `-trace-log` into a FIFO and the node reduces error-free request records
+to exact `{template_id, endpoint(host:port)}` pairs (`ScanStatus.CoveredEndpoints`). The backend
+persists that evidence to `scans.covered_endpoints` (migration 0034; NULL = unknown/fail closed,
+empty = known zero) plus an optional surfaced `coverage_warning`. Lifecycle mitigation requires
+an exact pair for the finding's `endpoint_key`; another port or a template skipped by
+`max-host-error` proves nothing. An exact occurrence remains positive evidence for itself.
 
 **Scheduling:** `schedules` (migration 0007; reshaped by 0017) pairs a
 `scan_policy_id` (required, FK `ON DELETE CASCADE`) with a `cron` expression — the policy

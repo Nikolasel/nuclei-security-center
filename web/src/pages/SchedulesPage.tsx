@@ -41,7 +41,7 @@ function ScheduleModal({
   const [scanPolicyId, setScanPolicyId] = useState(existing?.scan_policy_id ?? "");
   const [targetId, setTargetId] = useState(existing?.target_id ?? "");
   const [cron, setCron] = useState(existing?.cron ?? "0 3 * * *");
-  const [enabled, setEnabled] = useState(existing?.enabled ?? true);
+  const [enabled, setEnabled] = useState(duplicate ? false : (existing?.enabled ?? true));
 
   const policies = scanPolicies.data ?? [];
 

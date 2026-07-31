@@ -41,8 +41,9 @@ export function parseList(s: string): string[] {
 
 /**
  * duplicateName returns a case-insensitive, non-colliding name for a copied
- * resource. The backend enforces the same uniqueness rule with lower(name),
- * so checking normalized names here avoids an avoidable conflict response.
+ * resource. This matches the backend's lower(name) uniqueness for targets,
+ * template sets, and scan policies; schedules are checked conservatively the
+ * same way in the client.
  */
 export function duplicateName(name: string, existingNames: Iterable<string>): string {
   const base = name.trim();

@@ -53,6 +53,9 @@ schedules CUD), `scan_dispatched` (scan submit or schedule run), `finding_triage
 (disposition/recast), `service_account_changed` (API-token create/rotate/revoke) — all at
 INFO (a denial is normal enforcement, not a fault). Each event also carries `actor_type`
 (`user` vs `service_account`) so headless token callers are never conflated with people.
+Successful dispatch actions (`scan.create` and `schedule.run`) additionally carry the resolved
+`scan_policy_id`, `target_id`, and `scan_id`, keeping the operator-selected scope in the off-DB
+trail.
 
 **Scan policies (#87 — the central scan config):** `scan_policies`
 (migration 0017, made target-independent by 0036) is the reusable, named **how to scan**

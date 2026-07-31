@@ -111,7 +111,9 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
 
 Migration 0036 deliberately preserves existing schedules: it copies each schedule's policy-owned
 target into `schedules.target_id` before dropping `scan_policies.target_id`. Historical scans
-already carry their resolved target and require no rewrite.
+already carry their resolved target and require no rewrite. The backfill is total because the old
+policy target and schedule policy references are both non-null, and deleting a policy already
+cascaded its schedules; every surviving schedule therefore joins a surviving policy with a target.
 - **findings** (occurrences) — the immutable per-scan observation log: `id, scan_id,
   target_id, finding_id, dedup_key, result_discriminator, template_id, name, severity,
   host, matched_at, raw_line, raw`.
@@ -363,8 +365,10 @@ trade; the native-services path only wins if you're committed to one cloud forev
 - **Audit log** — every mutating call is emitted as a structured `event=audit` log line
   to stdout, where the platform's log aggregator ingests/retains/queries it. Off-DB by
   design, so a DB compromise can't rewrite the trail; a small `event_id` vocabulary drives
-  detections. Template and template-set imports use `event_id=config_changed`,
-  `action=templates.import`; exports are read-only and do not emit mutations.
+  detections. Successful scan dispatch events include the resolved policy, target, and scan IDs,
+  so an operator-selected scope is not recorded only in the mutable app database. Template and
+  template-set imports use `event_id=config_changed`, `action=templates.import`; exports are
+  read-only and do not emit mutations.
 - **Authz on every mutating endpoint** — the three roles are enforced server-side.
 - Patch your own deps: a vuln scanner running on stale libraries is a bad look.
 

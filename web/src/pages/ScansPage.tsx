@@ -53,15 +53,18 @@ function RunScanModal({ onClose }: { onClose: () => void }) {
           </select>
         </Field>
         {selectedPolicy && (
-          <p className="-mt-2 text-xs text-neutral-500">
-            Runs the <span className="font-medium">{selectedPolicy.name}</span> policy
-            {targetId ? (
-              <>
-                {" "}against <span className="font-medium">{targetName(targetId)}</span>
-              </>
-            ) : null}
-            .
-          </p>
+          <div className="-mt-2 space-y-1 text-xs text-neutral-500">
+            <p>
+              Runs the <span className="font-medium">{selectedPolicy.name}</span> policy
+              {targetId ? (
+                <>
+                  {" "}against <span className="font-medium">{targetName(targetId)}</span>
+                </>
+              ) : null}
+              .
+            </p>
+            <p>Confirm its discovery mode, rate, and timeouts are appropriate for the selected target.</p>
+          </div>
         )}
         {!scanPolicies.isLoading && policies.length === 0 && (
           <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">

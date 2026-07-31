@@ -17,6 +17,9 @@ template and execution configuration — and an approved **target** (`target_id`
 [Scan policies](#config-scan-policies)). There is no ad-hoc host/spec path: every scan names a
 stored target, so scope is guaranteed by construction. Create a policy and target first, then:
 
+**Breaking change (#137):** callers must now send both IDs. A body containing only
+`scan_policy_id`, accepted by earlier alpha releases, is rejected with `target_id is required`.
+
 ```sh
 # start a scan using a policy against an approved target
 curl -sb jar.txt -X POST localhost:8080/api/scans \
@@ -479,6 +482,10 @@ Each knob is optional: a `null` (omitted) field means "use the built-in default"
 concurrency `25` / timeout `600`s / `max_host_error` Nuclei's own `30`), so a policy can tune
 just one knob and leave the rest alone.
 
+Because the policy is reusable, its discovery mode, rate, timeouts, and host-error tolerance are
+applied unchanged to whichever target is selected. Operators should confirm those settings suit
+the chosen scope, especially before pointing a high-rate policy at a fragile device.
+
 `max_host_error` is Nuclei's `-max-host-error`: how many errors a single host may accumulate
 (across every protocol, not per port) before Nuclei abandons it for the rest of the run —
 silently skipping executors that hadn't run yet (e.g. the SSL/TLS pass). Raising it, and/or
@@ -630,6 +637,9 @@ Each event carries the actor (`actor_subject` / `actor_email` / `actor_type`), a
 fine-grained `action`, the object (`object_type` / `object_id`), `method`, `path`, `status`, and
 `duration_ms`. `actor_type` is `service_account` for token callers (their `actor_subject` is
 `svc:<name>`) and `user` for interactive logins, so automation is never conflated with a person.
+Successful `scan.create` and `schedule.run` actions also carry the resolved `scan_policy_id`,
+`target_id`, and `scan_id`, so the selected scope remains attributable outside the application
+database.
 `event_id` is a small, stable vocabulary to build detections on:
 
 | `event_id` | emitted when |

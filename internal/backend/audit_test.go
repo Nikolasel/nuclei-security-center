@@ -123,8 +123,9 @@ func TestMutationEmitsAndCallsNext(t *testing.T) {
 	s := &Server{log: slog.New(slog.NewJSONHandler(&buf, nil))}
 
 	called := false
-	h := s.mutation(eventConfigChanged, "target.create", "target", RoleOperator, func(w http.ResponseWriter, _ *http.Request) {
+	h := s.mutation(eventConfigChanged, "target.create", "target", RoleOperator, func(w http.ResponseWriter, r *http.Request) {
 		called = true
+		addAuditFields(r, slog.String("target_id", "t1"), slog.String("scan_policy_id", "p1"))
 		w.WriteHeader(http.StatusCreated)
 	})
 
@@ -146,5 +147,8 @@ func TestMutationEmitsAndCallsNext(t *testing.T) {
 	}
 	if ev["actor_subject"] != "dev" {
 		t.Errorf("actor_subject = %v, want dev (devIdentity)", ev["actor_subject"])
+	}
+	if ev["target_id"] != "t1" || ev["scan_policy_id"] != "p1" {
+		t.Errorf("handler audit fields missing: %v", ev)
 	}
 }

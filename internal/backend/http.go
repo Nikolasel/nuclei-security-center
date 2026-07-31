@@ -227,12 +227,17 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	addAuditFields(r,
+		slog.String("scan_policy_id", link.ScanPolicyID),
+		slog.String("target_id", link.TargetID),
+	)
 
 	scanID, err := s.orch.Submit(r.Context(), spec, link)
 	if err != nil {
 		s.serverError(w, "submit scan", err)
 		return
 	}
+	addAuditFields(r, slog.String("scan_id", scanID))
 	writeJSON(w, http.StatusAccepted, map[string]string{"scan_id": scanID})
 }
 

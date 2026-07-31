@@ -2,6 +2,7 @@ package backend
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -101,6 +102,10 @@ func (s *Server) handleRunSchedule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	addAuditFields(r,
+		slog.String("scan_policy_id", link.ScanPolicyID),
+		slog.String("target_id", link.TargetID),
+	)
 	link.Source = "schedule"
 	link.ScheduleID = sc.ID
 	scanID, err := s.orch.Submit(r.Context(), spec, link)
@@ -108,6 +113,7 @@ func (s *Server) handleRunSchedule(w http.ResponseWriter, r *http.Request) {
 		s.serverError(w, "run schedule", err)
 		return
 	}
+	addAuditFields(r, slog.String("scan_id", scanID))
 	writeJSON(w, http.StatusAccepted, map[string]string{"scan_id": scanID})
 }
 

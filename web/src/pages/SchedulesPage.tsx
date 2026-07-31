@@ -3,6 +3,7 @@ import { useState } from "react";
 import { api, type Schedule } from "../api";
 import { hasRole, useMe } from "../auth";
 import { Button, Card, ErrorText, Field, Input, Modal, Select, Spinner } from "../components/ui";
+import { duplicateName } from "../util";
 
 // Common cron presets offered as one-click buttons in the editor.
 const CRON_PRESETS: { label: string; cron: string }[] = [
@@ -19,16 +20,28 @@ function fmt(iso?: string): string {
   return d.toLocaleString();
 }
 
-function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: () => void }) {
+function ScheduleModal({
+  existing,
+  duplicate = false,
+  existingNames,
+  onClose,
+}: {
+  existing?: Schedule;
+  duplicate?: boolean;
+  existingNames: string[];
+  onClose: () => void;
+}) {
   const qc = useQueryClient();
   const scanPolicies = useQuery({ queryKey: ["scan-policies"], queryFn: () => api.listScanPolicies() });
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
 
-  const [name, setName] = useState(existing?.name ?? "");
+  const [name, setName] = useState(
+    existing ? (duplicate ? duplicateName(existing.name, existingNames) : existing.name) : "",
+  );
   const [scanPolicyId, setScanPolicyId] = useState(existing?.scan_policy_id ?? "");
   const [targetId, setTargetId] = useState(existing?.target_id ?? "");
   const [cron, setCron] = useState(existing?.cron ?? "0 3 * * *");
-  const [enabled, setEnabled] = useState(existing?.enabled ?? true);
+  const [enabled, setEnabled] = useState(duplicate ? false : (existing?.enabled ?? true));
 
   const policies = scanPolicies.data ?? [];
 
@@ -41,7 +54,7 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
         cron: cron.trim(),
         enabled,
       };
-      return existing ? api.updateSchedule(existing.id, body) : api.createSchedule(body);
+      return existing && !duplicate ? api.updateSchedule(existing.id, body) : api.createSchedule(body);
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["schedules"] });
@@ -52,7 +65,11 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
   const canSave = name.trim() && scanPolicyId && targetId && cron.trim();
 
   return (
-    <Modal open onOpenChange={(v) => !v && onClose()} title={existing ? "Edit schedule" : "New schedule"}>
+    <Modal
+      open
+      onOpenChange={(v) => !v && onClose()}
+      title={duplicate ? "Duplicate schedule" : existing ? "Edit schedule" : "New schedule"}
+    >
       <div className="space-y-4">
         <Field label="Name">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="nightly-prod" />
@@ -124,6 +141,7 @@ export function SchedulesPage() {
   const canDelete = hasRole(me.data ?? undefined, "admin");
   const qc = useQueryClient();
   const [editing, setEditing] = useState<Schedule | "new" | null>(null);
+  const [duplicating, setDuplicating] = useState(false);
 
   const q = useQuery({ queryKey: ["schedules"], queryFn: () => api.listSchedules() });
   const policies = useQuery({ queryKey: ["scan-policies"], queryFn: () => api.listScanPolicies() });
@@ -145,6 +163,10 @@ export function SchedulesPage() {
     onSuccess: invalidate,
   });
   const run = useMutation({ mutationFn: (id: string) => api.runSchedule(id), onSuccess: invalidate });
+  const closeEditor = () => {
+    setEditing(null);
+    setDuplicating(false);
+  };
 
   return (
     <div className="space-y-4">
@@ -154,7 +176,13 @@ export function SchedulesPage() {
           <p className="text-sm text-neutral-500">Cron-driven scans dispatched automatically by the backend.</p>
         </div>
         {canWrite && (
-          <Button variant="primary" onClick={() => setEditing("new")}>
+          <Button
+            variant="primary"
+            onClick={() => {
+              setDuplicating(false);
+              setEditing("new");
+            }}
+          >
             New schedule
           </Button>
         )}
@@ -215,8 +243,23 @@ export function SchedulesPage() {
                             <Button variant="ghost" disabled={toggle.isPending} onClick={() => toggle.mutate(s)}>
                               {s.enabled ? "Disable" : "Enable"}
                             </Button>
-                            <Button variant="ghost" onClick={() => setEditing(s)}>
+                            <Button
+                              variant="ghost"
+                              onClick={() => {
+                                setDuplicating(false);
+                                setEditing(s);
+                              }}
+                            >
                               Edit
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              onClick={() => {
+                                setDuplicating(true);
+                                setEditing(s);
+                              }}
+                            >
+                              Duplicate
                             </Button>
                           </>
                         )}
@@ -249,7 +292,12 @@ export function SchedulesPage() {
       )}
 
       {editing && (
-        <ScheduleModal existing={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />
+        <ScheduleModal
+          existing={editing === "new" ? undefined : editing}
+          duplicate={duplicating}
+          existingNames={(q.data ?? []).map((schedule) => schedule.name)}
+          onClose={closeEditor}
+        />
       )}
     </div>
   );

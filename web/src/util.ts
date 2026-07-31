@@ -40,6 +40,26 @@ export function parseList(s: string): string[] {
 }
 
 /**
+ * duplicateName returns a case-insensitive, non-colliding name for a copied
+ * resource. This matches the backend's lower(name) uniqueness for targets,
+ * template sets, and scan policies; schedules are checked conservatively the
+ * same way in the client.
+ */
+export function duplicateName(name: string, existingNames: Iterable<string>): string {
+  const base = name.trim();
+  const taken = new Set<string>();
+  for (const existingName of existingNames) {
+    taken.add(existingName.trim().toLowerCase());
+  }
+
+  for (let copyNumber = 1; ; copyNumber += 1) {
+    const suffix = copyNumber === 1 ? "" : ` ${copyNumber}`;
+    const candidate = `${base} (copy${suffix})`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+}
+
+/**
  * safeHref returns the URL only when it parses as an absolute http(s) URL, and
  * undefined otherwise. Finding-derived strings (a template-url, a reference) are
  * influenced by an untrusted actor; React escapes text nodes but does NOT block

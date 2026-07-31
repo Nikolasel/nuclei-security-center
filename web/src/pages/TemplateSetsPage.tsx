@@ -12,21 +12,27 @@ import {
 import { hasRole, useMe } from "../auth";
 import { TemplateArchiveImportModal } from "../components/TemplateArchiveImportModal";
 import { Button, Card, ErrorText, Field, Input, Modal, Pill, Select, SeverityBadge, Spinner } from "../components/ui";
-import { parseList } from "../util";
+import { duplicateName, parseList } from "../util";
 
 const PAGE_SIZE = 20;
 
 function TemplateSetModal({
   existing,
+  duplicate = false,
+  existingNames,
   readOnly = false,
   onClose,
 }: {
   existing?: TemplateSet;
+  duplicate?: boolean;
+  existingNames: string[];
   readOnly?: boolean;
   onClose: () => void;
 }) {
   const qc = useQueryClient();
-  const [name, setName] = useState(existing?.name ?? "");
+  const [name, setName] = useState(
+    existing ? (duplicate ? duplicateName(existing.name, existingNames) : existing.name) : "",
+  );
   const [dynamicAll, setDynamicAll] = useState(existing?.dynamic_all ?? false);
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<TemplateSource | "">("");
@@ -76,7 +82,7 @@ function TemplateSetModal({
   const save = useMutation({
     mutationFn: async () => {
       let saved: TemplateSet;
-      if (existing) {
+      if (existing && !duplicate) {
         saved = await api.updateTemplateSet(existing.id, {
           name: name.trim(),
           dynamic_all: dynamicAll,
@@ -104,7 +110,7 @@ function TemplateSetModal({
     <Modal
       open
       onOpenChange={(open) => !open && onClose()}
-      title={existing ? `${readOnly ? "View" : "Edit"} ${existing.name}` : "New template set"}
+      title={duplicate ? "Duplicate template set" : existing ? `${readOnly ? "View" : "Edit"} ${existing.name}` : "New template set"}
       size="workspace"
     >
       <div className="flex h-full min-h-0 flex-col">
@@ -302,6 +308,7 @@ export function TemplateSetsPage() {
   const canDelete = hasRole(me.data ?? undefined, "admin");
   const qc = useQueryClient();
   const [editing, setEditing] = useState<TemplateSet | "new" | null>(null);
+  const [duplicating, setDuplicating] = useState(false);
   const [notice, setNotice] = useState("");
   const [importing, setImporting] = useState(false);
   const [exportFormat, setExportFormat] = useState<TemplateArchiveFormat>("yaml");
@@ -314,6 +321,10 @@ export function TemplateSetsPage() {
   const download = useMutation({
     mutationFn: ({ id }: { id: string }) => api.downloadTemplateSet(id, exportFormat),
   });
+  const closeEditor = () => {
+    setEditing(null);
+    setDuplicating(false);
+  };
   const imported = (result: TemplateImportResponse) => {
     const summary = result.templates;
     const setResult = result.set
@@ -341,7 +352,17 @@ export function TemplateSetsPage() {
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {canWrite && <Button onClick={() => setImporting(true)}>Import set</Button>}
-          {canWrite && <Button variant="primary" onClick={() => setEditing("new")}>New template set</Button>}
+          {canWrite && (
+            <Button
+              variant="primary"
+              onClick={() => {
+                setDuplicating(false);
+                setEditing("new");
+              }}
+            >
+              New template set
+            </Button>
+          )}
         </div>
       </div>
 
@@ -394,9 +415,26 @@ export function TemplateSetsPage() {
                         >
                           {download.isPending && download.variables?.id === set.id ? "Exporting…" : "Export"}
                         </Button>
-                        <Button variant="ghost" onClick={() => setEditing(set)}>
+                        <Button
+                          variant="ghost"
+                          onClick={() => {
+                            setDuplicating(false);
+                            setEditing(set);
+                          }}
+                        >
                           {canWrite ? "Edit" : "View"}
                         </Button>
+                        {canWrite && (
+                          <Button
+                            variant="ghost"
+                            onClick={() => {
+                              setDuplicating(true);
+                              setEditing(set);
+                            }}
+                          >
+                            Duplicate
+                          </Button>
+                        )}
                         {canDelete && (
                           <Button
                             variant="ghost"
@@ -421,8 +459,10 @@ export function TemplateSetsPage() {
       {editing && (
         <TemplateSetModal
           existing={editing === "new" ? undefined : editing}
-          readOnly={editing !== "new" && !canWrite}
-          onClose={() => setEditing(null)}
+          duplicate={duplicating}
+          existingNames={(sets.data ?? []).map((set) => set.name)}
+          readOnly={!duplicating && editing !== "new" && !canWrite}
+          onClose={closeEditor}
         />
       )}
       {importing && (

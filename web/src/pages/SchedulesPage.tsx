@@ -26,10 +26,10 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
 
   const [name, setName] = useState(existing?.name ?? "");
   const [scanPolicyId, setScanPolicyId] = useState(existing?.scan_policy_id ?? "");
+  const [targetId, setTargetId] = useState(existing?.target_id ?? "");
   const [cron, setCron] = useState(existing?.cron ?? "0 3 * * *");
   const [enabled, setEnabled] = useState(existing?.enabled ?? true);
 
-  const targetName = (id: string) => targets.data?.find((t) => t.id === id)?.name ?? id.slice(0, 8);
   const policies = scanPolicies.data ?? [];
 
   const save = useMutation({
@@ -37,6 +37,7 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
       const body: Partial<Schedule> = {
         name: name.trim(),
         scan_policy_id: scanPolicyId,
+        target_id: targetId,
         cron: cron.trim(),
         enabled,
       };
@@ -48,7 +49,7 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
     },
   });
 
-  const canSave = name.trim() && scanPolicyId && cron.trim();
+  const canSave = name.trim() && scanPolicyId && targetId && cron.trim();
 
   return (
     <Modal open onOpenChange={(v) => !v && onClose()} title={existing ? "Edit schedule" : "New schedule"}>
@@ -56,12 +57,12 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
         <Field label="Name">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="nightly-prod" />
         </Field>
-        <Field label="Scan policy (target + templates + execution settings)">
+        <Field label="Scan policy (templates + execution settings)">
           <Select value={scanPolicyId} onChange={(e) => setScanPolicyId(e.target.value)} className="w-full">
             <option value="">Select a scan policy…</option>
             {policies.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.name} → {targetName(p.target_id)}
+                {p.name}
               </option>
             ))}
           </Select>
@@ -69,6 +70,21 @@ function ScheduleModal({ existing, onClose }: { existing?: Schedule; onClose: ()
         {!scanPolicies.isLoading && policies.length === 0 && (
           <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
             No scan policies yet — create one under Scan Policies first.
+          </p>
+        )}
+        <Field label="Target (approved scope)">
+          <Select value={targetId} onChange={(e) => setTargetId(e.target.value)} className="w-full">
+            <option value="">Select a target…</option>
+            {(targets.data ?? []).map((target) => (
+              <option key={target.id} value={target.id}>
+                {target.name} ({target.host_count} host{target.host_count === 1 ? "" : "s"})
+              </option>
+            ))}
+          </Select>
+        </Field>
+        {!targets.isLoading && (targets.data ?? []).length === 0 && (
+          <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
+            No approved targets yet — create one under Targets first.
           </p>
         )}
         <Field label="Cron (min hour day-of-month month day-of-week)">
@@ -111,7 +127,9 @@ export function SchedulesPage() {
 
   const q = useQuery({ queryKey: ["schedules"], queryFn: () => api.listSchedules() });
   const policies = useQuery({ queryKey: ["scan-policies"], queryFn: () => api.listScanPolicies() });
+  const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
   const policyName = (id: string) => policies.data?.find((p) => p.id === id)?.name ?? id.slice(0, 8);
+  const targetName = (id: string) => targets.data?.find((target) => target.id === id)?.name ?? id.slice(0, 8);
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ["schedules"] });
   const del = useMutation({ mutationFn: (id: string) => api.deleteSchedule(id), onSuccess: invalidate });
@@ -120,6 +138,7 @@ export function SchedulesPage() {
       api.updateSchedule(s.id, {
         name: s.name,
         scan_policy_id: s.scan_policy_id,
+        target_id: s.target_id,
         cron: s.cron,
         enabled: !s.enabled,
       }),
@@ -153,6 +172,7 @@ export function SchedulesPage() {
                 <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
                   <th className="px-3 py-2 font-medium">Name</th>
                   <th className="px-3 py-2 font-medium">Scan policy</th>
+                  <th className="px-3 py-2 font-medium">Target</th>
                   <th className="px-3 py-2 font-medium">Cron</th>
                   <th className="px-3 py-2 font-medium">Status</th>
                   <th className="px-3 py-2 font-medium">Next run</th>
@@ -165,6 +185,7 @@ export function SchedulesPage() {
                   <tr key={s.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
                     <td className="px-3 py-2 font-medium">{s.name}</td>
                     <td className="px-3 py-2 text-neutral-600 dark:text-neutral-400">{policyName(s.scan_policy_id)}</td>
+                    <td className="px-3 py-2 text-neutral-600 dark:text-neutral-400">{targetName(s.target_id)}</td>
                     <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">{s.cron}</td>
                     <td className="px-3 py-2">
                       {s.enabled ? (
@@ -216,7 +237,7 @@ export function SchedulesPage() {
                 ))}
                 {(q.data ?? []).length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-3 py-8 text-center text-neutral-400">
+                    <td colSpan={7 + (canWrite || canDelete ? 1 : 0)} className="px-3 py-8 text-center text-neutral-400">
                       No schedules yet.
                     </td>
                   </tr>

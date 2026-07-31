@@ -41,6 +41,24 @@ type statusRecorder struct {
 	written bool
 }
 
+// requestAuditFields is a request-scoped, handler-populated extension to the
+// common audit envelope. The mutation middleware installs it before invoking a
+// handler, and recordAudit reads it afterward. This lets a handler record
+// resolved, non-secret identifiers that are not present in the URL without
+// logging arbitrary request bodies.
+type requestAuditFields struct {
+	attrs []slog.Attr
+}
+
+type requestAuditFieldsKey struct{}
+
+func addAuditFields(r *http.Request, attrs ...slog.Attr) {
+	fields, _ := r.Context().Value(requestAuditFieldsKey{}).(*requestAuditFields)
+	if fields != nil {
+		fields.attrs = append(fields.attrs, attrs...)
+	}
+}
+
 func (r *statusRecorder) WriteHeader(code int) {
 	if !r.written {
 		r.status = code
@@ -66,6 +84,7 @@ func (s *Server) mutation(eventID, action, objectType, role string, next http.Ha
 	return s.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		r = r.WithContext(context.WithValue(r.Context(), requestAuditFieldsKey{}, &requestAuditFields{}))
 		id := identityFrom(r.Context())
 		if !satisfies(id, role) {
 			http.Error(rec, "insufficient role", http.StatusForbidden)
@@ -109,6 +128,9 @@ func (s *Server) recordAudit(r *http.Request, id store.Identity, eventID, action
 	if oid := r.PathValue("id"); oid != "" {
 		attrs = append(attrs, slog.String("object_id", oid))
 	}
+	if fields, _ := r.Context().Value(requestAuditFieldsKey{}).(*requestAuditFields); fields != nil {
+		attrs = append(attrs, fields.attrs...)
+	}
 
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "audit "+action, attrs...)
 }
@@ -118,9 +140,10 @@ func (s *Server) recordAudit(r *http.Request, id store.Identity, eventID, action
 // recordAudit needs an *http.Request for the actor/method/path, which a
 // background job doesn't have; this keeps the same event=audit contract with
 // actor_type="system" so automated mutations are still visible in the aggregator
-// (docs/ARCHITECTURE.md's guarantee that every mutation is logged). Always INFO,
-// like recordAudit — a routine automated action isn't a fault.
-func logSystemAudit(ctx context.Context, log *slog.Logger, eventID, action, objectType, objectID string) {
+// (docs/ARCHITECTURE.md's guarantee that every mutation is logged). Additional
+// attrs carry resolved, non-secret context such as a scheduled scan's policy and
+// target. Always INFO, like recordAudit — a routine automated action isn't a fault.
+func logSystemAudit(ctx context.Context, log *slog.Logger, eventID, action, objectType, objectID string, extra ...slog.Attr) {
 	if log == nil {
 		return
 	}
@@ -137,6 +160,7 @@ func logSystemAudit(ctx context.Context, log *slog.Logger, eventID, action, obje
 	if objectID != "" {
 		attrs = append(attrs, slog.String("object_id", objectID))
 	}
+	attrs = append(attrs, extra...)
 	log.LogAttrs(ctx, slog.LevelInfo, "audit "+action, attrs...)
 }
 

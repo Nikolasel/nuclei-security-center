@@ -49,7 +49,7 @@ func validateTemplateSet(t *store.TemplateSet) error {
 }
 
 // validateScanPolicy trims and checks a scan policy in place. A policy is the
-// full scan config, so it must name a target (the scope) and a template set.
+// target-independent HOW-to-scan config, so it must name a template set.
 // "All templates" is represented by an explicit dynamic set, never an omitted
 // reference. Their existence is enforced by the store (FK → ErrInvalidRef).
 // Every execution knob is optional
@@ -60,10 +60,6 @@ func validateScanPolicy(p *store.ScanPolicy) error {
 	p.Name = strings.TrimSpace(p.Name)
 	if p.Name == "" {
 		return errors.New("name is required")
-	}
-	p.TargetID = strings.TrimSpace(p.TargetID)
-	if p.TargetID == "" {
-		return errors.New("target_id is required")
 	}
 	p.TemplateSetID = strings.TrimSpace(p.TemplateSetID)
 	if p.TemplateSetID == "" {
@@ -145,11 +141,10 @@ func validatePortSpec(spec string) error {
 	return nil
 }
 
-// validateSchedule trims and checks a schedule in place. A schedule just pairs a
-// scan policy with a cadence (#87 — the policy carries the target, template set,
-// and knobs). The cron expression is validated against the same parser the ticker
-// uses, so a schedule that saves is one the ticker can run. The policy's existence
-// is enforced by the store (FK → ErrInvalidRef); here we only require it present.
+// validateSchedule trims and checks a schedule in place. A schedule pairs an
+// approved target with a reusable policy and cadence (#137). The cron expression
+// is validated against the same parser the ticker uses. FK existence checks live
+// in the store; here both ids are required and normalized.
 func validateSchedule(s *store.Schedule) error {
 	s.Name = strings.TrimSpace(s.Name)
 	if s.Name == "" {
@@ -158,6 +153,10 @@ func validateSchedule(s *store.Schedule) error {
 	s.ScanPolicyID = strings.TrimSpace(s.ScanPolicyID)
 	if s.ScanPolicyID == "" {
 		return errors.New("scan_policy_id is required")
+	}
+	s.TargetID = strings.TrimSpace(s.TargetID)
+	if s.TargetID == "" {
+		return errors.New("target_id is required")
 	}
 	s.Cron = strings.TrimSpace(s.Cron)
 	if s.Cron == "" {

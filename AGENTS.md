@@ -23,10 +23,10 @@ GitHub issues (see §8 of the architecture doc).
 
 **Scope guardrail (§6 — the most important guardrail):** a scan may only target
 hosts inside an approved `target` record. Every scan is launched from a **scan policy**
-(`POST /api/scans` takes only a `scan_policy_id`), and a policy always references a stored
-target, so a scan is **in scope by construction** — there is no ad-hoc host/spec path to name
-an out-of-scope host. Target hosts are validated (hostname/IP/CIDR/URL, host-granular, DNS-free)
-when a target is created. **Fails closed:** no approved targets ⇒ no policy to build ⇒ no scan.
+and an approved target (`POST /api/scans` takes `scan_policy_id` + `target_id`), so a scan is
+**in scope by construction** — there is no ad-hoc host/spec path to name an out-of-scope host.
+Target hosts are validated (hostname/IP/CIDR/URL, host-granular, DNS-free) when a target is
+created. **Fails closed:** no approved targets ⇒ no scan.
 (`internal/backend/scope.go`'s `outOfScopeHosts`/`AllTargetHosts` remain as the allowlist
 primitives, retained for reuse though the removed ad-hoc `spec` path was their only caller.)
 
@@ -53,16 +53,20 @@ schedules CUD), `scan_dispatched` (scan submit or schedule run), `finding_triage
 (disposition/recast), `service_account_changed` (API-token create/rotate/revoke) — all at
 INFO (a denial is normal enforcement, not a fault). Each event also carries `actor_type`
 (`user` vs `service_account`) so headless token callers are never conflated with people.
+Successful dispatch actions (`scan.create`, manual `schedule.run`, and cron dispatch) additionally
+carry the resolved `scan_policy_id`, `target_id`, and `scan_id`, keeping the selected scope in the
+off-DB trail; unattended cron dispatches use `actor_type=system`.
 
 **Scan policies (#87 — the central scan config):** `scan_policies`
-(migration 0017) is the reusable, named scan configuration and **the only way to launch a
-scan**. It bundles everything a scan needs: `target_id` (required — the scope, FK
-`ON DELETE CASCADE`), `template_set_id` (required, FK `ON DELETE RESTRICT`; a set is exact
-membership or explicit `dynamic_all`), and Nuclei's execution knobs `rate_limit` / `concurrency` / `timeout_sec` /
-`max_host_error` (each column nullable = "use the built-in default"). `POST /api/scans` takes
-only `{scan_policy_id}`; `Server.resolvePolicySpec` loads the policy, resolves its target +
-template set via `resolveConfigSpec`, and overlays the policy's non-nil knobs over
-`defaultOptions()` (pure step: `overlayScanPolicy`). The resolved `target_id`/`template_set_id`
+(migration 0017, made target-independent by 0036) is the reusable, named **how to scan**
+configuration and is required for every launch. It bundles `template_set_id` (required, FK
+`ON DELETE RESTRICT`; a set is exact membership or explicit `dynamic_all`) and Nuclei's
+execution knobs `rate_limit` / `concurrency` / `timeout_sec` / `max_host_error` (each column
+nullable = "use the built-in default"). `POST /api/scans` takes
+`{scan_policy_id,target_id}`; `Server.resolvePolicySpec` loads the policy and resolves the
+request's approved target plus the policy's template set via `resolveConfigSpec`, then overlays
+the policy's non-nil knobs over `defaultOptions()` (pure step: `overlayScanPolicy`). The
+resolved `target_id`/`template_set_id`
 are recorded on the scan (via `ScanLink`) so findings/lifecycle work unchanged; `scan_policy_id`
 on `scans` is `ON DELETE SET NULL` (history survives a policy delete). `max_host_error` wires
 Nuclei's `-max-host-error` into `buildArgs` (`<= 0` omits the flag, so Nuclei's own default of 30
@@ -143,9 +147,10 @@ and WHOIS→43; non-network findings expose `auto_mitigation_eligible=false` and
 Completion expands the JSON pairs once and uses the migration-0035
 `(template_id, endpoint_key)` index. An exact occurrence remains positive evidence for itself.
 
-**Scheduling:** `schedules` (migration 0007; reshaped by 0017) pairs a
-`scan_policy_id` (required, FK `ON DELETE CASCADE`) with a `cron` expression — the policy
-carries the target/templates/knobs, so the schedule just picks one and a cadence. A backend
+**Scheduling:** `schedules` (migration 0007; reshaped by 0017 and 0036) pairs a
+`scan_policy_id` (required, FK `ON DELETE CASCADE`) and `target_id` (required, FK
+`ON DELETE CASCADE`) with a `cron` expression — the policy supplies templates/knobs and the
+schedule supplies the approved target plus cadence. A backend
 `Scheduler` ticker (`internal/backend/scheduler.go`, wakes each minute) selects rows where
 `enabled AND next_run_at <= now()`, dispatches each via `orch.Submit` (resolving the policy with
 the same `resolvePolicySpec`) with `ScanLink{Source:"schedule", ScheduleID:…}`, and advances
@@ -283,7 +288,8 @@ docker compose up --build
 ```
 
 Then log in at `http://localhost:8080`. The API is under `/api/*` behind the session cookie
-(there is **no** implicit default scan — every scan names a `target_id` or an in-scope `spec`).
+(there is **no** implicit default scan — every scan names a `scan_policy_id` and stored
+`target_id`).
 See `docs/API.md` for the endpoint walkthrough and `docs/CONFIGURATION.md` for auth-disabled
 dev mode used in headless `curl` testing.
 

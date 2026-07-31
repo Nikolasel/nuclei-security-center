@@ -81,19 +81,20 @@ func TestScheduleNextRun(t *testing.T) {
 }
 
 func TestValidateSchedule(t *testing.T) {
-	ok := store.Schedule{Name: " nightly ", ScanPolicyID: " p1 ", Cron: " 0 3 * * * "}
+	ok := store.Schedule{Name: " nightly ", ScanPolicyID: " p1 ", TargetID: " t1 ", Cron: " 0 3 * * * "}
 	if err := validateSchedule(&ok); err != nil {
 		t.Fatalf("validateSchedule(valid) = %v", err)
 	}
-	if ok.Name != "nightly" || ok.ScanPolicyID != "p1" || ok.Cron != "0 3 * * *" {
+	if ok.Name != "nightly" || ok.ScanPolicyID != "p1" || ok.TargetID != "t1" || ok.Cron != "0 3 * * *" {
 		t.Errorf("validateSchedule did not trim fields: %+v", ok)
 	}
 
 	bad := []store.Schedule{
-		{Name: "", ScanPolicyID: "p1", Cron: "0 3 * * *"},   // no name
-		{Name: "x", ScanPolicyID: "", Cron: "0 3 * * *"},    // no scan policy
-		{Name: "x", ScanPolicyID: "p1", Cron: ""},           // no cron
-		{Name: "x", ScanPolicyID: "p1", Cron: "not a cron"}, // bad cron
+		{Name: "", ScanPolicyID: "p1", TargetID: "t1", Cron: "0 3 * * *"},   // no name
+		{Name: "x", ScanPolicyID: "", TargetID: "t1", Cron: "0 3 * * *"},    // no scan policy
+		{Name: "x", ScanPolicyID: "p1", TargetID: "", Cron: "0 3 * * *"},    // no target
+		{Name: "x", ScanPolicyID: "p1", TargetID: "t1", Cron: ""},           // no cron
+		{Name: "x", ScanPolicyID: "p1", TargetID: "t1", Cron: "not a cron"}, // bad cron
 	}
 	for _, s := range bad {
 		s := s

@@ -95,18 +95,25 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   document retaining the verbatim YAML strings; a dynamic set exports its mode rather than freezing
   the current catalog. Import writes custom templates and set membership atomically; upstream rows
   remain sync-owned and are reference-only.
-- **scan_policies** — `id, name, target_id, template_set_id, rate_limit, concurrency,
-  timeout_sec, max_host_error`. The **central, reusable scan configuration**: it bundles
-  *everything* a scan needs — the target (required — the scope), a required template set
-  (exact or dynamic all-active), and Nuclei's execution knobs (each nullable = "use the built-in
-  default"). **Every scan and schedule is launched by selecting a policy.** Deleting a policy's
-  target cascades the policy away; a template set referenced by a policy cannot be deleted.
-- **schedules** — `id, scan_policy_id, cron, enabled` — a policy paired with a cadence. Deleting
-  the policy cascades the schedule away.
+- **scan_policies** — `id, name, template_set_id, rate_limit, concurrency, timeout_sec,
+  max_host_error, discovery_*`. The central, reusable **how to scan** configuration: a required
+  template set (exact or dynamic all-active) plus Nuclei/discovery knobs (each nullable = "use the
+  built-in default"). Every scan and schedule selects a policy and an approved target
+  independently, so one policy can be reused across scopes. A template set referenced by a policy
+  cannot be deleted.
+- **schedules** — `id, scan_policy_id, target_id, cron, enabled` — a policy and approved target
+  paired with a cadence. Deleting either referenced row cascades the schedule away.
 - **scans** — `id, source (schedule|adhoc), scan_policy_id, target_id, template_set_id, status,
-  started_at, finished_at, nuclei_version, templates_commit, triggered_by`. The policy's target/
-  template set are resolved and recorded on the scan at dispatch (so findings keep working and
-  history survives `scan_policy_id` being nulled on policy delete — `ON DELETE SET NULL`).
+  started_at, finished_at, nuclei_version, templates_commit, triggered_by`. The selected target
+  and policy's template set are resolved and recorded on the scan at dispatch (so findings keep
+  working and history survives `scan_policy_id` being nulled on policy delete — `ON DELETE SET
+  NULL`).
+
+Migration 0036 deliberately preserves existing schedules: it copies each schedule's policy-owned
+target into `schedules.target_id` before dropping `scan_policies.target_id`. Historical scans
+already carry their resolved target and require no rewrite. The backfill is total because the old
+policy target and schedule policy references are both non-null, and deleting a policy already
+cascaded its schedules; every surviving schedule therefore joins a surviving policy with a target.
 - **findings** (occurrences) — the immutable per-scan observation log: `id, scan_id,
   target_id, finding_id, dedup_key, result_discriminator, template_id, name, severity,
   host, matched_at, raw_line, raw`.
@@ -342,9 +349,9 @@ trade; the native-services path only wins if you're committed to one cloud forev
   results, nothing more. A compromised node in a segmented network can't reach the system
   of record. This is the main security payoff of splitting it out.
 - **Scope guardrail (most important):** a scan may only target hosts inside an approved
-  `target` record. Every scan runs a **scan policy**, and a policy always references a
-  stored target, so a scan is in scope **by construction** — there is no path to name a
-  host that isn't already an approved target. Prevents fat-fingering a scan at
+  `target` record. Every scan selects a **scan policy** and stored **target**, so it is in
+  scope **by construction** — there is no path to name a host that isn't already an approved
+  target. Prevents fat-fingering a scan at
   out-of-scope / third-party assets, which for a scanner is the difference between a tool
   and an incident.
 - **Egress control:** run scanner nodes in a segmented network / per zone; the node makes
@@ -358,8 +365,11 @@ trade; the native-services path only wins if you're committed to one cloud forev
 - **Audit log** — every mutating call is emitted as a structured `event=audit` log line
   to stdout, where the platform's log aggregator ingests/retains/queries it. Off-DB by
   design, so a DB compromise can't rewrite the trail; a small `event_id` vocabulary drives
-  detections. Template and template-set imports use `event_id=config_changed`,
-  `action=templates.import`; exports are read-only and do not emit mutations.
+  detections. Successful ad-hoc, manual-schedule, and cron dispatch events include the resolved
+  policy, target, and scan IDs, so the selected scope is not recorded only in the mutable app
+  database; unattended cron dispatches use `actor_type=system`. Template and template-set imports
+  use `event_id=config_changed`, `action=templates.import`; exports are read-only and do not emit
+  mutations.
 - **Authz on every mutating endpoint** — the three roles are enforced server-side.
 - Patch your own deps: a vuln scanner running on stale libraries is a bad look.
 

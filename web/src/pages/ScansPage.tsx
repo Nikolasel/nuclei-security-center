@@ -11,13 +11,14 @@ function RunScanModal({ onClose }: { onClose: () => void }) {
   const scanPolicies = useQuery({ queryKey: ["scan-policies"], queryFn: () => api.listScanPolicies() });
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
   const [scanPolicyId, setScanPolicyId] = useState("");
+  const [targetId, setTargetId] = useState("");
 
   const targetName = (id: string) => targets.data?.find((t) => t.id === id)?.name ?? id.slice(0, 8);
   const selectedPolicy = (scanPolicies.data ?? []).find((p) => p.id === scanPolicyId);
   const policies = scanPolicies.data ?? [];
 
   const run = useMutation({
-    mutationFn: () => api.createScan({ scan_policy_id: scanPolicyId }),
+    mutationFn: () => api.createScan({ scan_policy_id: scanPolicyId, target_id: targetId }),
     onSuccess: (res) => {
       void qc.invalidateQueries({ queryKey: ["scans"] });
       onClose();
@@ -36,28 +37,49 @@ function RunScanModal({ onClose }: { onClose: () => void }) {
             <option value="">Select a scan policy…</option>
             {policies.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.name} → {targetName(p.target_id)}
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Target (approved scope)">
+          <select value={targetId} onChange={(e) => setTargetId(e.target.value)} className={selectCls}>
+            <option value="">Select a target…</option>
+            {(targets.data ?? []).map((target) => (
+              <option key={target.id} value={target.id}>
+                {target.name} ({target.host_count} host{target.host_count === 1 ? "" : "s"})
               </option>
             ))}
           </select>
         </Field>
         {selectedPolicy && (
-          <p className="-mt-2 text-xs text-neutral-500">
-            Runs the <span className="font-medium">{selectedPolicy.name}</span> policy against{" "}
-            <span className="font-medium">{targetName(selectedPolicy.target_id)}</span>
-            {selectedPolicy.template_set_id ? "" : " with all templates"}.
-          </p>
+          <div className="-mt-2 space-y-1 text-xs text-neutral-500">
+            <p>
+              Runs the <span className="font-medium">{selectedPolicy.name}</span> policy
+              {targetId ? (
+                <>
+                  {" "}against <span className="font-medium">{targetName(targetId)}</span>
+                </>
+              ) : null}
+              .
+            </p>
+            <p>Confirm its discovery mode, rate, and timeouts are appropriate for the selected target.</p>
+          </div>
         )}
         {!scanPolicies.isLoading && policies.length === 0 && (
           <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
-            No scan policies yet — create one under Scan Policies first (it carries the target, templates, and
-            execution settings a scan needs).
+            No scan policies yet — create one under Scan Policies first.
+          </p>
+        )}
+        {!targets.isLoading && (targets.data ?? []).length === 0 && (
+          <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
+            No approved targets yet — create one under Targets before running a scan.
           </p>
         )}
         {run.isError && <ErrorText error={run.error} />}
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!scanPolicyId || run.isPending} onClick={() => run.mutate()}>
+          <Button variant="primary" disabled={!scanPolicyId || !targetId || run.isPending} onClick={() => run.mutate()}>
             {run.isPending ? "Starting…" : "Run scan"}
           </Button>
         </div>

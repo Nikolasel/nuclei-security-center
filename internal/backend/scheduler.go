@@ -140,6 +140,11 @@ func (s *Scheduler) dispatch(ctx context.Context, sc store.Schedule, now time.Ti
 		if err != nil {
 			log.Error("dispatch scheduled scan", "err", err)
 		} else {
+			logSystemAudit(ctx, log, eventScanDispatched, "schedule.run", "scan", scanID,
+				slog.String("scan_policy_id", link.ScanPolicyID),
+				slog.String("target_id", link.TargetID),
+				slog.String("scan_id", scanID),
+			)
 			log.Info("scheduled scan dispatched", "scan_id", scanID, "next_run", next)
 		}
 	}

@@ -365,10 +365,11 @@ trade; the native-services path only wins if you're committed to one cloud forev
 - **Audit log** — every mutating call is emitted as a structured `event=audit` log line
   to stdout, where the platform's log aggregator ingests/retains/queries it. Off-DB by
   design, so a DB compromise can't rewrite the trail; a small `event_id` vocabulary drives
-  detections. Successful scan dispatch events include the resolved policy, target, and scan IDs,
-  so an operator-selected scope is not recorded only in the mutable app database. Template and
-  template-set imports use `event_id=config_changed`, `action=templates.import`; exports are
-  read-only and do not emit mutations.
+  detections. Successful ad-hoc, manual-schedule, and cron dispatch events include the resolved
+  policy, target, and scan IDs, so the selected scope is not recorded only in the mutable app
+  database; unattended cron dispatches use `actor_type=system`. Template and template-set imports
+  use `event_id=config_changed`, `action=templates.import`; exports are read-only and do not emit
+  mutations.
 - **Authz on every mutating endpoint** — the three roles are enforced server-side.
 - Patch your own deps: a vuln scanner running on stale libraries is a bad look.
 

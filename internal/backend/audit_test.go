@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -150,5 +151,35 @@ func TestMutationEmitsAndCallsNext(t *testing.T) {
 	}
 	if ev["target_id"] != "t1" || ev["scan_policy_id"] != "p1" {
 		t.Errorf("handler audit fields missing: %v", ev)
+	}
+}
+
+func TestLogSystemAuditIncludesResolvedContext(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	logSystemAudit(context.Background(), log, eventScanDispatched, "schedule.run", "scan", "scan1",
+		slog.String("scan_policy_id", "policy1"),
+		slog.String("target_id", "target1"),
+		slog.String("scan_id", "scan1"),
+	)
+	ev := lastAudit(t, &buf)
+
+	want := map[string]any{
+		"event":          "audit",
+		"event_id":       eventScanDispatched,
+		"action":         "schedule.run",
+		"actor_subject":  "system",
+		"actor_type":     "system",
+		"object_type":    "scan",
+		"object_id":      "scan1",
+		"scan_policy_id": "policy1",
+		"target_id":      "target1",
+		"scan_id":        "scan1",
+	}
+	for key, value := range want {
+		if ev[key] != value {
+			t.Errorf("field %q = %v, want %v", key, ev[key], value)
+		}
 	}
 }

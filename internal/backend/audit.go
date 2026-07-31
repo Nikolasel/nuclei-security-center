@@ -140,9 +140,10 @@ func (s *Server) recordAudit(r *http.Request, id store.Identity, eventID, action
 // recordAudit needs an *http.Request for the actor/method/path, which a
 // background job doesn't have; this keeps the same event=audit contract with
 // actor_type="system" so automated mutations are still visible in the aggregator
-// (docs/ARCHITECTURE.md's guarantee that every mutation is logged). Always INFO,
-// like recordAudit — a routine automated action isn't a fault.
-func logSystemAudit(ctx context.Context, log *slog.Logger, eventID, action, objectType, objectID string) {
+// (docs/ARCHITECTURE.md's guarantee that every mutation is logged). Additional
+// attrs carry resolved, non-secret context such as a scheduled scan's policy and
+// target. Always INFO, like recordAudit — a routine automated action isn't a fault.
+func logSystemAudit(ctx context.Context, log *slog.Logger, eventID, action, objectType, objectID string, extra ...slog.Attr) {
 	if log == nil {
 		return
 	}
@@ -159,6 +160,7 @@ func logSystemAudit(ctx context.Context, log *slog.Logger, eventID, action, obje
 	if objectID != "" {
 		attrs = append(attrs, slog.String("object_id", objectID))
 	}
+	attrs = append(attrs, extra...)
 	log.LogAttrs(ctx, slog.LevelInfo, "audit "+action, attrs...)
 }
 

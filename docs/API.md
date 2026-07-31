@@ -637,9 +637,9 @@ Each event carries the actor (`actor_subject` / `actor_email` / `actor_type`), a
 fine-grained `action`, the object (`object_type` / `object_id`), `method`, `path`, `status`, and
 `duration_ms`. `actor_type` is `service_account` for token callers (their `actor_subject` is
 `svc:<name>`) and `user` for interactive logins, so automation is never conflated with a person.
-Successful `scan.create` and `schedule.run` actions also carry the resolved `scan_policy_id`,
-`target_id`, and `scan_id`, so the selected scope remains attributable outside the application
-database.
+Successful `scan.create`, manual `schedule.run`, and cron dispatch actions also carry the resolved
+`scan_policy_id`, `target_id`, and `scan_id`, so the selected scope remains attributable outside
+the application database. Cron dispatches identify their actor as `system`.
 `event_id` is a small, stable vocabulary to build detections on:
 
 | `event_id` | emitted when |

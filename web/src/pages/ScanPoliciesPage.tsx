@@ -3,6 +3,7 @@ import { useState } from "react";
 import { api, type ScanPolicy } from "../api";
 import { hasRole, useMe } from "../auth";
 import { Button, Card, ErrorText, Field, Input, Modal, Select, Spinner, Textarea } from "../components/ui";
+import { duplicateName } from "../util";
 
 // The built-in defaults each knob falls back to when a policy leaves it unset.
 // Mirrors the backend's defaultOptions() (internal/backend/http.go) plus Nuclei's
@@ -54,10 +55,22 @@ function portsInvalid(s: string): boolean {
   });
 }
 
-function ScanPolicyModal({ existing, onClose }: { existing?: ScanPolicy; onClose: () => void }) {
+function ScanPolicyModal({
+  existing,
+  duplicate = false,
+  existingNames,
+  onClose,
+}: {
+  existing?: ScanPolicy;
+  duplicate?: boolean;
+  existingNames: string[];
+  onClose: () => void;
+}) {
   const qc = useQueryClient();
   const templateSets = useQuery({ queryKey: ["template-sets"], queryFn: () => api.listTemplateSets() });
-  const [name, setName] = useState(existing?.name ?? "");
+  const [name, setName] = useState(
+    existing ? (duplicate ? duplicateName(existing.name, existingNames) : existing.name) : "",
+  );
   const [templateSetId, setTemplateSetId] = useState(existing?.template_set_id ?? "");
   const [rateLimit, setRateLimit] = useState(existing?.rate_limit != null ? String(existing.rate_limit) : "");
   const [concurrency, setConcurrency] = useState(
@@ -117,7 +130,7 @@ function ScanPolicyModal({ existing, onClose }: { existing?: ScanPolicy; onClose
         discovery_probe_timeout_ms: discoveryEnabled ? parseKnob(discoveryProbeTimeoutMs) : null,
         discovery_retries: discoveryEnabled ? parseKnob(discoveryRetries) : null,
       };
-      return existing ? api.updateScanPolicy(existing.id, body) : api.createScanPolicy(body);
+      return existing && !duplicate ? api.updateScanPolicy(existing.id, body) : api.createScanPolicy(body);
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["scan-policies"] });
@@ -129,7 +142,7 @@ function ScanPolicyModal({ existing, onClose }: { existing?: ScanPolicy; onClose
     <Modal
       open
       onOpenChange={(v) => !v && onClose()}
-      title={existing ? "Edit scan policy" : "New scan policy"}
+      title={duplicate ? "Duplicate scan policy" : existing ? "Edit scan policy" : "New scan policy"}
       size="wide"
     >
       <div className="space-y-4">
@@ -335,6 +348,7 @@ export function ScanPoliciesPage() {
   const canDelete = hasRole(me.data ?? undefined, "admin");
   const qc = useQueryClient();
   const [editing, setEditing] = useState<ScanPolicy | "new" | null>(null);
+  const [duplicating, setDuplicating] = useState(false);
 
   const q = useQuery({ queryKey: ["scan-policies"], queryFn: () => api.listScanPolicies() });
   const templateSets = useQuery({ queryKey: ["template-sets"], queryFn: () => api.listTemplateSets() });
@@ -344,6 +358,10 @@ export function ScanPoliciesPage() {
     mutationFn: (id: string) => api.deleteScanPolicy(id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["scan-policies"] }),
   });
+  const closeEditor = () => {
+    setEditing(null);
+    setDuplicating(false);
+  };
 
   return (
     <div className="space-y-4">
@@ -355,7 +373,13 @@ export function ScanPoliciesPage() {
           </p>
         </div>
         {canWrite && (
-          <Button variant="primary" onClick={() => setEditing("new")}>
+          <Button
+            variant="primary"
+            onClick={() => {
+              setDuplicating(false);
+              setEditing("new");
+            }}
+          >
             New scan policy
           </Button>
         )}
@@ -396,8 +420,25 @@ export function ScanPoliciesPage() {
                     {(canWrite || canDelete) && (
                       <td className="px-3 py-2 text-right whitespace-nowrap">
                         {canWrite && (
-                          <Button variant="ghost" onClick={() => setEditing(p)}>
+                          <Button
+                            variant="ghost"
+                            onClick={() => {
+                              setDuplicating(false);
+                              setEditing(p);
+                            }}
+                          >
                             Edit
+                          </Button>
+                        )}
+                        {canWrite && (
+                          <Button
+                            variant="ghost"
+                            onClick={() => {
+                              setDuplicating(true);
+                              setEditing(p);
+                            }}
+                          >
+                            Duplicate
                           </Button>
                         )}
                         {canDelete && (
@@ -429,7 +470,12 @@ export function ScanPoliciesPage() {
       )}
 
       {editing && (
-        <ScanPolicyModal existing={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />
+        <ScanPolicyModal
+          existing={editing === "new" ? undefined : editing}
+          duplicate={duplicating}
+          existingNames={(q.data ?? []).map((policy) => policy.name)}
+          onClose={closeEditor}
+        />
       )}
     </div>
   );

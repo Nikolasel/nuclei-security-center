@@ -4,18 +4,30 @@ import { useSearchParams } from "react-router-dom";
 import { api, type Target } from "../api";
 import { hasRole, useMe } from "../auth";
 import { Button, Card, ErrorText, Field, Input, Modal, Spinner } from "../components/ui";
-import { parseList } from "../util";
+import { duplicateName, parseList } from "../util";
 
-function TargetModal({ existing, onClose }: { existing?: Target; onClose: () => void }) {
+function TargetModal({
+  existing,
+  duplicate = false,
+  existingNames,
+  onClose,
+}: {
+  existing?: Target;
+  duplicate?: boolean;
+  existingNames: string[];
+  onClose: () => void;
+}) {
   const qc = useQueryClient();
-  const [name, setName] = useState(existing?.name ?? "");
+  const [name, setName] = useState(
+    existing ? (duplicate ? duplicateName(existing.name, existingNames) : existing.name) : "",
+  );
   const [hosts, setHosts] = useState((existing?.hosts ?? []).join("\n"));
   const [tags, setTags] = useState((existing?.tags ?? []).join(", "));
 
   const save = useMutation({
     mutationFn: () => {
       const body = { name: name.trim(), hosts: parseList(hosts), tags: parseList(tags) };
-      return existing ? api.updateTarget(existing.id, body) : api.createTarget(body);
+      return existing && !duplicate ? api.updateTarget(existing.id, body) : api.createTarget(body);
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["targets"] });
@@ -24,7 +36,11 @@ function TargetModal({ existing, onClose }: { existing?: Target; onClose: () => 
   });
 
   return (
-    <Modal open onOpenChange={(v) => !v && onClose()} title={existing ? "Edit target" : "New target"}>
+    <Modal
+      open
+      onOpenChange={(v) => !v && onClose()}
+      title={duplicate ? "Duplicate target" : existing ? "Edit target" : "New target"}
+    >
       <div className="space-y-4">
         <Field label="Name">
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="prod-web" />
@@ -59,6 +75,7 @@ export function TargetsPage() {
   const canDelete = hasRole(me.data ?? undefined, "admin");
   const qc = useQueryClient();
   const [editing, setEditing] = useState<Target | "new" | null>(null);
+  const [duplicating, setDuplicating] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedTargetID = searchParams.get("target") ?? "";
 
@@ -70,13 +87,23 @@ export function TargetsPage() {
     mutationFn: (id: string) => api.deleteTarget(id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["targets"] }),
   });
+  const closeEditor = () => {
+    setEditing(null);
+    setDuplicating(false);
+  };
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Targets</h1>
         {canWrite && (
-          <Button variant="primary" onClick={() => setEditing("new")}>
+          <Button
+            variant="primary"
+            onClick={() => {
+              setDuplicating(false);
+              setEditing("new");
+            }}
+          >
             New target
           </Button>
         )}
@@ -123,8 +150,25 @@ export function TargetsPage() {
                     {(canWrite || canDelete) && (
                       <td className="px-3 py-2 text-right whitespace-nowrap">
                         {canWrite && (
-                          <Button variant="ghost" onClick={() => setEditing(t)}>
+                          <Button
+                            variant="ghost"
+                            onClick={() => {
+                              setDuplicating(false);
+                              setEditing(t);
+                            }}
+                          >
                             Edit
+                          </Button>
+                        )}
+                        {canWrite && (
+                          <Button
+                            variant="ghost"
+                            onClick={() => {
+                              setDuplicating(true);
+                              setEditing(t);
+                            }}
+                          >
+                            Duplicate
                           </Button>
                         )}
                         {canDelete && (
@@ -156,7 +200,12 @@ export function TargetsPage() {
       )}
 
       {editing && (
-        <TargetModal existing={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />
+        <TargetModal
+          existing={editing === "new" ? undefined : editing}
+          duplicate={duplicating}
+          existingNames={(q.data ?? []).map((target) => target.name)}
+          onClose={closeEditor}
+        />
       )}
     </div>
   );

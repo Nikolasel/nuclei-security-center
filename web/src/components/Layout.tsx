@@ -185,7 +185,12 @@ export function Layout({
         </div>
       </header>
       <main className="mx-auto max-w-[96rem] px-4 py-6">
-        <div className={cn("grid gap-8", collapsed ? "grid-cols-[3.25rem_1fr]" : "grid-cols-[12rem_1fr]")}>
+        <div
+          className={cn(
+            "grid gap-8",
+            collapsed ? "grid-cols-[3.25rem_minmax(0,1fr)]" : "grid-cols-[12rem_minmax(0,1fr)]",
+          )}
+        >
           <aside>
             <div className={cn("mb-4 flex", collapsed ? "justify-center" : "justify-end")}>
               <button
@@ -262,7 +267,7 @@ export function Layout({
               </nav>
             </Tooltip.Provider>
           </aside>
-          <div>{children}</div>
+          <div className="min-w-0">{children}</div>
         </div>
       </main>
     </div>

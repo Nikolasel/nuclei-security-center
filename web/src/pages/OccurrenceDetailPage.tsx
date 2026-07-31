@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, type NucleiRaw } from "../api";
+import { CodeBlock } from "../components/CodeBlock";
 import { safeHref } from "../util";
-import { Button, Card, ErrorText, SeverityBadge, Spinner } from "../components/ui";
+import { Card, ErrorText, SeverityBadge, Spinner } from "../components/ui";
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -32,29 +33,6 @@ function Chips({ items }: { items?: string[] }) {
           {item}
         </span>
       ))}
-    </div>
-  );
-}
-
-function CodeBlock({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard access is optional.
-    }
-  };
-  return (
-    <div className="relative">
-      <Button variant="secondary" onClick={copy} className="absolute right-2 top-2 px-2 py-1 text-xs">
-        {copied ? "Copied" : "Copy"}
-      </Button>
-      <pre className="max-h-96 overflow-auto rounded-md bg-neutral-950 p-3 pr-16 text-xs leading-relaxed text-neutral-200">
-        {text}
-      </pre>
     </div>
   );
 }

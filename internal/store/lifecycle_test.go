@@ -2,7 +2,9 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -217,6 +219,19 @@ func TestFindingJSONBProjectionEscapesNULWithoutChangingRaw(t *testing.T) {
 	}
 	if got["large"] != json.Number("12345678901234567890") {
 		t.Errorf("large number changed: %#v", got["large"])
+	}
+}
+
+func TestIngestFindingClassifiesMalformedRecord(t *testing.T) {
+	// The record-local projection runs before any database work, so this test can
+	// verify the classification without a live Postgres connection.
+	err := (&Store{}).IngestFinding(context.Background(), "scan", "target", types.NucleiFinding{}, []byte("{"))
+	var recordErr *FindingRecordError
+	if !errors.As(err, &recordErr) {
+		t.Fatalf("err = %v, want FindingRecordError", err)
+	}
+	if recordErr.Stage() != "project raw finding JSON" {
+		t.Fatalf("stage = %q, want raw JSON projection stage", recordErr.Stage())
 	}
 }
 

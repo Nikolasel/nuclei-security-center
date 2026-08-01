@@ -292,6 +292,8 @@ export interface Scan {
   nuclei_version?: string;
   templates_commit?: string;
   error?: string;
+  /** source records skipped because they were malformed during backend ingest. */
+  skipped_finding_count: number;
   /** whether the verbatim Nuclei output was archived to object storage. */
   has_raw?: boolean;
   /** whether the scanner's execution log (stdout/stderr) was archived (#94). */

@@ -156,8 +156,9 @@ const maxLogBytes = 128 << 20 // 128 MiB execution-log ceiling
 // of findings, could drive unbounded DB writes and temp-file growth. These cap
 // the total bytes read and the findings ingested per scan (CWE-400/CWE-770).
 const (
-	maxResultsBytes    = 512 << 20 // 512 MiB total results-stream ceiling
-	maxFindingsPerScan = 100_000   // per-scan finding-count ceiling
+	maxResultsBytes       = 512 << 20 // 512 MiB total results-stream ceiling
+	maxFindingsPerScan    = 100_000   // per-scan finding-count ceiling
+	maxFindingSkipDetails = 8         // bound diagnostic samples in logs
 )
 
 // scanFindingLines reads JSONL findings from r under a byte cap (maxBytes) and a
@@ -166,38 +167,68 @@ const (
 // Exceeding either cap returns an error after the work done so far, so a
 // misbehaving stream aborts rather than consuming unbounded resources.
 func scanFindingLines(r io.Reader, maxBytes int64, maxCount int, emit func(types.NucleiFinding, []byte) error) (ingested, skipped int, err error) {
+	ingested, skipped, _, err = scanFindingLinesWithDetails(r, maxBytes, maxCount, emit)
+	return ingested, skipped, err
+}
+
+// scanFindingLinesWithDetails is scanFindingLines plus a bounded set of
+// non-sensitive line/reason samples for operator diagnostics. Only parse
+// failures and store.FindingRecordError values are skipped; every other emit
+// error is returned and remains scan-fatal.
+func scanFindingLinesWithDetails(
+	r io.Reader,
+	maxBytes int64,
+	maxCount int,
+	emit func(types.NucleiFinding, []byte) error,
+) (ingested, skipped int, details []string, err error) {
 	// +1 so we can distinguish "exactly at the cap" from "over the cap".
 	limited := &io.LimitedReader{R: r, N: maxBytes + 1}
 	sc := bufio.NewScanner(limited)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024) // findings can be large
+	lineNumber := 0
 	for sc.Scan() {
+		lineNumber++
 		line := sc.Bytes()
 		if len(line) == 0 {
 			continue
 		}
 		if ingested >= maxCount {
-			return ingested, skipped, fmt.Errorf("results exceeded the %d-finding cap", maxCount)
+			return ingested, skipped, details, fmt.Errorf("results exceeded the %d-finding cap", maxCount)
 		}
 		var f types.NucleiFinding
-		if json.Unmarshal(line, &f) != nil {
+		if e := json.Unmarshal(line, &f); e != nil {
 			skipped++
+			details = appendFindingSkipDetail(details, lineNumber, "parse: "+e.Error())
 			continue
 		}
 		// Copy the line: bufio.Scanner reuses its buffer on the next Scan.
 		rawLine := make([]byte, len(line))
 		copy(rawLine, line)
 		if e := emit(f, rawLine); e != nil {
-			return ingested, skipped, e
+			var recordErr *store.FindingRecordError
+			if errors.As(e, &recordErr) {
+				skipped++
+				details = appendFindingSkipDetail(details, lineNumber, "record: "+recordErr.Stage())
+				continue
+			}
+			return ingested, skipped, details, e
 		}
 		ingested++
 	}
 	if e := sc.Err(); e != nil {
-		return ingested, skipped, fmt.Errorf("read results stream: %w", e)
+		return ingested, skipped, details, fmt.Errorf("read results stream: %w", e)
 	}
 	if limited.N <= 0 {
-		return ingested, skipped, fmt.Errorf("results stream exceeded the %d-byte cap", maxBytes)
+		return ingested, skipped, details, fmt.Errorf("results stream exceeded the %d-byte cap", maxBytes)
 	}
-	return ingested, skipped, nil
+	return ingested, skipped, details, nil
+}
+
+func appendFindingSkipDetail(details []string, lineNumber int, reason string) []string {
+	if len(details) >= maxFindingSkipDetails {
+		return details
+	}
+	return append(details, fmt.Sprintf("line %d: %s", lineNumber, reason))
 }
 
 // Submit records a scan (optionally linked to the config it came from), then
@@ -484,12 +515,18 @@ func (o *Orchestrator) ingest(ctx context.Context, client *ScannerClient, scanID
 		}
 	}
 
-	n, skipped, err := scanFindingLines(reader, maxResultsBytes, maxFindingsPerScan,
+	n, skipped, skipDetails, err := scanFindingLinesWithDetails(reader, maxResultsBytes, maxFindingsPerScan,
 		func(f types.NucleiFinding, rawLine []byte) error {
 			return o.store.IngestFinding(ctx, scanID, targetID, f, rawLine)
 		})
 	if skipped > 0 {
-		o.log.Warn("skipped unparseable finding lines", "scan_id", scanID, "skipped", skipped)
+		o.log.Warn("skipped malformed finding records", "scan_id", scanID, "skipped", skipped, "samples", skipDetails)
+		if persistErr := o.store.SetScanSkippedFindingCount(ctx, scanID, skipped); persistErr != nil {
+			if err == nil {
+				return fmt.Errorf("record skipped finding count: %w", persistErr)
+			}
+			o.log.Warn("record skipped finding count", "scan_id", scanID, "err", persistErr)
+		}
 	}
 	if err != nil {
 		return err

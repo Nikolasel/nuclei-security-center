@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
@@ -129,5 +130,20 @@ func TestValidateTemplateSet(t *testing.T) {
 	}
 	if ts.Name != "cves" {
 		t.Errorf("name not trimmed: %q", ts.Name)
+	}
+	if err := validateTemplateSet(&store.TemplateSet{
+		Name: "exact", ExcludedTemplateIDs: []string{"noisy"},
+	}); err == nil || !strings.Contains(err.Error(), "only allowed for dynamic_all") {
+		t.Fatalf("exact exclusions error = %v", err)
+	}
+	dynamic := &store.TemplateSet{
+		Name: " dynamic ", DynamicAll: true,
+		ExcludedTemplateIDs: []string{" noisy ", "other"},
+	}
+	if err := validateTemplateSet(dynamic); err != nil {
+		t.Fatalf("dynamic exclusions rejected: %v", err)
+	}
+	if dynamic.Name != "dynamic" || dynamic.ExcludedTemplateIDs[0] != "noisy" {
+		t.Fatalf("dynamic exclusions were not normalized: %+v", dynamic)
 	}
 }

@@ -15,38 +15,67 @@ import (
 // by template_set_members; DynamicAll resolves to every active catalog template
 // at read and dispatch time.
 type TemplateSet struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	DynamicAll  bool      `json:"dynamic_all"`
-	MemberCount int       `json:"member_count"`
-	CreatedBy   string    `json:"created_by,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID                  string    `json:"id"`
+	Name                string    `json:"name"`
+	DynamicAll          bool      `json:"dynamic_all"`
+	MemberCount         int       `json:"member_count"`
+	ExclusionCount      int       `json:"exclusion_count"`
+	ExcludedTemplateIDs []string  `json:"excluded_template_ids,omitempty"`
+	CreatedBy           string    `json:"created_by,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 // tmplSetCols is the read projection shared by Get/List/Update. member_count is
-// live for both exact membership and the dynamic active-catalog mode.
+// the effective selected count: stored exact membership for exact sets, or
+// active catalog rows minus dynamic exclusions for dynamic sets.
 const tmplSetCols = `id, name, dynamic_all,
 	CASE WHEN dynamic_all
-	     THEN (SELECT count(*) FROM templates WHERE availability = 'active')
+	     THEN (SELECT count(*) FROM templates
+	            WHERE availability = 'active'
+	              AND NOT EXISTS (
+	                  SELECT 1 FROM template_set_exclusions e
+	                   WHERE e.template_set_id = template_sets.id
+	                     AND e.template_id = templates.id
+	              ))
 	     ELSE (SELECT count(*) FROM template_set_members m WHERE m.template_set_id = template_sets.id)
 	END,
+	(SELECT count(*) FROM template_set_exclusions e WHERE e.template_set_id = template_sets.id),
 	created_by, created_at, updated_at`
 
 // CreateTemplateSet inserts a template set and returns it populated.
 func (s *Store) CreateTemplateSet(ctx context.Context, in TemplateSet) (TemplateSet, error) {
-	in.ID = types.NewID()
-	t, err := scanTemplateSet(s.pool.QueryRow(ctx,
-		`INSERT INTO template_sets (id, name, dynamic_all, created_by)
-		 VALUES ($1, $2, $3, $4)
-		 RETURNING `+tmplSetCols,
-		in.ID, in.Name, in.DynamicAll, nullStr(in.CreatedBy),
-	))
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
+		return TemplateSet{}, fmt.Errorf("begin create template set: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if !in.DynamicAll && len(in.ExcludedTemplateIDs) > 0 {
+		return TemplateSet{}, ErrTemplateSetExact
+	}
+	in.ID = types.NewID()
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO template_sets (id, name, dynamic_all, created_by)
+		 VALUES ($1, $2, $3, $4)`,
+		in.ID, in.Name, in.DynamicAll, nullStr(in.CreatedBy),
+	); err != nil {
 		if isUniqueViolation(err) {
 			return TemplateSet{}, ErrConflict
 		}
 		return TemplateSet{}, fmt.Errorf("insert template set: %w", err)
+	}
+	if in.DynamicAll && len(in.ExcludedTemplateIDs) > 0 {
+		if err := insertTemplateSetExclusions(ctx, tx, in.ID, in.ExcludedTemplateIDs, in.CreatedBy); err != nil {
+			return TemplateSet{}, fmt.Errorf("insert template set exclusions: %w", err)
+		}
+	}
+	t, err := scanTemplateSet(tx.QueryRow(ctx,
+		`SELECT `+tmplSetCols+` FROM template_sets WHERE id = $1`, in.ID))
+	if err != nil {
+		return TemplateSet{}, fmt.Errorf("insert template set: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return TemplateSet{}, fmt.Errorf("commit create template set: %w", err)
 	}
 	return t, nil
 }
@@ -92,13 +121,14 @@ func (s *Store) UpdateTemplateSet(ctx context.Context, id string, in TemplateSet
 	} else if err != nil {
 		return TemplateSet{}, err
 	}
-	t, err := scanTemplateSet(tx.QueryRow(ctx,
+	if !in.DynamicAll && len(in.ExcludedTemplateIDs) > 0 {
+		return TemplateSet{}, ErrTemplateSetExact
+	}
+	if _, err := tx.Exec(ctx,
 		`UPDATE template_sets
 		 SET name = $2, dynamic_all = $3, updated_at = now()
-		 WHERE id = $1
-		 RETURNING `+tmplSetCols,
-		id, in.Name, in.DynamicAll))
-	if err != nil {
+		 WHERE id = $1`,
+		id, in.Name, in.DynamicAll); err != nil {
 		if isUniqueViolation(err) {
 			return TemplateSet{}, ErrConflict
 		}
@@ -109,6 +139,27 @@ func (s *Store) UpdateTemplateSet(ctx context.Context, id string, in TemplateSet
 			`DELETE FROM template_set_members WHERE template_set_id = $1`, id); err != nil {
 			return TemplateSet{}, fmt.Errorf("clear dynamic template set members: %w", err)
 		}
+		if in.ExcludedTemplateIDs != nil {
+			if _, err := tx.Exec(ctx,
+				`DELETE FROM template_set_exclusions WHERE template_set_id = $1`, id); err != nil {
+				return TemplateSet{}, fmt.Errorf("clear dynamic template set exclusions: %w", err)
+			}
+			if len(in.ExcludedTemplateIDs) > 0 {
+				if err := insertTemplateSetExclusions(ctx, tx, id, in.ExcludedTemplateIDs, in.CreatedBy); err != nil {
+					return TemplateSet{}, fmt.Errorf("insert dynamic template set exclusions: %w", err)
+				}
+			}
+		}
+	} else {
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM template_set_exclusions WHERE template_set_id = $1`, id); err != nil {
+			return TemplateSet{}, fmt.Errorf("clear exact template set exclusions: %w", err)
+		}
+	}
+	t, err := scanTemplateSet(tx.QueryRow(ctx,
+		`SELECT `+tmplSetCols+` FROM template_sets WHERE id = $1`, id))
+	if err != nil {
+		return TemplateSet{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return TemplateSet{}, fmt.Errorf("commit update template set: %w", err)
@@ -136,7 +187,7 @@ func scanTemplateSet(row pgx.Row) (TemplateSet, error) {
 	var t TemplateSet
 	var createdBy *string
 	err := row.Scan(&t.ID, &t.Name, &t.DynamicAll,
-		&t.MemberCount, &createdBy, &t.CreatedAt, &t.UpdatedAt)
+		&t.MemberCount, &t.ExclusionCount, &createdBy, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return TemplateSet{}, ErrNotFound

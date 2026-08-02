@@ -35,6 +35,11 @@ var ErrTemplateReadOnly = errors.New("upstream templates are read-only")
 // from the catalog at read/dispatch time and therefore has no editable rows.
 var ErrTemplateSetDynamic = errors.New("dynamic all-templates sets have no editable members")
 
+// ErrTemplateSetExact is returned when a caller tries to edit exclusions on an
+// exact set. Exact membership is intentionally unaffected by dynamic-set
+// exclusions.
+var ErrTemplateSetExact = errors.New("exact template sets cannot have exclusions")
+
 // ErrTemplateSetInUse prevents deleting a set still referenced by a scan policy.
 // Policies must always retain an explicit set reference.
 var ErrTemplateSetInUse = errors.New("template set is used by one or more scan policies")

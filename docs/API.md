@@ -315,7 +315,8 @@ cascades its future schedules; reusable scan policies are unaffected.
 ### Template-set membership
 
 A template set is either an **exact list of individual catalog templates** or an explicit
-`dynamic_all` set that resolves every active catalog template at scan time:
+`dynamic_all` set that resolves every active catalog template at scan time, except its stored
+exclusions:
 
 ```sh
 # set a set's membership to exactly these catalog template ids (the editor's "save")
@@ -326,19 +327,28 @@ curl -sb jar.txt -X POST   localhost:8080/api/template-sets/<set_id>/members -d 
 curl -sb jar.txt -X DELETE localhost:8080/api/template-sets/<set_id>/members/tech-detect
 # list a set's member templates (catalog rows, yaml omitted)
 curl -sb jar.txt localhost:8080/api/template-sets/<set_id>/members
+# replace the exclusions for a dynamic set (empty list clears them)
+curl -sb jar.txt -X PUT localhost:8080/api/template-sets/<set_id>/exclusions \
+  -H 'content-type: application/json' -d '{"template_ids":["noisy-template","incompatible-check"]}'
+# list excluded catalog templates (yaml omitted)
+curl -sb jar.txt localhost:8080/api/template-sets/<set_id>/exclusions
 ```
 
 A template set reports `dynamic_all` and a live `member_count`. For an exact set, the count is its
-stored membership; for a dynamic set, it is the current active-catalog size. The old top-level
+stored membership; for a dynamic set, it is the current active-catalog size after exclusions. A
+dynamic set also reports `exclusion_count`; the exclusions endpoint returns the catalog rows and
+the editor displays their IDs. The old top-level
 `git_ref` / `severities` / `tags` / `paths` fields and their compatibility/conversion path are no
 longer part of the table or API contract.
 
 Reads are `viewer`; membership edits are `operator`, audited as `config_changed`
 (`template_set.members_replace` / `_add` / `_remove`). An unknown `template_id` is a `400`; an
-unknown set is a `404`. Direct membership edits on a dynamic set return `409` because it has no
-stored member rows. Dispatch resolves every set to concrete `template_ids`. Empty exact sets fail
-closed; a set containing a tombstoned/unavailable template also fails until its selection is
-updated.
+unknown set is a `404`. Exclusion replacement is also an operator-only audited config change
+(`template_set.exclusions_replace`), and exact sets return `409` for exclusion reads/writes.
+Direct membership edits on a dynamic set return `409` because it has no stored member rows.
+Dispatch resolves every set to concrete `template_ids`; empty exact sets and dynamic sets whose
+active catalog is fully excluded fail closed. A set containing a tombstoned/unavailable exact
+template also fails until its selection is updated.
 
 ## Template catalog
 
@@ -448,7 +458,9 @@ curl -sb jar.txt -X POST -F file=@portable-set.tar.gz \
 `templates/<source>/<path>`, and (for set exports) `set.json`. `format=json` is one JSON document
 carrying the same manifest fields and each template's verbatim YAML string; a set export includes a
 `set` object. Both forms carry SHA-256 digests and round-trip custom YAML byte-for-byte. A dynamic
-set export records `dynamic_all:true` without freezing or embedding the current catalog.
+set export records `dynamic_all:true` plus `excluded_template_ids`; YAML for referenced custom
+exclusions is included so the exclusion list can travel with the set, while the active catalog is
+never frozen.
 
 The optional `on_conflict` strategy defaults to `skip`:
 

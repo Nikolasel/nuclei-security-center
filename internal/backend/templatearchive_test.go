@@ -62,8 +62,12 @@ func TestPortableJSONRoundTripPreservesYAML(t *testing.T) {
 }
 
 func TestPortableDynamicSetRoundTripDoesNotFreezeCatalog(t *testing.T) {
-	set := &portableSet{Name: "All templates", DynamicAll: true}
-	data, err := buildPortableJSON(nil, set)
+	excluded := portableTestTemplate("noisy-template", "custom", "custom/noisy-template.yaml")
+	set := &portableSet{
+		Name: "All templates", DynamicAll: true,
+		ExcludedTemplateIDs: []string{excluded.ID},
+	}
+	data, err := buildPortableJSON([]store.Template{excluded}, set)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,9 +75,10 @@ func TestPortableDynamicSetRoundTripDoesNotFreezeCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(parsed.Templates) != 0 || parsed.Set == nil || !parsed.Set.DynamicAll ||
-		len(parsed.Set.TemplateIDs) != 0 {
-		t.Fatalf("dynamic set did not round-trip as set-only metadata: %+v", parsed)
+	if len(parsed.Templates) != 1 || parsed.Templates[0].ID != excluded.ID ||
+		parsed.Set == nil || !parsed.Set.DynamicAll || len(parsed.Set.TemplateIDs) != 0 ||
+		len(parsed.Set.ExcludedTemplateIDs) != 1 || parsed.Set.ExcludedTemplateIDs[0] != excluded.ID {
+		t.Fatalf("dynamic set did not round-trip exclusions without freezing membership: %+v", parsed)
 	}
 }
 
@@ -83,6 +88,24 @@ func TestPortableDynamicSetRejectsFrozenMembership(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "must not contain template_ids") {
 		t.Fatalf("dynamic membership error = %v", err)
+	}
+}
+
+func TestPortableExactSetRejectsExclusions(t *testing.T) {
+	_, err := validatePortableEntries(nil, &portableSet{
+		Name: "Invalid exact set", ExcludedTemplateIDs: []string{"noisy"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "must not contain excluded_template_ids") {
+		t.Fatalf("exact exclusion error = %v", err)
+	}
+}
+
+func TestPortableDynamicSetMayReferenceExistingExclusion(t *testing.T) {
+	if _, err := validatePortableEntries(nil, &portableSet{
+		Name: "All templates", DynamicAll: true,
+		ExcludedTemplateIDs: []string{"upstream-template"},
+	}); err != nil {
+		t.Fatalf("dynamic exclusion reference should be valid without bundled YAML: %v", err)
 	}
 }
 

@@ -45,6 +45,16 @@ func validateTemplateSet(t *store.TemplateSet) error {
 	if t.Name == "" {
 		return errors.New("name is required")
 	}
+	if !t.DynamicAll && len(t.ExcludedTemplateIDs) > 0 {
+		return errors.New("excluded_template_ids are only allowed for dynamic_all template sets")
+	}
+	for i, id := range t.ExcludedTemplateIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return errors.New("excluded_template_ids cannot contain empty ids")
+		}
+		t.ExcludedTemplateIDs[i] = id
+	}
 	return nil
 }
 

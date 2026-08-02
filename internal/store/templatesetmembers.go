@@ -29,7 +29,7 @@ func requireStaticTemplateSet(ctx context.Context, tx pgx.Tx, setID string) erro
 
 // ListTemplateSetMembers returns the catalog rows for a set's members, ordered
 // like the catalog list (yaml omitted). Dynamic sets resolve to every active
-// template. ErrNotFound if the set is unknown.
+// template except their stored exclusions. ErrNotFound if the set is unknown.
 func (s *Store) ListTemplateSetMembers(ctx context.Context, setID string) ([]Template, error) {
 	var dynamic bool
 	err := s.pool.QueryRow(ctx,
@@ -49,8 +49,13 @@ func (s *Store) ListTemplateSetMembers(ctx context.Context, setID string) ([]Tem
 	if dynamic {
 		query = `SELECT ` + tmplListCols + ` FROM templates
 			WHERE availability = 'active'
+			  AND NOT EXISTS (
+				  SELECT 1 FROM template_set_exclusions e
+				   WHERE e.template_set_id = $1
+				     AND e.template_id = templates.id
+				  )
 			ORDER BY lower(name), id`
-		args = nil
+		args = []any{setID}
 	}
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {

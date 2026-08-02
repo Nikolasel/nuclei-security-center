@@ -168,6 +168,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/template-sets/{id}/members", s.mutation(eventConfigChanged, "template_set.members_replace", "template_set", RoleOperator, s.handleReplaceTemplateSetMembers))
 	mux.HandleFunc("POST /api/template-sets/{id}/members", s.mutation(eventConfigChanged, "template_set.members_add", "template_set", RoleOperator, s.handleAddTemplateSetMembers))
 	mux.HandleFunc("DELETE /api/template-sets/{id}/members/{templateId}", s.mutation(eventConfigChanged, "template_set.members_remove", "template_set", RoleOperator, s.handleRemoveTemplateSetMember))
+	mux.HandleFunc("GET /api/template-sets/{id}/exclusions", s.requireRole(RoleViewer, s.handleListTemplateSetExclusions))
+	mux.HandleFunc("PUT /api/template-sets/{id}/exclusions", s.mutation(eventConfigChanged, "template_set.exclusions_replace", "template_set", RoleOperator, s.handleReplaceTemplateSetExclusions))
 
 	// Service accounts (#70) — NSC-local API-token identities for headless
 	// automation. Managing these credentials is admin-only; create/rotate/revoke
@@ -277,7 +279,8 @@ func (s *Server) resolvePolicySpec(ctx context.Context, policyID, targetID strin
 // resolveConfigSpec builds a scan spec + config link from a stored target and an
 // required template set. The scan carries concrete ids plus the digest of the
 // full active catalog bundle already distributed to the node. A dynamic set
-// resolves to every active catalog template; an empty exact set fails closed.
+// resolves to every active catalog template except its exclusions; an empty
+// exact or fully-excluded dynamic set fails closed.
 func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID string) (types.ScanSpec, store.ScanLink, error) {
 	target, err := s.store.GetTarget(ctx, targetID)
 	if err != nil {
@@ -332,9 +335,23 @@ func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID 
 		return types.ScanSpec{}, store.ScanLink{}, errors.New("active template catalog is empty")
 	}
 	if ts.DynamicAll {
+		excludedIDs, err := s.store.ListTemplateSetExclusionIDs(ctx, ts.ID)
+		if err != nil {
+			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("list template set exclusions: %w", err)
+		}
+		excluded := make(map[string]struct{}, len(excludedIDs))
+		for _, id := range excludedIDs {
+			excluded[id] = struct{}{}
+		}
 		selectedIDs = make([]string, 0, len(entries))
 		for _, entry := range entries {
+			if _, ok := excluded[entry.ID]; ok {
+				continue
+			}
 			selectedIDs = append(selectedIDs, entry.ID)
+		}
+		if len(selectedIDs) == 0 {
+			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("template set %q resolves to no active templates after exclusions", ts.Name)
 		}
 	} else {
 		active := make(map[string]struct{}, len(entries))

@@ -59,6 +59,12 @@ func TestWriteStoreErrSentinelsUnchanged(t *testing.T) {
 	}
 
 	rr = httptest.NewRecorder()
+	s.writeStoreErr(rr, fmt.Errorf("wrap: %w", store.ErrTemplateSetExact))
+	if rr.Code != 409 {
+		t.Errorf("ErrTemplateSetExact -> %d, want 409", rr.Code)
+	}
+
+	rr = httptest.NewRecorder()
 	s.writeStoreErr(rr, fmt.Errorf("wrap: %w", store.ErrTemplateSetInUse))
 	if rr.Code != 409 {
 		t.Errorf("ErrTemplateSetInUse -> %d, want 409", rr.Code)

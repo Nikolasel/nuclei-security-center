@@ -17,10 +17,11 @@ type TemplateImportWrite struct {
 // TemplateSetImportWrite optionally creates or replaces one explicit set in
 // the same transaction as its custom templates. ExistingID empty means create.
 type TemplateSetImportWrite struct {
-	ExistingID  string
-	Name        string
-	DynamicAll  bool
-	TemplateIDs []string
+	ExistingID          string
+	Name                string
+	DynamicAll          bool
+	TemplateIDs         []string
+	ExcludedTemplateIDs []string
 }
 
 // ApplyTemplateImport commits a validated portability import atomically. The
@@ -38,6 +39,9 @@ func (s *Store) ApplyTemplateImport(
 		return nil, fmt.Errorf("begin template import: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if setWrite != nil && !setWrite.DynamicAll && len(setWrite.ExcludedTemplateIDs) > 0 {
+		return nil, ErrTemplateSetExact
+	}
 
 	for _, write := range writes {
 		t := write.Template
@@ -90,6 +94,11 @@ func (s *Store) ApplyTemplateImport(
 			}
 			return nil, fmt.Errorf("insert imported template set: %w", err)
 		}
+		if setWrite.DynamicAll && len(setWrite.ExcludedTemplateIDs) > 0 {
+			if err := insertTemplateSetExclusions(ctx, tx, setID, setWrite.ExcludedTemplateIDs, actor); err != nil {
+				return nil, fmt.Errorf("insert imported template set exclusions: %w", err)
+			}
+		}
 	} else {
 		var exists bool
 		if err := tx.QueryRow(ctx,
@@ -109,6 +118,15 @@ func (s *Store) ApplyTemplateImport(
 		if _, err := tx.Exec(ctx,
 			`DELETE FROM template_set_members WHERE template_set_id = $1`, setID); err != nil {
 			return nil, fmt.Errorf("clear imported template set: %w", err)
+		}
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM template_set_exclusions WHERE template_set_id = $1`, setID); err != nil {
+			return nil, fmt.Errorf("clear imported template set exclusions: %w", err)
+		}
+		if setWrite.DynamicAll && len(setWrite.ExcludedTemplateIDs) > 0 {
+			if err := insertTemplateSetExclusions(ctx, tx, setID, setWrite.ExcludedTemplateIDs, actor); err != nil {
+				return nil, fmt.Errorf("insert imported template set exclusions: %w", err)
+			}
 		}
 	}
 	if !setWrite.DynamicAll && len(setWrite.TemplateIDs) > 0 {

@@ -135,7 +135,9 @@ Go to **Template Sets → New template set**.
 An empty set may be saved for later curation, but cannot be selected by a scan policy.
 
 Create a second set in **All active templates (dynamic)** mode. Its member count follows the active
-catalog and later upstream additions are included automatically.
+catalog after exclusions, and later upstream additions are included automatically. In the editor,
+check a noisy or incompatible template under **Dynamic exclusions** to exclude it; the exclusion
+count and ID pills show what will be skipped. Clear an exclusion to include that template again.
 
 ### 5. Push and inspect the node bundle
 
@@ -173,8 +175,9 @@ Expected result:
 - the scan records its Nuclei version and `templates_commit`; and
 - the selected IDs, not a filter or Git checkout, determine what Nuclei runs.
 
-Choose the explicit dynamic set when the policy should scan every active catalog template. Use that
-mode carefully on large catalogs.
+Choose the explicit dynamic set when the policy should scan every active catalog template except
+its exclusions. Use that mode carefully on large catalogs; if every active template is excluded,
+dispatch fails closed until the set is changed.
 
 ### 7. Test portability
 

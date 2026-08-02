@@ -101,7 +101,7 @@ func (s *Server) handleCreateTemplateSet(w http.ResponseWriter, r *http.Request)
 	in.CreatedBy = identityFrom(r.Context()).Subject
 	t, err := s.store.CreateTemplateSet(r.Context(), in)
 	if err != nil {
-		s.writeStoreErr(w, err)
+		s.writeTemplateSetErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, t)
@@ -125,12 +125,21 @@ func (s *Server) handleUpdateTemplateSet(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	in.CreatedBy = identityFrom(r.Context()).Subject
 	t, err := s.store.UpdateTemplateSet(r.Context(), r.PathValue("id"), in)
 	if err != nil {
-		s.writeStoreErr(w, err)
+		s.writeTemplateSetErr(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, t)
+}
+
+func (s *Server) writeTemplateSetErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrInvalidRef) {
+		http.Error(w, "one or more excluded_template_ids do not exist", http.StatusBadRequest)
+		return
+	}
+	s.writeStoreErr(w, err)
 }
 
 func (s *Server) handleDeleteTemplateSet(w http.ResponseWriter, r *http.Request) {
@@ -243,6 +252,8 @@ func (s *Server) writeStoreErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, store.ErrTemplateReadOnly):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, store.ErrTemplateSetDynamic):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, store.ErrTemplateSetExact):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, store.ErrTemplateSetInUse):
 		http.Error(w, err.Error(), http.StatusConflict)

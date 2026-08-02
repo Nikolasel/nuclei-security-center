@@ -90,6 +90,13 @@ func (r *Runner) discover(ctx context.Context, spec types.ScanSpec, targetsFile,
 		if len(alive) == 0 {
 			return nil, nil // no live hosts ⇒ nothing to port-scan
 		}
+		// Pass 2 reads this file, so persist the deduplicated host list before
+		// handing it back to naabu. The -sn output can name a hostname once per
+		// resolved address (v4 + v6), which would otherwise double-count its ports
+		// in the live tally and re-scan it.
+		if err := os.WriteFile(aliveFile, []byte(strings.Join(alive, "\n")+"\n"), 0o640); err != nil {
+			return nil, fmt.Errorf("write alive hosts: %w", err)
+		}
 		scanInput = aliveFile
 	}
 

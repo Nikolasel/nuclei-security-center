@@ -185,6 +185,23 @@ func TestDiscoveryWriterTally(t *testing.T) {
 	}
 }
 
+func TestReadNonEmptyLinesDeduplicates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "alive.txt")
+	content := "\n scanme.sh \nscanme.sh\n192.168.65.7\nscanme.sh\n 192.168.65.7 \n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := readNonEmptyLines(path)
+	if err != nil {
+		t.Fatalf("readNonEmptyLines: %v", err)
+	}
+	want := []string{"scanme.sh", "192.168.65.7"}
+	if !slices.Equal(got, want) {
+		t.Errorf("readNonEmptyLines = %v, want %v", got, want)
+	}
+}
+
 func TestParseNaabuResultsMissingFile(t *testing.T) {
 	// naabu produced nothing (no open ports) => empty, not an error.
 	got, err := parseNaabuResults(filepath.Join(t.TempDir(), "nope.jsonl"))

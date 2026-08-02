@@ -133,8 +133,12 @@ func (r *Runner) runNaabu(ctx context.Context, args []string, stdout, logw io.Wr
 	return nil
 }
 
-// readNonEmptyLines reads a file into a slice of its non-blank, trimmed lines. A
-// missing file (naabu found nothing) is an empty slice, not an error.
+// readNonEmptyLines reads a file into a slice of its non-blank, trimmed, unique
+// lines. The SYN host-discovery pass can print a hostname once per resolved
+// address (for example, once for IPv4 and once for IPv6); forwarding those
+// duplicates into the port-scan pass would make its live tally count the same
+// host's ports more than once. A missing file (naabu found nothing) is an empty
+// slice, not an error.
 func readNonEmptyLines(path string) ([]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -144,11 +148,16 @@ func readNonEmptyLines(path string) ([]string, error) {
 		return nil, err
 	}
 	defer f.Close()
+	seen := make(map[string]struct{})
 	var out []string
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
 		if s := strings.TrimSpace(sc.Text()); s != "" {
+			if _, exists := seen[s]; exists {
+				continue
+			}
+			seen[s] = struct{}{}
 			out = append(out, s)
 		}
 	}

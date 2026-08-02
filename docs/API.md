@@ -346,6 +346,9 @@ Reads are `viewer`; membership edits are `operator`, audited as `config_changed`
 unknown set is a `404`. Exclusion replacement is also an operator-only audited config change
 (`template_set.exclusions_replace`), and exact sets return `409` for exclusion reads/writes.
 Direct membership edits on a dynamic set return `409` because it has no stored member rows.
+For `PUT /api/template-sets/{id}`, omitting `excluded_template_ids` preserves the existing
+dynamic exclusions for backward-compatible partial updates; sending an empty list clears them.
+The dedicated exclusions endpoint is the unambiguous replacement operation.
 Dispatch resolves every set to concrete `template_ids`; empty exact sets and dynamic sets whose
 active catalog is fully excluded fail closed. A set containing a tombstoned/unavailable exact
 template also fails until its selection is updated.
@@ -478,6 +481,11 @@ one multipart `file`, caps the request at 64 MiB, caps expanded tar content at 2
 files, rejects traversal, links, duplicate/unreferenced files, unknown JSON fields, digest mismatch,
 invalid YAML, and incomplete sets. Imports are audited as `config_changed` with action
 `templates.import`.
+
+Dynamic set imports apply the same fail-closed rule to `excluded_template_ids`: every excluded id
+must exist in the destination catalog (or be supplied as a custom template in the archive), so an
+export from a newer catalog can return `400` on an older destination rather than silently losing a
+deny-list entry.
 
 After conflict resolution, every custom template selected for create, overwrite, or rename is packed
 into one transient verified bundle and sent to a known-healthy scanner node. The node runs a single

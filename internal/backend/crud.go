@@ -257,6 +257,8 @@ func (s *Server) writeStoreErr(w http.ResponseWriter, err error) {
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, store.ErrTemplateSetInUse):
 		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, store.ErrTemplateSetExclusionInUse):
+		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, store.ErrNodeOverlap):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, store.ErrLastCatchAll):

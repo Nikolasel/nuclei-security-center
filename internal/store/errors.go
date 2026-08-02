@@ -43,3 +43,8 @@ var ErrTemplateSetExact = errors.New("exact template sets cannot have exclusions
 // ErrTemplateSetInUse prevents deleting a set still referenced by a scan policy.
 // Policies must always retain an explicit set reference.
 var ErrTemplateSetInUse = errors.New("template set is used by one or more scan policies")
+
+// ErrTemplateSetExclusionInUse prevents deleting a custom template that a
+// dynamic set explicitly excludes. Removing the exclusion must be deliberate;
+// otherwise delete-and-recreate would silently make the template runnable.
+var ErrTemplateSetExclusionInUse = errors.New("template is excluded by one or more dynamic template sets")

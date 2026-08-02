@@ -228,6 +228,7 @@ Expected validation behavior:
 | Import returns `400` with a template ID | Fix that archive entry. The entire selected batch was rejected and nothing was persisted. |
 | Import returns `503` | Selected custom writes required validation, but no healthy node completed it. Restore node health and retry. |
 | Upstream sync is disabled | Configure `TEMPLATE_SYNC_REPO`, or intentionally operate a custom-only catalog. |
+| Custom template deletion returns `409` | Remove the template from every dynamic-set exclusion first; this prevents delete-and-recreate from silently re-enabling a denied template. |
 | Set cannot be selected in a policy | Add members to an empty exact set, choose a dynamic set, or replace unavailable members. |
 | Manual node sync returns `409` | A scan is using the active bundle. Wait for it to finish and retry. |
 | Manual node sync returns `502` | Check node reachability, authentication/mTLS, disk space, and bundle diagnostics. |

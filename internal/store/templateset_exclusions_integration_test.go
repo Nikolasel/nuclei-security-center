@@ -62,6 +62,13 @@ func TestDynamicTemplateSetExclusionsPostgres(t *testing.T) {
 	if len(exclusions) != 1 || exclusions[0].ID != "dynamic-excluded" {
 		t.Fatalf("exclusions = %#v, want dynamic-excluded", exclusions)
 	}
+	if err := st.DeleteCustomTemplate(ctx, "dynamic-excluded"); !errors.Is(err, ErrTemplateSetExclusionInUse) {
+		t.Fatalf("delete excluded template = %v, want ErrTemplateSetExclusionInUse", err)
+	}
+	exclusions, err = st.ListTemplateSetExclusions(ctx, set.ID)
+	if err != nil || len(exclusions) != 1 || exclusions[0].ID != "dynamic-excluded" {
+		t.Fatalf("exclusions after blocked delete = %#v, err:%v", exclusions, err)
+	}
 
 	set, err = st.UpdateTemplateSet(ctx, set.ID, TemplateSet{
 		Name:                set.Name,

@@ -162,6 +162,11 @@ func isForeignKeyViolation(err error) bool {
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
 }
 
+func isForeignKeyViolationNamed(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23503" && pgErr.ConstraintName == constraint
+}
+
 // nullStr maps "" to a SQL NULL so optional TEXT columns stay NULL, not empty.
 func nullStr(s string) *string {
 	if s == "" {

@@ -95,7 +95,9 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   tarball (verbatim files + manifest) or one JSON document retaining the verbatim YAML strings; a
   dynamic set exports its mode and exclusions rather than freezing the current catalog. Import
   writes custom templates, set membership, and exclusions atomically; upstream rows remain
-  sync-owned and are reference-only.
+  sync-owned and are reference-only. The exclusion foreign key is restrictive: a custom template
+  referenced by a dynamic-set exclusion must be consciously removed from that deny-list before it
+  can be deleted.
 - **scan_policies** — `id, name, template_set_id, rate_limit, concurrency, timeout_sec,
   max_host_error, discovery_*`. The central, reusable **how to scan** configuration: a required
   template set (exact or dynamic all-active) plus Nuclei/discovery knobs (each nullable = "use the

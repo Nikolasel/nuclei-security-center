@@ -191,81 +191,83 @@ export function Layout({
             collapsed ? "grid-cols-[3.25rem_minmax(0,1fr)]" : "grid-cols-[12rem_minmax(0,1fr)]",
           )}
         >
-          <aside>
-            <div className={cn("mb-4 flex", collapsed ? "justify-center" : "justify-end")}>
-              <button
-                type="button"
-                onClick={toggleCollapsed}
-                aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-                aria-expanded={!collapsed}
-                title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-                className="rounded-md p-1.5 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
-              >
-                {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
-              </button>
+          <aside className="sticky top-6 self-start">
+            <div className="max-h-[calc(100dvh-3rem)] overflow-y-auto pr-1">
+              <div className={cn("mb-4 flex", collapsed ? "justify-center" : "justify-end")}>
+                <button
+                  type="button"
+                  onClick={toggleCollapsed}
+                  aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+                  aria-expanded={!collapsed}
+                  title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+                  className="rounded-md p-1.5 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
+                >
+                  {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
+                </button>
+              </div>
+              <Tooltip.Provider delayDuration={0}>
+                <nav aria-label="Sections" className="space-y-6">
+                  {visible.map((c, ci) => (
+                    <div key={c.id}>
+                      {collapsed ? (
+                        // Icon rail: replace the category heading with a hairline
+                        // separator between groups (skip it before the first group).
+                        ci > 0 && <div className="mx-auto mb-2 h-px w-6 bg-neutral-200 dark:bg-neutral-800" />
+                      ) : (
+                        <div
+                          className={cn(
+                            "px-2 pb-1 text-xs font-semibold uppercase tracking-wide",
+                            isCategoryActive(c, currentPath)
+                              ? "text-indigo-700 dark:text-indigo-300"
+                              : "text-neutral-500 dark:text-neutral-400",
+                          )}
+                        >
+                          {c.label}
+                        </div>
+                      )}
+                      <ul className="space-y-0.5">
+                        {c.panes.map((p) => {
+                          const Icon = p.icon;
+                          const link = (
+                            <NavLink
+                              to={p.to}
+                              aria-label={p.label}
+                              className={paneLinkClass(isPaneActive(p, currentPath), collapsed)}
+                            >
+                              <Icon className="h-4 w-4 shrink-0" aria-hidden />
+                              {!collapsed && <span>{p.label}</span>}
+                            </NavLink>
+                          );
+                          return (
+                            <li key={p.to}>
+                              {collapsed ? (
+                                // Icon-only rail: surface the pane name as a hover
+                                // tooltip since the label is hidden.
+                                <Tooltip.Root>
+                                  <Tooltip.Trigger asChild>{link}</Tooltip.Trigger>
+                                  <Tooltip.Portal>
+                                    <Tooltip.Content
+                                      side="right"
+                                      sideOffset={8}
+                                      className="z-50 rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white shadow-md dark:bg-neutral-100 dark:text-neutral-900"
+                                    >
+                                      {p.label}
+                                      <Tooltip.Arrow className="fill-neutral-900 dark:fill-neutral-100" />
+                                    </Tooltip.Content>
+                                  </Tooltip.Portal>
+                                </Tooltip.Root>
+                              ) : (
+                                link
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  ))}
+                </nav>
+              </Tooltip.Provider>
             </div>
-            <Tooltip.Provider delayDuration={0}>
-              <nav aria-label="Sections" className="space-y-6">
-                {visible.map((c, ci) => (
-                  <div key={c.id}>
-                    {collapsed ? (
-                      // Icon rail: replace the category heading with a hairline
-                      // separator between groups (skip it before the first group).
-                      ci > 0 && <div className="mx-auto mb-2 h-px w-6 bg-neutral-200 dark:bg-neutral-800" />
-                    ) : (
-                      <div
-                        className={cn(
-                          "px-2 pb-1 text-xs font-semibold uppercase tracking-wide",
-                          isCategoryActive(c, currentPath)
-                            ? "text-indigo-700 dark:text-indigo-300"
-                            : "text-neutral-500 dark:text-neutral-400",
-                        )}
-                      >
-                        {c.label}
-                      </div>
-                    )}
-                    <ul className="space-y-0.5">
-                      {c.panes.map((p) => {
-                        const Icon = p.icon;
-                        const link = (
-                          <NavLink
-                            to={p.to}
-                            aria-label={p.label}
-                            className={paneLinkClass(isPaneActive(p, currentPath), collapsed)}
-                          >
-                            <Icon className="h-4 w-4 shrink-0" aria-hidden />
-                            {!collapsed && <span>{p.label}</span>}
-                          </NavLink>
-                        );
-                        return (
-                          <li key={p.to}>
-                            {collapsed ? (
-                              // Icon-only rail: surface the pane name as a hover
-                              // tooltip since the label is hidden.
-                              <Tooltip.Root>
-                                <Tooltip.Trigger asChild>{link}</Tooltip.Trigger>
-                                <Tooltip.Portal>
-                                  <Tooltip.Content
-                                    side="right"
-                                    sideOffset={8}
-                                    className="z-50 rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white shadow-md dark:bg-neutral-100 dark:text-neutral-900"
-                                  >
-                                    {p.label}
-                                    <Tooltip.Arrow className="fill-neutral-900 dark:fill-neutral-100" />
-                                  </Tooltip.Content>
-                                </Tooltip.Portal>
-                              </Tooltip.Root>
-                            ) : (
-                              link
-                            )}
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                ))}
-              </nav>
-            </Tooltip.Provider>
           </aside>
           <div className="min-w-0">{children}</div>
         </div>

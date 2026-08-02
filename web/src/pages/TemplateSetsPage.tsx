@@ -6,6 +6,7 @@ import {
   type TemplateArchiveFormat,
   type TemplateImportResponse,
   type TemplateSet,
+  type TemplateSetMode,
   type TemplateSource,
   type TemplatesQuery,
 } from "../api";
@@ -33,14 +34,17 @@ function TemplateSetModal({
   const [name, setName] = useState(
     existing ? (duplicate ? duplicateName(existing.name, existingNames) : existing.name) : "",
   );
-  const [dynamicAll, setDynamicAll] = useState(existing?.dynamic_all ?? false);
+  const [mode, setMode] = useState<TemplateSetMode>(existing?.mode ?? "exact");
   const [query, setQuery] = useState("");
   const [source, setSource] = useState<TemplateSource | "">("");
   const [severity, setSeverity] = useState("");
   const [tags, setTags] = useState("");
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [loadedMembers, setLoadedMembers] = useState(existing == null || existing.dynamic_all);
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
+  const persisted = existing != null && !duplicate;
+  const [loadedMembers, setLoadedMembers] = useState(!persisted || existing?.mode !== "exact");
+  const [loadedExclusions, setLoadedExclusions] = useState(!persisted || existing?.mode !== "exclude");
   const filters: TemplatesQuery = {
     q: query.trim(),
     source: source || undefined,
@@ -51,7 +55,7 @@ function TemplateSetModal({
   const members = useQuery({
     queryKey: ["template-set-members", existing?.id],
     queryFn: () => api.listTemplateSetMembers(existing!.id),
-    enabled: existing != null && !existing.dynamic_all,
+    enabled: persisted && existing?.mode === "exact",
   });
   useEffect(() => {
     if (!loadedMembers && members.data) {
@@ -59,6 +63,25 @@ function TemplateSetModal({
       setLoadedMembers(true);
     }
   }, [loadedMembers, members.data]);
+
+  const exclusions = useQuery({
+    queryKey: ["template-set-exclusions", existing?.id],
+    queryFn: () => api.listTemplateSetExclusions(existing!.id),
+    enabled: persisted && existing?.mode === "exclude",
+  });
+  useEffect(() => {
+    if (!loadedExclusions && exclusions.data) {
+      setExcluded(new Set(exclusions.data.map((template) => template.id)));
+      setLoadedExclusions(true);
+    }
+  }, [exclusions.data, loadedExclusions]);
+
+  useEffect(() => {
+    if (!persisted || existing?.mode !== mode) {
+      if (mode === "exact") setLoadedMembers(true);
+      if (mode === "exclude") setLoadedExclusions(true);
+    }
+  }, [existing?.mode, mode, persisted]);
 
   const templates = useQuery({
     queryKey: ["templates", "set-picker", query, source, severity, tags, offset],
@@ -69,13 +92,21 @@ function TemplateSetModal({
         offset,
       }),
   });
+  const selection = mode === "exclude" ? excluded : selected;
+  const updateSelection = (change: (next: Set<string>) => void) => {
+    const update = (current: Set<string>) => {
+      const next = new Set(current);
+      change(next);
+      return next;
+    };
+    if (mode === "exclude") setExcluded(update);
+    else setSelected(update);
+  };
   const selectMatching = useMutation({
     mutationFn: (mode: "select" | "deselect") =>
       api.listTemplateIDs(filters).then((result) => ({ ...result, mode })),
-    onSuccess: ({ ids, mode }) => setSelected((current) => {
-      const next = new Set(current);
+    onSuccess: ({ ids, mode }) => updateSelection((next) => {
       ids.forEach((id) => mode === "select" ? next.add(id) : next.delete(id));
-      return next;
     }),
   });
 
@@ -85,26 +116,29 @@ function TemplateSetModal({
       if (existing && !duplicate) {
         saved = await api.updateTemplateSet(existing.id, {
           name: name.trim(),
-          dynamic_all: dynamicAll,
+          mode,
+          ...(mode === "exclude" ? { excluded_template_ids: [...excluded] } : {}),
         });
       } else {
         saved = await api.createTemplateSet({
           name: name.trim(),
-          dynamic_all: dynamicAll,
+          mode,
+          ...(mode === "exclude" ? { excluded_template_ids: [...excluded] } : {}),
         });
       }
-      if (dynamicAll) return saved;
+      if (mode !== "exact") return saved;
       return api.replaceTemplateSetMembers(saved.id, [...selected]);
     },
     onSuccess: (saved) => {
       qc.setQueryData(["template-set-members", saved.id], undefined);
+      qc.setQueryData(["template-set-exclusions", saved.id], undefined);
       void qc.invalidateQueries({ queryKey: ["template-sets"] });
       onClose();
     },
   });
   const resetPage = () => setOffset(0);
   const total = templates.data?.total ?? 0;
-  const selectedPreview = [...selected].sort().slice(0, 100);
+  const selectedPreview = [...selection].sort().slice(0, 100);
 
   return (
     <Modal
@@ -120,80 +154,89 @@ function TemplateSetModal({
           </Field>
           <Field label="Membership mode">
             <Select
-              value={dynamicAll ? "dynamic" : "exact"}
+              value={mode}
               disabled={readOnly}
-              onChange={(event) => setDynamicAll(event.target.value === "dynamic")}
+              onChange={(event) => setMode(event.target.value as TemplateSetMode)}
               className="w-full"
             >
               <option value="exact">Exact selection</option>
-              <option value="dynamic">All active templates (dynamic)</option>
+              <option value="all">All active templates</option>
+              <option value="exclude">All active except selected exclusions</option>
             </Select>
           </Field>
         </div>
-        {dynamicAll ? (
-          <div className="mx-5 mb-4 min-h-0 flex-1 overflow-y-auto rounded-md border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-800 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-300">
-            This set always resolves to every active template at scan time. New templates from a
-            later upstream sync are included automatically.
-          </div>
-        ) : (
-          <div className="mx-5 mb-4 flex min-h-0 flex-1 flex-col rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
+        <div className="mx-5 mb-4 flex min-h-0 flex-1 flex-col rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
           <div className="mb-3 flex shrink-0 items-center justify-between gap-3">
             <div>
-              <h3 className="font-medium">Exact template selection</h3>
-              <p className="text-xs text-neutral-500">The saved set records these immutable catalog IDs, not the filters below.</p>
+              <h3 className="font-medium">
+                {mode === "exact" ? "Exact template selection" : mode === "exclude" ? "Template exclusions" : "All active templates"}
+              </h3>
+              <p className="text-xs text-neutral-500">
+                {mode === "exact"
+                  ? "The saved set records these immutable catalog IDs, not the filters below."
+                  : mode === "exclude"
+                    ? "Every active template is included at scan time except checked exclusions. New active templates are included automatically."
+                    : "Every active catalog template is included at scan time. New active templates are included automatically."}
+              </p>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2">
-              <Pill tone={selected.size ? "good" : "warn"}>{selected.size} selected</Pill>
-              {!readOnly && (
+              {mode === "all" ? <Pill tone="good">all active</Pill> : <Pill tone={selection.size ? "good" : "warn"}>
+                {selection.size} {mode === "exclude" ? "excluded" : "selected"}
+              </Pill>}
+              {!readOnly && mode !== "all" && (
                 <>
                   <Button
-                    disabled={selected.size === 0}
-                    onClick={() => setSelected(new Set())}
+                    disabled={selection.size === 0}
+                    onClick={() => updateSelection((next) => next.clear())}
                   >
                     Clear all
                   </Button>
                   <Button
                     disabled={!templates.data?.items.length}
-                    onClick={() => setSelected((current) => {
-                      const next = new Set(current);
+                    onClick={() => updateSelection((next) => {
                       templates.data?.items.forEach((template) => next.add(template.id));
-                      return next;
                     })}
                   >
-                    Select page
+                    {mode === "exclude" ? "Exclude page" : "Select page"}
                   </Button>
                   <Button
-                    disabled={!templates.data?.items.some((template) => selected.has(template.id))}
-                    onClick={() => setSelected((current) => {
-                      const next = new Set(current);
+                    disabled={!templates.data?.items.some((template) => selection.has(template.id))}
+                    onClick={() => updateSelection((next) => {
                       templates.data?.items.forEach((template) => next.delete(template.id));
-                      return next;
                     })}
                   >
-                    Deselect page
+                    {mode === "exclude" ? "Remove page exclusions" : "Deselect page"}
                   </Button>
                   <Button
                     disabled={selectMatching.isPending || total === 0}
                     onClick={() => selectMatching.mutate("select")}
                   >
-                    {selectMatching.isPending ? "Selecting…" : `Select all ${total} matching`}
+                    {selectMatching.isPending
+                      ? mode === "exclude" ? "Excluding…" : "Selecting…"
+                      : mode === "exclude" ? `Exclude all ${total} matching` : `Select all ${total} matching`}
                   </Button>
                   <Button
-                    disabled={selectMatching.isPending || total === 0 || selected.size === 0}
+                    disabled={selectMatching.isPending || total === 0 || selection.size === 0}
                     onClick={() => selectMatching.mutate("deselect")}
                   >
-                    {selectMatching.isPending ? "Updating…" : `Deselect all ${total} matching`}
+                    {selectMatching.isPending
+                      ? "Updating…"
+                      : mode === "exclude" ? `Remove ${total} exclusions` : `Deselect all ${total} matching`}
                   </Button>
                 </>
               )}
             </div>
           </div>
-          {selected.size === 0 && (
-            <p className="mb-3 text-xs text-amber-700 dark:text-amber-300">
-              Empty sets can be saved for later curation, but cannot be selected by a scan policy.
-            </p>
-          )}
-          {selected.size > 0 && (
+          {mode !== "all" && (
+            <div className="flex min-h-0 flex-1 flex-col">
+              {selection.size === 0 && (
+                <p className="mb-3 text-xs text-amber-700 dark:text-amber-300">
+                  {mode === "exclude"
+                    ? "No exclusions: every active catalog template will be included."
+                    : "Empty sets can be saved for later curation, but cannot be selected by a scan policy."}
+                </p>
+              )}
+          {selection.size > 0 && (
             <div className="mb-3 h-20 shrink-0 overflow-y-auto rounded-md bg-neutral-50 p-2 dark:bg-neutral-950/50">
               <div className="flex flex-wrap gap-1.5">
                 {selectedPreview.map((id) => (
@@ -203,21 +246,17 @@ function TemplateSetModal({
                       <button
                         type="button"
                         className="text-neutral-400 hover:text-red-600"
-                        aria-label={`Remove ${id}`}
-                        onClick={() => setSelected((current) => {
-                          const next = new Set(current);
-                          next.delete(id);
-                          return next;
-                        })}
+                        aria-label={`${mode === "exclude" ? "Remove exclusion" : "Remove"} ${id}`}
+                        onClick={() => updateSelection((next) => next.delete(id))}
                       >
                         ×
                       </button>
                     )}
                   </span>
                 ))}
-                {selected.size > selectedPreview.length && (
+                {selection.size > selectedPreview.length && (
                   <span className="px-2 py-1 text-xs text-neutral-500">
-                    +{selected.size - selectedPreview.length} more
+                    +{selection.size - selectedPreview.length} more
                   </span>
                 )}
               </div>
@@ -239,7 +278,7 @@ function TemplateSetModal({
 
           {selectMatching.isError && <ErrorText error={selectMatching.error} />}
           <div className="mt-3 flex min-h-0 flex-1 flex-col">
-          {members.isLoading && existing ? <Spinner label="Loading current selection…" /> : templates.isError ? <ErrorText error={templates.error} /> : templates.isLoading || !templates.data ? <Spinner /> : (
+          {(mode === "exclude" ? exclusions.isLoading : members.isLoading) && persisted ? <Spinner label="Loading current selection…" /> : templates.isError ? <ErrorText error={templates.error} /> : templates.isLoading || !templates.data ? <Spinner /> : (
             <>
               <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-800">
                 {templates.data.items.map((template) => (
@@ -247,12 +286,10 @@ function TemplateSetModal({
                     <input
                       type="checkbox"
                       className="mt-1"
-                      checked={selected.has(template.id)}
+                      checked={selection.has(template.id)}
                       disabled={readOnly}
-                      onChange={() => setSelected((current) => {
-                        const next = new Set(current);
+                      onChange={() => updateSelection((next) => {
                         if (next.has(template.id)) next.delete(template.id); else next.add(template.id);
-                        return next;
                       })}
                     />
                     <span className="min-w-0 flex-1">
@@ -276,23 +313,32 @@ function TemplateSetModal({
           )}
           </div>
           </div>
+          )}
+        {mode === "all" && (
+          <div className="flex min-h-0 flex-1 items-center justify-center rounded-md bg-neutral-50 p-6 text-center text-sm text-neutral-500 dark:bg-neutral-950/50">
+            This set has no stored membership. It resolves to every active catalog template when a scan starts.
+          </div>
         )}
+        </div>
         <div className="shrink-0 border-t border-neutral-200 px-5 py-3 dark:border-neutral-800">
           {members.isError && <ErrorText error={members.error} />}
+          {exclusions.isError && <ErrorText error={exclusions.error} />}
           {save.isError && <ErrorText error={save.error} />}
           <div className="flex justify-end gap-2">
             <Button onClick={onClose}>{readOnly ? "Close" : "Cancel"}</Button>
             {!readOnly && (
               <Button
                 variant="primary"
-                disabled={save.isPending || !name.trim() || (!dynamicAll && !loadedMembers)}
+                disabled={save.isPending || !name.trim() || (mode === "exact" ? !loadedMembers : mode === "exclude" && !loadedExclusions)}
                 onClick={() => save.mutate()}
               >
                 {save.isPending
                   ? "Saving…"
-                  : dynamicAll
-                    ? "Save dynamic set"
-                    : `Save ${selected.size} templates`}
+                  : mode === "all"
+                    ? "Save all-active set"
+                    : mode === "exclude"
+                      ? "Save exclusions"
+                      : `Save ${selection.size} templates`}
               </Button>
             )}
           </div>
@@ -347,7 +393,7 @@ export function TemplateSetsPage() {
         <div className="min-w-0">
           <h1 className="text-xl font-semibold">Template Sets</h1>
           <p className="mt-1 text-sm text-neutral-500">
-            Curate exact template IDs, or explicitly choose a dynamic set containing every active template.
+            Curate exact template IDs, include every active template, or exclude selected IDs while following the active catalog.
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -403,9 +449,14 @@ export function TemplateSetsPage() {
                 {(sets.data ?? []).map((set) => (
                   <tr key={set.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
                     <td className="px-3 py-2 font-medium">{set.name}</td>
-                    <td className="px-3 py-2"><Pill tone={set.dynamic_all ? "neutral" : "good"}>{set.dynamic_all ? "dynamic all" : "exact"}</Pill></td>
+                    <td className="px-3 py-2"><Pill tone={set.mode === "exact" ? "good" : "neutral"}>{set.mode}</Pill></td>
                     <td className="px-3 py-2 tabular-nums">
-                      {set.member_count}{set.dynamic_all ? " active" : ""}
+                      <div>{set.member_count}{set.mode !== "exact" ? " active" : ""}</div>
+                      {set.mode === "exclude" && set.exclusion_count > 0 && (
+                        <div className="text-xs text-amber-700 dark:text-amber-300">
+                          {set.exclusion_count} excluded
+                        </div>
+                      )}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 text-right">
                         <Button
@@ -468,7 +519,7 @@ export function TemplateSetsPage() {
       {importing && (
         <TemplateArchiveImportModal
           title="Import template set"
-          description="Upload a template-set export to restore its name, exact member IDs, and custom member YAML in one transaction."
+          description="Upload a template-set export to restore its mode, exact members or exclusions, and custom YAML in one transaction."
           importArchive={api.importTemplateSet}
           onImported={imported}
           onClose={() => setImporting(false)}

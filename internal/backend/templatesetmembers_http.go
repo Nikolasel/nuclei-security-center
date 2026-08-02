@@ -77,7 +77,7 @@ func (s *Server) writeMemberErr(w http.ResponseWriter, err error) {
 		http.Error(w, "one or more template_ids do not exist", http.StatusBadRequest)
 		return
 	}
-	if errors.Is(err, store.ErrTemplateSetDynamic) {
+	if errors.Is(err, store.ErrTemplateSetNonExact) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}

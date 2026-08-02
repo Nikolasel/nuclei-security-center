@@ -88,16 +88,19 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   node reporting an older digest can be matched to catalog history (a stray malformed file is
   skipped-and-counted, not fatal; the run fails closed only if nothing parses). Runs are retained
   in PostgreSQL and exposed through a paginated history; NSC does not silently prune them.
-- **template_sets** — either curated exact membership in `template_set_members`, or an explicit
-  `dynamic_all` mode that resolves every active catalog template at scan time. The retired POC
+- **template_sets** — an explicit `mode`: `exact` uses curated membership in
+  `template_set_members`, `all` resolves every active catalog template at scan time, and `exclude`
+  resolves every active template except explicit rows in `template_set_exclusions`. The retired POC
   filter columns and compatibility code are gone (alpha breaking change). Exact sets and selected
   templates are portable as either a lossless YAML tarball (verbatim files + manifest) or one JSON
-  document retaining the verbatim YAML strings; a dynamic set exports its mode rather than freezing
-  the current catalog. Import writes custom templates and set membership atomically; upstream rows
-  remain sync-owned and are reference-only.
+  document retaining the verbatim YAML strings; catalog-derived sets export their mode and
+  exclusions rather than freezing the current catalog. Import writes custom templates, set
+  membership, and exclusions atomically; upstream rows remain sync-owned and are reference-only.
+  The exclusion foreign key is restrictive: a custom template referenced by an exclude-set
+  exclusion must be consciously removed from that deny-list before it can be deleted.
 - **scan_policies** — `id, name, template_set_id, rate_limit, concurrency, timeout_sec,
   max_host_error, discovery_*`. The central, reusable **how to scan** configuration: a required
-  template set (exact or dynamic all-active) plus Nuclei/discovery knobs (each nullable = "use the
+  template set (exact, all, or exclude) plus Nuclei/discovery knobs (each nullable = "use the
   built-in default"). Every scan and schedule selects a policy and an approved target
   independently, so one policy can be reused across scopes. A template set referenced by a policy
   cannot be deleted.
@@ -217,7 +220,8 @@ so scans survive a busy or briefly-unreachable node.
 1. **Trigger** — a schedule's cron fires (backend ticker) *or* a user clicks "Run now."
    A `scans` row is inserted with status `queued`.
 2. **Resolve + top up** — the backend resolves the policy's required template set to concrete
-   catalog ids (an exact snapshot or every active id for `dynamic_all`), computes the full active
+   catalog ids (an exact snapshot, every active id, or every active id except
+   `template_set_exclusions`), computes the full active
    catalog's canonical `templates_commit`, and records both in the scan spec. Before
    dispatch it picks the target's node and pushes the full catalog if any selected
    template changed since `templates_synced_at` **or** the node's freshly reported

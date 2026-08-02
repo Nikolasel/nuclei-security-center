@@ -45,7 +45,8 @@ func (s *Server) applyPortableImport(
 	if requireSet {
 		setDoc := archive.Set
 		memberIDs := make([]string, 0, len(setDoc.TemplateIDs))
-		if !setDoc.DynamicAll {
+		exclusionIDs := make([]string, 0, len(setDoc.ExcludedTemplateIDs))
+		if setDoc.Mode == store.TemplateSetModeExact {
 			for _, originalID := range setDoc.TemplateIDs {
 				id := originalID
 				if replacement := renamed[originalID]; replacement != "" {
@@ -59,8 +60,23 @@ func (s *Server) applyPortableImport(
 				}
 				memberIDs = append(memberIDs, id)
 			}
+		} else if setDoc.Mode == store.TemplateSetModeExclude {
+			for _, originalID := range setDoc.ExcludedTemplateIDs {
+				id := originalID
+				if replacement := renamed[originalID]; replacement != "" {
+					id = replacement
+				}
+				if _, ok := occupied[id]; !ok {
+					return portableImportResponse{}, fmt.Errorf(
+						"%w: excluded template %q is not present in the destination catalog",
+						store.ErrInvalidRef, id,
+					)
+				}
+				exclusionIDs = append(exclusionIDs, id)
+			}
 		}
 		memberIDs = uniqueStrings(memberIDs)
+		exclusionIDs = uniqueStrings(exclusionIDs)
 
 		sets, err := s.store.ListTemplateSets(ctx)
 		if err != nil {
@@ -76,7 +92,8 @@ func (s *Server) applyPortableImport(
 		switch {
 		case existingSet == nil:
 			setWrite = &store.TemplateSetImportWrite{
-				Name: name, DynamicAll: setDoc.DynamicAll, TemplateIDs: memberIDs,
+				Name: name, Mode: setDoc.Mode, TemplateIDs: memberIDs,
+				ExcludedTemplateIDs: exclusionIDs,
 			}
 			response.SetStatus = "created"
 		case strategy == "skip":
@@ -85,13 +102,15 @@ func (s *Server) applyPortableImport(
 		case strategy == "overwrite":
 			setWrite = &store.TemplateSetImportWrite{
 				ExistingID: existingSet.ID, Name: existingSet.Name,
-				DynamicAll: setDoc.DynamicAll, TemplateIDs: memberIDs,
+				Mode: setDoc.Mode, TemplateIDs: memberIDs,
+				ExcludedTemplateIDs: exclusionIDs,
 			}
 			response.SetStatus = "updated"
 		case strategy == "rename":
 			name = nextImportedSetName(name, sets)
 			setWrite = &store.TemplateSetImportWrite{
-				Name: name, DynamicAll: setDoc.DynamicAll, TemplateIDs: memberIDs,
+				Name: name, Mode: setDoc.Mode, TemplateIDs: memberIDs,
+				ExcludedTemplateIDs: exclusionIDs,
 			}
 			response.SetStatus = "renamed"
 		}

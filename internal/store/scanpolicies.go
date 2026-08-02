@@ -12,7 +12,7 @@ import (
 )
 
 // ScanPolicy (#87, reshaped by #137) is the reusable HOW-to-scan configuration:
-// a required template set (including dynamic all-active mode) plus Nuclei and
+// a required template set (exact, all-active, or exclude mode) plus Nuclei and
 // discovery knobs. The approved target is selected independently at ad-hoc
 // launch or stored on a schedule. Each knob is a pointer: nil means "leave the
 // built-in default for this field", so a policy can tune just one setting; the

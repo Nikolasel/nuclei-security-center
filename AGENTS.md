@@ -60,7 +60,7 @@ off-DB trail; unattended cron dispatches use `actor_type=system`.
 **Scan policies (#87 — the central scan config):** `scan_policies`
 (migration 0017, made target-independent by 0036) is the reusable, named **how to scan**
 configuration and is required for every launch. It bundles `template_set_id` (required, FK
-`ON DELETE RESTRICT`; a set is exact membership or explicit `dynamic_all`) and Nuclei's
+`ON DELETE RESTRICT`; a set is `exact`, `all`, or `exclude`) and Nuclei's
 execution knobs `rate_limit` / `concurrency` / `timeout_sec` / `max_host_error` (each column
 nullable = "use the built-in default"). `POST /api/scans` takes
 `{scan_policy_id,target_id}`; `Server.resolvePolicySpec` loads the policy and resolves the
@@ -77,9 +77,10 @@ their not-yet-run executors. CRUD at `GET/POST /api/scan-policies`,
 `internal/store/scanpolicies.go`.
 
 **Template catalog (#85):** Postgres owns the lossless YAML catalog (`templates`) and template
-sets. Exact sets use `template_set_members`; `dynamic_all` sets resolve every active catalog
-template at dispatch. The retired POC filter columns and compatibility code are gone (alpha
-breaking change). Scans carry concrete `template_ids` plus the full-catalog `templates_commit`.
+sets. Exact sets use `template_set_members`; `all` sets resolve every active catalog template at
+dispatch; `exclude` sets resolve every active catalog template minus explicit exclusions. The retired
+POC filter columns and compatibility code are gone (alpha breaking change). Scans carry concrete
+`template_ids` plus the full-catalog `templates_commit`.
 The backend pushes that full catalog to nodes; nodes select IDs from their verified active bundle
 and reject missing IDs or digest drift. Viewer exports and operator imports round-trip selected
 templates or an explicit set as a YAML tarball / JSON portability document; custom YAML remains
@@ -212,7 +213,7 @@ session cookie stays same-site. `/healthz` stays at the root for probes.
 **Template workflow UI (#85):** `/templates` has Catalog, Custom templates, and Sync tabs.
 Catalog selection adds exact template IDs to explicit sets; custom YAML can be pasted or uploaded;
 Sync shows the safe upstream configuration, recent runs, and queues an operator-triggered refresh.
-`/template-sets` edits exact or dynamic-all membership, and the
+`/template-sets` edits exact, all-active, or exclude-mode membership, and the
 admin node table exposes each node's active bundle digest/last push plus “Sync templates.”
 
 ## Architecture in one breath

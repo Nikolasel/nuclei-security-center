@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
@@ -129,5 +130,20 @@ func TestValidateTemplateSet(t *testing.T) {
 	}
 	if ts.Name != "cves" {
 		t.Errorf("name not trimmed: %q", ts.Name)
+	}
+	if err := validateTemplateSet(&store.TemplateSet{
+		Name: "exact", Mode: store.TemplateSetModeExact, ExcludedTemplateIDs: []string{"noisy"},
+	}); err == nil || !strings.Contains(err.Error(), "only allowed for mode=exclude") {
+		t.Fatalf("exact exclusions error = %v", err)
+	}
+	exclude := &store.TemplateSet{
+		Name: " exclude ", Mode: store.TemplateSetModeExclude,
+		ExcludedTemplateIDs: []string{" noisy ", "other"},
+	}
+	if err := validateTemplateSet(exclude); err != nil {
+		t.Fatalf("exclude mode rejected: %v", err)
+	}
+	if exclude.Name != "exclude" || exclude.ExcludedTemplateIDs[0] != "noisy" {
+		t.Fatalf("exclude mode was not normalized: %+v", exclude)
 	}
 }

@@ -30,11 +30,24 @@ var ErrNoNodeForTarget = errors.New("no scanner node serves the target")
 // editable through the API, so editing/deleting an upstream one is refused.
 var ErrTemplateReadOnly = errors.New("upstream templates are read-only")
 
-// ErrTemplateSetDynamic is returned when a caller tries to edit stored
-// membership for an all-active-templates set. Dynamic membership is resolved
-// from the catalog at read/dispatch time and therefore has no editable rows.
-var ErrTemplateSetDynamic = errors.New("dynamic all-templates sets have no editable members")
+// ErrInvalidTemplateSetMode is returned when a template set names an unknown
+// membership mode.
+var ErrInvalidTemplateSetMode = errors.New("invalid template set mode")
+
+// ErrTemplateSetNonExact is returned when a caller tries to edit stored
+// membership for a catalog-derived set. Only exact sets have editable member
+// rows; all and exclude sets resolve from the active catalog.
+var ErrTemplateSetNonExact = errors.New("only exact template sets have editable members")
+
+// ErrTemplateSetExclusionsUnsupported is returned when exclusions are supplied
+// for a mode other than exclude.
+var ErrTemplateSetExclusionsUnsupported = errors.New("exclusions are only supported for exclude template sets")
 
 // ErrTemplateSetInUse prevents deleting a set still referenced by a scan policy.
 // Policies must always retain an explicit set reference.
 var ErrTemplateSetInUse = errors.New("template set is used by one or more scan policies")
+
+// ErrTemplateSetExclusionInUse prevents deleting a custom template that a
+// exclude set explicitly excludes. Removing the exclusion must be deliberate;
+// otherwise delete-and-recreate would silently make the template runnable.
+var ErrTemplateSetExclusionInUse = errors.New("template is excluded by one or more exclude template sets")

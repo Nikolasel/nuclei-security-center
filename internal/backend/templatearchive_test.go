@@ -61,8 +61,29 @@ func TestPortableJSONRoundTripPreservesYAML(t *testing.T) {
 	}
 }
 
-func TestPortableDynamicSetRoundTripDoesNotFreezeCatalog(t *testing.T) {
-	set := &portableSet{Name: "All templates", DynamicAll: true}
+func TestPortableExcludeSetRoundTripDoesNotFreezeCatalog(t *testing.T) {
+	excluded := portableTestTemplate("noisy-template", "custom", "custom/noisy-template.yaml")
+	set := &portableSet{
+		Name: "Excluded templates", Mode: store.TemplateSetModeExclude,
+		ExcludedTemplateIDs: []string{excluded.ID},
+	}
+	data, err := buildPortableJSON([]store.Template{excluded}, set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parsePortableJSON(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Templates) != 1 || parsed.Templates[0].ID != excluded.ID ||
+		parsed.Set == nil || parsed.Set.Mode != store.TemplateSetModeExclude || len(parsed.Set.TemplateIDs) != 0 ||
+		len(parsed.Set.ExcludedTemplateIDs) != 1 || parsed.Set.ExcludedTemplateIDs[0] != excluded.ID {
+		t.Fatalf("exclude set did not round-trip exclusions without freezing membership: %+v", parsed)
+	}
+}
+
+func TestPortableAllSetRoundTripDoesNotFreezeCatalog(t *testing.T) {
+	set := &portableSet{Name: "All templates", Mode: store.TemplateSetModeAll}
 	data, err := buildPortableJSON(nil, set)
 	if err != nil {
 		t.Fatal(err)
@@ -71,18 +92,51 @@ func TestPortableDynamicSetRoundTripDoesNotFreezeCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(parsed.Templates) != 0 || parsed.Set == nil || !parsed.Set.DynamicAll ||
-		len(parsed.Set.TemplateIDs) != 0 {
-		t.Fatalf("dynamic set did not round-trip as set-only metadata: %+v", parsed)
+	if parsed.Set == nil || parsed.Set.Mode != store.TemplateSetModeAll ||
+		len(parsed.Set.TemplateIDs) != 0 || len(parsed.Set.ExcludedTemplateIDs) != 0 {
+		t.Fatalf("all set did not round-trip as catalog-derived: %+v", parsed.Set)
 	}
 }
 
-func TestPortableDynamicSetRejectsFrozenMembership(t *testing.T) {
+func TestPortableLegacyDynamicShapeNormalizesToExplicitMode(t *testing.T) {
+	legacyAll := true
+	set := &portableSet{
+		Name: "Legacy exclusions", LegacyDynamicAll: &legacyAll,
+		ExcludedTemplateIDs: []string{"noisy"},
+	}
+	parsed, err := validatePortableEntries(nil, set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Set.Mode != store.TemplateSetModeExclude || parsed.Set.LegacyDynamicAll != nil {
+		t.Fatalf("legacy shape was not normalized: %+v", parsed.Set)
+	}
+}
+
+func TestPortableCatalogDerivedSetRejectsFrozenMembership(t *testing.T) {
 	_, err := validatePortableEntries(nil, &portableSet{
-		Name: "Invalid dynamic set", DynamicAll: true, TemplateIDs: []string{"one"},
+		Name: "Invalid all set", Mode: store.TemplateSetModeAll, TemplateIDs: []string{"one"},
 	})
-	if err == nil || !strings.Contains(err.Error(), "must not contain template_ids") {
-		t.Fatalf("dynamic membership error = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "catalog-derived set must not contain template_ids") {
+		t.Fatalf("catalog-derived membership error = %v", err)
+	}
+}
+
+func TestPortableExactSetRejectsExclusions(t *testing.T) {
+	_, err := validatePortableEntries(nil, &portableSet{
+		Name: "Invalid exact set", Mode: store.TemplateSetModeExact, ExcludedTemplateIDs: []string{"noisy"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "only exclude sets may contain excluded_template_ids") {
+		t.Fatalf("exact exclusion error = %v", err)
+	}
+}
+
+func TestPortableExcludeSetMayReferenceExistingExclusion(t *testing.T) {
+	if _, err := validatePortableEntries(nil, &portableSet{
+		Name: "Excluded templates", Mode: store.TemplateSetModeExclude,
+		ExcludedTemplateIDs: []string{"upstream-template"},
+	}); err != nil {
+		t.Fatalf("exclude reference should be valid without bundled YAML: %v", err)
 	}
 }
 

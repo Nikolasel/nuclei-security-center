@@ -8,10 +8,11 @@ product owner can verify the design through the web UI without using the API.
 1. **Postgres owns the catalog.** Templates have a unique Nuclei `id` and are either:
    - **upstream** — mirrored from the configured Nuclei templates repository; or
    - **custom** — organization-authored YAML stored byte-for-byte.
-2. **Template sets are exact selections.** Filters help find templates in the editor, but a saved
-   set records explicit IDs. A later upstream sync does not silently add newly matching templates.
-3. **Scan policies choose the templates.** A policy references one required template set (exact
-   membership or dynamic all-active). The approved target is selected when launching or scheduling.
+2. **Template sets have three modes.** `Exact` records explicit IDs; `All active` follows the
+   active catalog; `All active except selected exclusions` follows the catalog while keeping an
+   explicit deny-list. Filters help find templates in the editor, but only exact mode freezes IDs.
+3. **Scan policies choose the templates.** A policy references one required template set (exact,
+   all, or exclude). The approved target is selected when launching or scheduling.
 4. **Scanner nodes receive the full active catalog.** Before a scan, the backend ensures the chosen
    node has the current content-addressed bundle. The node selects the policy's exact IDs from that
    verified bundle.
@@ -134,8 +135,11 @@ Go to **Template Sets → New template set**.
 
 An empty set may be saved for later curation, but cannot be selected by a scan policy.
 
-Create a second set in **All active templates (dynamic)** mode. Its member count follows the active
-catalog and later upstream additions are included automatically.
+Create a second set in **All active templates** mode. Its member count follows the active catalog and
+later upstream additions are included automatically. Create a third set in **All active except
+selected exclusions** mode, then check a noisy or incompatible template under **Template exclusions**;
+the exclusion count and ID pills show what will be skipped. Clear an exclusion to include that
+template again.
 
 ### 5. Push and inspect the node bundle
 
@@ -173,8 +177,9 @@ Expected result:
 - the scan records its Nuclei version and `templates_commit`; and
 - the selected IDs, not a filter or Git checkout, determine what Nuclei runs.
 
-Choose the explicit dynamic set when the policy should scan every active catalog template. Use that
-mode carefully on large catalogs.
+Choose `all` when the policy should scan every active catalog template. Choose `exclude` when it
+should scan every active template except its exclusions. Use catalog-derived modes carefully on large
+catalogs; if every active template is excluded, dispatch fails closed until the set is changed.
 
 ### 7. Test portability
 
@@ -225,7 +230,8 @@ Expected validation behavior:
 | Import returns `400` with a template ID | Fix that archive entry. The entire selected batch was rejected and nothing was persisted. |
 | Import returns `503` | Selected custom writes required validation, but no healthy node completed it. Restore node health and retry. |
 | Upstream sync is disabled | Configure `TEMPLATE_SYNC_REPO`, or intentionally operate a custom-only catalog. |
-| Set cannot be selected in a policy | Add members to an empty exact set, choose a dynamic set, or replace unavailable members. |
+| Custom template deletion returns `409` | Remove the template from every exclude-set exclusion first; this prevents delete-and-recreate from silently re-enabling a denied template. |
+| Set cannot be selected in a policy | Add members to an empty exact set, choose `all`/`exclude`, or replace unavailable members. |
 | Manual node sync returns `409` | A scan is using the active bundle. Wait for it to finish and retry. |
 | Manual node sync returns `502` | Check node reachability, authentication/mTLS, disk space, and bundle diagnostics. |
 | Scan reports template ID/digest drift | Push the current catalog, verify node health/storage, and retry. The node correctly refused unreproducible execution. |

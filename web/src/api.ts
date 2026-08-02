@@ -67,11 +67,15 @@ export interface ScannerNodeInput {
   tls_client_key?: string;
 }
 
+export type TemplateSetMode = "exact" | "all" | "exclude";
+
 export interface TemplateSet {
   id: string;
   name: string;
-  dynamic_all: boolean;
+  mode: TemplateSetMode;
   member_count: number;
+  exclusion_count: number;
+  excluded_template_ids?: string[];
   created_by?: string;
   created_at: string;
   updated_at: string;
@@ -726,6 +730,12 @@ export const api = {
     }),
   addTemplateSetMembers: (id: string, templateIDs: string[]) =>
     request<TemplateSet>("POST", `/api/template-sets/${id}/members`, {
+      template_ids: templateIDs,
+    }),
+  listTemplateSetExclusions: (id: string) =>
+    request<Template[]>("GET", `/api/template-sets/${id}/exclusions`),
+  replaceTemplateSetExclusions: (id: string, templateIDs: string[]) =>
+    request<TemplateSet>("PUT", `/api/template-sets/${id}/exclusions`, {
       template_ids: templateIDs,
     }),
   templateSetExportURL,

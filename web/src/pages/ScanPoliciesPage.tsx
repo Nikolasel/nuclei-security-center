@@ -153,10 +153,12 @@ function ScanPolicyModal({
           <Select value={templateSetId} onChange={(e) => setTemplateSetId(e.target.value)} className="w-full">
             <option value="">Select a template set…</option>
             {(templateSets.data ?? []).map((t) => (
-              <option key={t.id} value={t.id} disabled={!t.dynamic_all && t.member_count === 0}>
+              <option key={t.id} value={t.id} disabled={t.mode === "exact" && t.member_count === 0}>
                 {t.name}
-                {t.dynamic_all
-                  ? ` (all ${t.member_count} active · dynamic)`
+                {t.mode === "all"
+                  ? ` (all ${t.member_count} active)`
+                  : t.mode === "exclude"
+                    ? ` (all ${t.member_count} active · ${t.exclusion_count} excluded)`
                   : t.member_count === 0
                     ? " (empty)"
                     : ` (${t.member_count} templates)`}

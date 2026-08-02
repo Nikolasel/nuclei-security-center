@@ -17,10 +17,11 @@ type TemplateImportWrite struct {
 // TemplateSetImportWrite optionally creates or replaces one explicit set in
 // the same transaction as its custom templates. ExistingID empty means create.
 type TemplateSetImportWrite struct {
-	ExistingID  string
-	Name        string
-	DynamicAll  bool
-	TemplateIDs []string
+	ExistingID          string
+	Name                string
+	Mode                TemplateSetMode
+	TemplateIDs         []string
+	ExcludedTemplateIDs []string
 }
 
 // ApplyTemplateImport commits a validated portability import atomically. The
@@ -38,6 +39,20 @@ func (s *Store) ApplyTemplateImport(
 		return nil, fmt.Errorf("begin template import: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	var setMode TemplateSetMode
+	if setWrite != nil {
+		var err error
+		setMode, err = normalizeTemplateSetMode(setWrite.Mode)
+		if err != nil {
+			return nil, err
+		}
+		if setMode != TemplateSetModeExclude && len(setWrite.ExcludedTemplateIDs) > 0 {
+			return nil, ErrTemplateSetExclusionsUnsupported
+		}
+		if setMode != TemplateSetModeExact && len(setWrite.TemplateIDs) > 0 {
+			return nil, ErrTemplateSetNonExact
+		}
+	}
 
 	for _, write := range writes {
 		t := write.Template
@@ -82,13 +97,18 @@ func (s *Store) ApplyTemplateImport(
 	if setID == "" {
 		setID = types.NewID()
 		_, err := tx.Exec(ctx,
-			`INSERT INTO template_sets (id, name, dynamic_all, created_by) VALUES ($1, $2, $3, $4)`,
-			setID, setWrite.Name, setWrite.DynamicAll, nullStr(actor))
+			`INSERT INTO template_sets (id, name, mode, created_by) VALUES ($1, $2, $3, $4)`,
+			setID, setWrite.Name, setMode, nullStr(actor))
 		if err != nil {
 			if isUniqueViolation(err) {
 				return nil, ErrConflict
 			}
 			return nil, fmt.Errorf("insert imported template set: %w", err)
+		}
+		if setMode == TemplateSetModeExclude && len(setWrite.ExcludedTemplateIDs) > 0 {
+			if err := insertTemplateSetExclusions(ctx, tx, setID, setWrite.ExcludedTemplateIDs, actor); err != nil {
+				return nil, fmt.Errorf("insert imported template set exclusions: %w", err)
+			}
 		}
 	} else {
 		var exists bool
@@ -98,8 +118,8 @@ func (s *Store) ApplyTemplateImport(
 			return nil, err
 		}
 		_, err := tx.Exec(ctx,
-			`UPDATE template_sets SET name = $2, dynamic_all = $3, updated_at = now() WHERE id = $1`,
-			setID, setWrite.Name, setWrite.DynamicAll)
+			`UPDATE template_sets SET name = $2, mode = $3, updated_at = now() WHERE id = $1`,
+			setID, setWrite.Name, setMode)
 		if err != nil {
 			if isUniqueViolation(err) {
 				return nil, ErrConflict
@@ -110,8 +130,17 @@ func (s *Store) ApplyTemplateImport(
 			`DELETE FROM template_set_members WHERE template_set_id = $1`, setID); err != nil {
 			return nil, fmt.Errorf("clear imported template set: %w", err)
 		}
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM template_set_exclusions WHERE template_set_id = $1`, setID); err != nil {
+			return nil, fmt.Errorf("clear imported template set exclusions: %w", err)
+		}
+		if setMode == TemplateSetModeExclude && len(setWrite.ExcludedTemplateIDs) > 0 {
+			if err := insertTemplateSetExclusions(ctx, tx, setID, setWrite.ExcludedTemplateIDs, actor); err != nil {
+				return nil, fmt.Errorf("insert imported template set exclusions: %w", err)
+			}
+		}
 	}
-	if !setWrite.DynamicAll && len(setWrite.TemplateIDs) > 0 {
+	if setMode == TemplateSetModeExact && len(setWrite.TemplateIDs) > 0 {
 		_, err := tx.Exec(ctx,
 			`INSERT INTO template_set_members (template_set_id, template_id, added_by)
 			 SELECT $1, template_id, $3

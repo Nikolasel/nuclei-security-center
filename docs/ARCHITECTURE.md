@@ -278,7 +278,9 @@ so scans survive a busy or briefly-unreachable node.
    rows, and upserts global lifecycle rows, updating first/last-seen evidence. A malformed source
    record may be skipped and counted when its failure is proven record-local; database, transaction,
    schema, and unexpected constraint failures abort the scan instead of producing silently partial
-   results. **All dedup/lifecycle lives here** — the node stays stateless.
+   results. A completed scan with skipped records cannot provide negative mitigation evidence, while
+   exact occurrences it did ingest remain positive evidence. **All dedup/lifecycle lives here** —
+   the node stays stateless.
 7. **Persist** — store `covered_endpoints` and any `coverage_warning`, upload raw `out.jsonl`
    (+ optional SARIF) to object storage, then atomically mark the scan complete. Completion
    expands coverage JSON once and joins it through the indexed lifecycle

@@ -18,6 +18,7 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 		name                string
 		scanIDs             []string
 		coveredByScan       map[string]bool
+		incompleteByScan    map[string]bool
 		occByScan           map[string]int64
 		wantFirst, wantLast *string
 		wantOcc             *int64
@@ -93,6 +94,17 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 			wantCovering: str("s3"),
 		},
 		{
+			// A scan with skipped finding records is incomplete, so its absence
+			// cannot create a mitigation cycle either.
+			name:             "incomplete ingest gap does not create mitigation cycle",
+			scanIDs:          []string{"s1", "s2", "s3"},
+			coveredByScan:    map[string]bool{"s1": true, "s2": true, "s3": true},
+			incompleteByScan: map[string]bool{"s2": true},
+			occByScan:        map[string]int64{"s1": 1, "s3": 3},
+			wantFirst:        str("s1"), wantLast: str("s3"), wantOcc: i64(3), wantMitigated: 0,
+			wantCovering: str("s3"),
+		},
+		{
 			name:          "covered gap creates mitigation cycle",
 			scanIDs:       []string{"s1", "s2", "s3"},
 			coveredByScan: map[string]bool{"s1": true, "s2": true, "s3": true},
@@ -122,7 +134,9 @@ func TestComputeLifecycleTimeline(t *testing.T) {
 					coveredByScan[scanID] = true
 				}
 			}
-			covered := func(scanID string) bool { return coveredByScan[scanID] }
+			covered := func(scanID string) bool {
+				return coveredByScan[scanID] && !c.incompleteByScan[scanID]
+			}
 			gotFirst, gotLast, gotOcc, gotCovering, gotMitigated := computeLifecycleTimeline(
 				c.scanIDs, covered, c.occByScan)
 			if !strPtrEqual(gotFirst, c.wantFirst) {

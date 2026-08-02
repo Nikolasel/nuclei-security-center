@@ -311,21 +311,25 @@ func (s *Store) FailOrphanedScans(ctx context.Context, reason string) (int64, er
 // The scan transition and coverage update are one statement, so readers cannot
 // observe a complete scan without its lifecycle evidence. Like MarkFailed this
 // won't overwrite an already-cancelled scan, so a cancel that races an ingest
-// finishing stays cancelled.
+// finishing stays cancelled. A scan with skipped finding records is incomplete:
+// its exact occurrences still provide positive evidence, but its absence cannot
+// advance mitigation evidence.
 func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templatesCommit string) error {
 	_, err := s.pool.Exec(ctx,
 		`WITH completed_scan AS (
 		    UPDATE scans
 		       SET state = $1, nuclei_version = $2, templates_commit = $3, finished_at = now()
 		     WHERE id = $4 AND state <> $5
-		     RETURNING id, target_id, covered_endpoints, created_at
+		     RETURNING id, target_id, covered_endpoints, skipped_finding_count, created_at
 		 ),
 		 coverage_pairs AS MATERIALIZED (
 		    SELECT pair->>'template_id' AS template_id,
 		           pair->>'endpoint' AS endpoint
 		      FROM completed_scan
 		      CROSS JOIN LATERAL jsonb_array_elements(
-		          COALESCE(completed_scan.covered_endpoints, '[]'::jsonb)
+		          CASE WHEN completed_scan.skipped_finding_count = 0
+		               THEN COALESCE(completed_scan.covered_endpoints, '[]'::jsonb)
+		               ELSE '[]'::jsonb END
 		      ) AS pair
 		     WHERE jsonb_typeof(pair) = 'object'
 		 ),
@@ -638,7 +642,7 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 	}
 	affectedRows, err := tx.Query(ctx,
 		`WITH deleted_scan AS (
-		    SELECT target_id, covered_endpoints
+		    SELECT target_id, covered_endpoints, skipped_finding_count
 		      FROM scans
 		     WHERE id = $1
 		 ),
@@ -647,7 +651,9 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 		           pair->>'endpoint' AS endpoint
 		      FROM deleted_scan
 		      CROSS JOIN LATERAL jsonb_array_elements(
-		          COALESCE(deleted_scan.covered_endpoints, '[]'::jsonb)
+		          CASE WHEN deleted_scan.skipped_finding_count = 0
+		               THEN COALESCE(deleted_scan.covered_endpoints, '[]'::jsonb)
+		               ELSE '[]'::jsonb END
 		      ) AS pair
 		     WHERE jsonb_typeof(pair) = 'object'
 		 ),

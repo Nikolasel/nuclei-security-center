@@ -43,7 +43,8 @@ is queued: together with the concrete `template_ids` in its stored spec, it iden
 which content-addressed catalog bundle the node ran.
 `skipped_finding_count` reports source records that were proven malformed and skipped during
 backend ingest; database, transaction, schema, and other operational ingest failures remain
-scan-fatal.
+scan-fatal. A complete scan with a non-zero count is known-incomplete and does not contribute
+negative mitigation evidence; exact findings that were ingested still provide positive evidence.
 
 While a scan is **running**, `GET /api/scans` and `GET /api/scans/{id}` include a live
 `progress` object — `{percent, requests, total, hosts, rps, matched}` — parsed from Nuclei's

@@ -267,6 +267,18 @@ func (s *Store) SetScanVersions(ctx context.Context, scanID, nucleiVersion, temp
 	return err
 }
 
+// SetScanSkippedFindingCount records how many source records were rejected as
+// malformed during result ingestion. The count is durable even when the scan
+// itself later fails after a partial ingest.
+func (s *Store) SetScanSkippedFindingCount(ctx context.Context, scanID string, count int) error {
+	if count < 0 {
+		return fmt.Errorf("skipped finding count cannot be negative: %d", count)
+	}
+	_, err := s.pool.Exec(ctx,
+		`UPDATE scans SET skipped_finding_count = $2 WHERE id = $1`, scanID, count)
+	return err
+}
+
 // FailOrphanedScans marks every scan left in queued/running state as failed.
 // The orchestrator drives a scan from a single in-process goroutine (see
 // internal/backend/orchestrator.go) with no persisted resume state, so any
@@ -299,21 +311,25 @@ func (s *Store) FailOrphanedScans(ctx context.Context, reason string) (int64, er
 // The scan transition and coverage update are one statement, so readers cannot
 // observe a complete scan without its lifecycle evidence. Like MarkFailed this
 // won't overwrite an already-cancelled scan, so a cancel that races an ingest
-// finishing stays cancelled.
+// finishing stays cancelled. A scan with skipped finding records is incomplete:
+// its exact occurrences still provide positive evidence, but its absence cannot
+// advance mitigation evidence.
 func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templatesCommit string) error {
 	_, err := s.pool.Exec(ctx,
 		`WITH completed_scan AS (
 		    UPDATE scans
 		       SET state = $1, nuclei_version = $2, templates_commit = $3, finished_at = now()
 		     WHERE id = $4 AND state <> $5
-		     RETURNING id, target_id, covered_endpoints, created_at
+		     RETURNING id, target_id, covered_endpoints, skipped_finding_count, created_at
 		 ),
 		 coverage_pairs AS MATERIALIZED (
 		    SELECT pair->>'template_id' AS template_id,
 		           pair->>'endpoint' AS endpoint
 		      FROM completed_scan
 		      CROSS JOIN LATERAL jsonb_array_elements(
-		          COALESCE(completed_scan.covered_endpoints, '[]'::jsonb)
+		          CASE WHEN completed_scan.skipped_finding_count = 0
+		               THEN COALESCE(completed_scan.covered_endpoints, '[]'::jsonb)
+		               ELSE '[]'::jsonb END
 		      ) AS pair
 		     WHERE jsonb_typeof(pair) = 'object'
 		 ),
@@ -446,24 +462,28 @@ func (s *Store) ScanLogKey(ctx context.Context, id string) (string, error) {
 // or that failed before a node was chosen. The node's token/endpoint are never
 // exposed — only the human-facing name.
 type ScanRow struct {
-	ID              string     `json:"id"`
-	State           string     `json:"state"`
-	TargetID        string     `json:"target_id,omitempty"`
-	TargetName      string     `json:"target_name,omitempty"`
-	TargetHostCount int64      `json:"target_host_count,omitempty"`
-	TemplateSetID   string     `json:"template_set_id,omitempty"`
-	TemplateSetName string     `json:"template_set_name,omitempty"`
-	ScanPolicyID    string     `json:"scan_policy_id,omitempty"`
-	ScanPolicyName  string     `json:"scan_policy_name,omitempty"`
-	NodeID          string     `json:"node_id,omitempty"`
-	NodeName        string     `json:"node_name,omitempty"`
-	NucleiVersion   string     `json:"nuclei_version,omitempty"`
-	TemplatesCommit string     `json:"templates_commit,omitempty"`
-	Error           string     `json:"error,omitempty"`
-	HasRaw          bool       `json:"has_raw"`
-	HasLog          bool       `json:"has_log"`
-	CreatedAt       time.Time  `json:"created_at"`
-	FinishedAt      *time.Time `json:"finished_at,omitempty"`
+	ID              string `json:"id"`
+	State           string `json:"state"`
+	TargetID        string `json:"target_id,omitempty"`
+	TargetName      string `json:"target_name,omitempty"`
+	TargetHostCount int64  `json:"target_host_count,omitempty"`
+	TemplateSetID   string `json:"template_set_id,omitempty"`
+	TemplateSetName string `json:"template_set_name,omitempty"`
+	ScanPolicyID    string `json:"scan_policy_id,omitempty"`
+	ScanPolicyName  string `json:"scan_policy_name,omitempty"`
+	NodeID          string `json:"node_id,omitempty"`
+	NodeName        string `json:"node_name,omitempty"`
+	NucleiVersion   string `json:"nuclei_version,omitempty"`
+	TemplatesCommit string `json:"templates_commit,omitempty"`
+	Error           string `json:"error,omitempty"`
+	// SkippedFindingCount is the number of malformed source records that were
+	// safely skipped during result ingestion. Any operational ingest error still
+	// fails the scan rather than being counted here.
+	SkippedFindingCount int        `json:"skipped_finding_count"`
+	HasRaw              bool       `json:"has_raw"`
+	HasLog              bool       `json:"has_log"`
+	CreatedAt           time.Time  `json:"created_at"`
+	FinishedAt          *time.Time `json:"finished_at,omitempty"`
 	// DiscoveredTargets is the narrowed host:port list the naabu pre-pass produced
 	// (#86), persisted at completion. For a still-running scan the API layer fills
 	// it from the orchestrator's live cache instead. Empty when discovery was off.
@@ -486,7 +506,8 @@ type ScanRow struct {
 const scanSelect = `
 	SELECT s.id, s.state, s.target_id, t.name, t.hosts, s.template_set_id, ts.name,
 	       s.scan_policy_id, sp.name, s.node_id, n.name,
-	       s.nuclei_version, s.templates_commit, s.error, s.raw_object_key, s.log_object_key,
+	       s.nuclei_version, s.templates_commit, s.error, s.skipped_finding_count,
+	       s.raw_object_key, s.log_object_key,
 	       s.created_at, s.finished_at, s.discovered_targets,
 	       s.covered_endpoints, s.coverage_warning
 	  FROM scans s
@@ -505,7 +526,8 @@ func scanScan(row pgx.Row) (ScanRow, error) {
 	var coveredJSON []byte
 	if err := row.Scan(&r.ID, &r.State, &targetID, &targetName, &hosts, &templateSetID, &templateSetName,
 		&scanPolicyID, &scanPolicyName, &nodeID, &nodeName,
-		&nucleiVersion, &templatesCommit, &errStr, &rawKey, &logKey, &r.CreatedAt, &r.FinishedAt,
+		&nucleiVersion, &templatesCommit, &errStr, &r.SkippedFindingCount, &rawKey, &logKey,
+		&r.CreatedAt, &r.FinishedAt,
 		&r.DiscoveredTargets, &coveredJSON, &coverageWarning); err != nil {
 		return ScanRow{}, err
 	}
@@ -620,7 +642,7 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 	}
 	affectedRows, err := tx.Query(ctx,
 		`WITH deleted_scan AS (
-		    SELECT target_id, covered_endpoints
+		    SELECT target_id, covered_endpoints, skipped_finding_count
 		      FROM scans
 		     WHERE id = $1
 		 ),
@@ -629,7 +651,9 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 		           pair->>'endpoint' AS endpoint
 		      FROM deleted_scan
 		      CROSS JOIN LATERAL jsonb_array_elements(
-		          COALESCE(deleted_scan.covered_endpoints, '[]'::jsonb)
+		          CASE WHEN deleted_scan.skipped_finding_count = 0
+		               THEN COALESCE(deleted_scan.covered_endpoints, '[]'::jsonb)
+		               ELSE '[]'::jsonb END
 		      ) AS pair
 		     WHERE jsonb_typeof(pair) = 'object'
 		 ),

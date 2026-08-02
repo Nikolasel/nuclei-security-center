@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Nikolasel/nuclei-security-center/internal/store"
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
@@ -60,6 +61,33 @@ func TestScanFindingLinesEmitError(t *testing.T) {
 		func(types.NucleiFinding, []byte) error { return sentinel })
 	if !errors.Is(err, sentinel) {
 		t.Errorf("err = %v, want the emit error propagated", err)
+	}
+}
+
+func TestScanFindingLinesSkipsRecordLocalErrors(t *testing.T) {
+	line := `{"template-id":"t","host":"h"}` + "\n"
+	sentinel := errors.New("invalid source record")
+	recordErr := store.NewFindingRecordError("raw JSON projection", sentinel)
+	var calls int
+	n, skipped, details, err := scanFindingLinesWithDetails(strings.NewReader(line+line), 1<<20, 100,
+		func(types.NucleiFinding, []byte) error {
+			calls++
+			if calls == 1 {
+				return recordErr
+			}
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if n != 1 || skipped != 1 {
+		t.Fatalf("ingested=%d skipped=%d, want 1 and 1", n, skipped)
+	}
+	if len(details) != 1 || !strings.Contains(details[0], "line 1") || !strings.Contains(details[0], "raw JSON projection") {
+		t.Fatalf("details=%v, want bounded line/stage detail", details)
+	}
+	if !errors.Is(recordErr, sentinel) {
+		t.Errorf("record error does not unwrap to the source error: %v", recordErr)
 	}
 }
 

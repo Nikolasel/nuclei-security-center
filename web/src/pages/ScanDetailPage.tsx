@@ -253,6 +253,14 @@ export function ScanDetailPage() {
                 {scan.data.error}
               </p>
             )}
+            {scan.data.skipped_finding_count > 0 && (
+              <p className="mt-3 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                {scan.data.skipped_finding_count.toLocaleString()}{" "}malformed finding{" "}
+                {scan.data.skipped_finding_count === 1 ? "record was" : "records were"} skipped during ingest;
+                indexed results are partial; absent findings cannot be auto-mitigated from this scan.
+                Operational ingest failures remain scan-fatal.
+              </p>
+            )}
             {scan.data.discovered_targets && scan.data.discovered_targets.length > 0 && (
               <DiscoveredEndpoints targets={scan.data.discovered_targets} />
             )}

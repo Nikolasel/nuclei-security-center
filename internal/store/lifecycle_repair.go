@@ -12,8 +12,9 @@ import (
 // computeLifecycleTimeline recomputes one global finding's scan-derived history.
 // scanIDs is oldest first; covered reports whether a scan carried both relevant
 // template coverage and an occurrence-provenance scope associated with this
-// finding. occByScan maps scans that actually observed this exact result variant
-// to their immutable occurrence id.
+// finding. Incomplete scans should return false for absent findings so they do
+// not create mitigation gaps. occByScan maps scans that actually observed this
+// exact result variant to their immutable occurrence id.
 func computeLifecycleTimeline(scanIDs []string, covered func(string) bool, occByScan map[string]int64) (firstSeenScan, lastSeenScan *string, latestOccID *int64, lastCoveringScan *string, timesMitigated int) {
 	wasPresent := false
 	everPresent := false
@@ -48,9 +49,9 @@ func computeLifecycleTimeline(scanIDs []string, covered func(string) bool, occBy
 // repairLifecycleFindings rebuilds only the global lifecycle rows affected by a
 // scan deletion. A scan covers a global finding when its trace proves the exact
 // template+endpoint pair in one of the target/ad-hoc scopes that has observed
-// that finding. This preserves the existing fail-closed behavior for unknown
-// coverage while allowing observations from overlapping target records to
-// share one lifecycle.
+// that finding and its result ingest was complete. This preserves the existing
+// fail-closed behavior for unknown or incomplete coverage while allowing
+// observations from overlapping target records to share one lifecycle.
 //
 // A row with no surviving occurrence is deleted: deleting every scan that
 // observed a finding deletes the evidence and its analyst overlay with it.
@@ -98,7 +99,8 @@ func repairLifecycleFindings(ctx context.Context, tx pgx.Tx, lifecycleIDs []int6
 	// one of the affected global findings. Exact observations are positive
 	// evidence; otherwise a scan covers only an exact template+endpoint pair.
 	scanRows, err := tx.Query(ctx,
-		`SELECT scans.id, scans.target_id, scans.covered_endpoints
+		`SELECT scans.id, scans.target_id, scans.covered_endpoints,
+		        scans.skipped_finding_count
 		   FROM scans
 		  WHERE scans.state = 'complete'
 		    AND EXISTS (
@@ -116,16 +118,19 @@ func repairLifecycleFindings(ctx context.Context, tx pgx.Tx, lifecycleIDs []int6
 	var scanIDs []string
 	targetByScan := map[string]string{}
 	coverageByScan := map[string]map[types.EndpointCoverage]struct{}{}
+	skippedByScan := map[string]int{}
 	for scanRows.Next() {
 		var id string
 		var targetID *string
 		var coveredJSON []byte
-		if err := scanRows.Scan(&id, &targetID, &coveredJSON); err != nil {
+		var skippedCount int
+		if err := scanRows.Scan(&id, &targetID, &coveredJSON, &skippedCount); err != nil {
 			scanRows.Close()
 			return err
 		}
 		scanIDs = append(scanIDs, id)
 		targetByScan[id] = targetScopeKey(targetID)
+		skippedByScan[id] = skippedCount
 		if coveredJSON != nil {
 			var endpoints []types.EndpointCoverage
 			if err := json.Unmarshal(coveredJSON, &endpoints); err != nil {
@@ -183,6 +188,9 @@ func repairLifecycleFindings(ctx context.Context, tx pgx.Tx, lifecycleIDs []int6
 			}
 			if _, present := byLifecycle[lcID][scanID]; present {
 				return true
+			}
+			if skippedByScan[scanID] > 0 {
+				return false
 			}
 			coverage, known := coverageByScan[scanID]
 			if !known || endpointByLifecycle[lcID] == "" {

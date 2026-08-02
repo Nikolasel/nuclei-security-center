@@ -76,6 +76,35 @@ func sanitizeKeyComponent(s string) string {
 	}, s)
 }
 
+// FindingRecordError marks an ingest failure that is proven to be local to one
+// source record. Callers may skip this record, but must continue to propagate
+// every other error so database and transaction failures remain scan-fatal.
+type FindingRecordError struct {
+	stage string
+	err   error
+}
+
+// NewFindingRecordError wraps a source-record validation/projection failure for
+// the orchestrator's explicit, fail-closed classification.
+func NewFindingRecordError(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &FindingRecordError{stage: stage, err: err}
+}
+
+func (e *FindingRecordError) Error() string {
+	if e.stage == "" {
+		return fmt.Sprintf("malformed finding record: %v", e.err)
+	}
+	return fmt.Sprintf("malformed finding record (%s): %v", e.stage, e.err)
+}
+
+func (e *FindingRecordError) Unwrap() error { return e.err }
+
+// Stage returns the non-sensitive processing stage that rejected the record.
+func (e *FindingRecordError) Stage() string { return e.stage }
+
 // IngestFinding records one finding observation: it inserts an immutable
 // occurrence row (with the preserved raw line) and upserts the deduplicated
 // lifecycle entity. On a re-observation it advances last-seen and, if the finding
@@ -89,11 +118,11 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 	// key semantics, while display columns render NUL visibly as "\0".
 	rawProjection, err := findingJSONBProjection(raw)
 	if err != nil {
-		return fmt.Errorf("project raw finding JSON: %w", err)
+		return NewFindingRecordError("project raw finding JSON", err)
 	}
 	discriminator, err := resultDiscriminator(rawProjection)
 	if err != nil {
-		return fmt.Errorf("derive finding result identity: %w", err)
+		return NewFindingRecordError("derive finding result identity", err)
 	}
 	key := DedupKey(f.TemplateID, f.MatchedAt, discriminator)
 	rawLine := findingRawLine(raw)

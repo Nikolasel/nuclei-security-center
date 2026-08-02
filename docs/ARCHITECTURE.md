@@ -104,10 +104,12 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
 - **schedules** — `id, scan_policy_id, target_id, cron, enabled` — a policy and approved target
   paired with a cadence. Deleting either referenced row cascades the schedule away.
 - **scans** — `id, source (schedule|adhoc), scan_policy_id, target_id, template_set_id, status,
-  started_at, finished_at, nuclei_version, templates_commit, triggered_by`. The selected target
-  and policy's template set are resolved and recorded on the scan at dispatch (so findings keep
-  working and history survives `scan_policy_id` being nulled on policy delete — `ON DELETE SET
-  NULL`).
+  started_at, finished_at, nuclei_version, templates_commit, skipped_finding_count, triggered_by`.
+  The selected target and policy's template set are resolved and recorded on the scan at dispatch
+  (so findings keep working and history survives `scan_policy_id` being nulled on policy delete —
+  `ON DELETE SET NULL`). `skipped_finding_count` records only source records proven malformed
+  during backend ingest; database, transaction, schema, and unexpected constraint failures remain
+  scan-fatal.
 
 Migration 0036 deliberately preserves existing schedules: it copies each schedule's policy-owned
 target into `schedules.target_id` before dropping `scan_policies.target_id`. Historical scans
@@ -273,8 +275,12 @@ so scans survive a busy or briefly-unreachable node.
    `complete`. Pull-only: the flow is strictly backend → node, and in-flight scans resume
    from Postgres if the backend restarts. No node → backend inbound path exists.
 6. **Ingest (on backend)** — the backend parses the JSONL, inserts immutable occurrence
-   rows, and upserts global lifecycle rows, updating first/last-seen evidence.
-   **All dedup/lifecycle lives here** — the node stays stateless.
+   rows, and upserts global lifecycle rows, updating first/last-seen evidence. A malformed source
+   record may be skipped and counted when its failure is proven record-local; database, transaction,
+   schema, and unexpected constraint failures abort the scan instead of producing silently partial
+   results. A completed scan with skipped records cannot provide negative mitigation evidence, while
+   exact occurrences it did ingest remain positive evidence. **All dedup/lifecycle lives here** —
+   the node stays stateless.
 7. **Persist** — store `covered_endpoints` and any `coverage_warning`, upload raw `out.jsonl`
    (+ optional SARIF) to object storage, then atomically mark the scan complete. Completion
    expands coverage JSON once and joins it through the indexed lifecycle

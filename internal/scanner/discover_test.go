@@ -2,6 +2,8 @@ package scanner
 
 import (
 	"bytes"
+	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -182,6 +184,72 @@ func TestDiscoveryWriterTally(t *testing.T) {
 	// Each writer keeps its own tail for error messages (pass 2's here).
 	if !strings.Contains(w2.tail(), "noise line") {
 		t.Errorf("tail missing recent output: %q", w2.tail())
+	}
+}
+
+func TestReadNonEmptyLinesDeduplicates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "alive.txt")
+	content := "\n scanme.sh \nscanme.sh\n192.168.65.7\nscanme.sh\n 192.168.65.7 \n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := readNonEmptyLines(path)
+	if err != nil {
+		t.Fatalf("readNonEmptyLines: %v", err)
+	}
+	want := []string{"scanme.sh", "192.168.65.7"}
+	if !slices.Equal(got, want) {
+		t.Errorf("readNonEmptyLines = %v, want %v", got, want)
+	}
+}
+
+func TestDiscoverPassesDeduplicatedHostsToPortScan(t *testing.T) {
+	dir := t.TempDir()
+	fakeNaabu := filepath.Join(dir, "fake-naabu")
+	capture := filepath.Join(dir, "port-scan-input.txt")
+	if err := os.WriteFile(fakeNaabu, []byte(`#!/bin/sh
+set -eu
+list=
+output=
+host_discovery=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -list) list="$2"; shift 2 ;;
+    -output) output="$2"; shift 2 ;;
+    -sn) host_discovery=1; shift ;;
+    *) shift ;;
+  esac
+done
+if [ "$host_discovery" -eq 1 ]; then
+  printf 'scanme.sh\nscanme.sh\n192.168.65.7\n'
+else
+  cat "$list" > "$CAPTURE_FILE"
+  : > "$output"
+fi
+`), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CAPTURE_FILE", capture)
+
+	targetsFile := filepath.Join(dir, "targets.txt")
+	if err := os.WriteFile(targetsFile, []byte("scanme.sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &Runner{naabuPath: fakeNaabu, scanType: scanTypeSYN}
+	if _, err := r.discover(context.Background(), types.ScanSpec{
+		Options: types.ScanOptions{Discovery: &types.DiscoveryOptions{Enabled: true}},
+	}, targetsFile, dir, io.Discard, nil); err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+
+	got, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("read captured port-scan input: %v", err)
+	}
+	want := "scanme.sh\n192.168.65.7\n"
+	if string(got) != want {
+		t.Errorf("port-scan input = %q, want %q", got, want)
 	}
 }
 

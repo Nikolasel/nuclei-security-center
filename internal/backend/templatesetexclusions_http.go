@@ -19,7 +19,7 @@ func (s *Server) handleListTemplateSetExclusions(w http.ResponseWriter, r *http.
 	writeJSON(w, http.StatusOK, exclusions)
 }
 
-// handleReplaceTemplateSetExclusions replaces the exclusion list for a dynamic
+// handleReplaceTemplateSetExclusions replaces the exclusion list for an exclude
 // set and returns the fresh set, including its effective member/exclusion counts.
 func (s *Server) handleReplaceTemplateSetExclusions(w http.ResponseWriter, r *http.Request) {
 	var in memberIDs
@@ -45,7 +45,7 @@ func (s *Server) writeExclusionErr(w http.ResponseWriter, err error) {
 		http.Error(w, "one or more template_ids do not exist", http.StatusBadRequest)
 		return
 	}
-	if errors.Is(err, store.ErrTemplateSetExact) {
+	if errors.Is(err, store.ErrTemplateSetExclusionsUnsupported) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}

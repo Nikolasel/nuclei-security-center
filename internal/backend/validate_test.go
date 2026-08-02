@@ -132,18 +132,18 @@ func TestValidateTemplateSet(t *testing.T) {
 		t.Errorf("name not trimmed: %q", ts.Name)
 	}
 	if err := validateTemplateSet(&store.TemplateSet{
-		Name: "exact", ExcludedTemplateIDs: []string{"noisy"},
-	}); err == nil || !strings.Contains(err.Error(), "only allowed for dynamic_all") {
+		Name: "exact", Mode: store.TemplateSetModeExact, ExcludedTemplateIDs: []string{"noisy"},
+	}); err == nil || !strings.Contains(err.Error(), "only allowed for mode=exclude") {
 		t.Fatalf("exact exclusions error = %v", err)
 	}
-	dynamic := &store.TemplateSet{
-		Name: " dynamic ", DynamicAll: true,
+	exclude := &store.TemplateSet{
+		Name: " exclude ", Mode: store.TemplateSetModeExclude,
 		ExcludedTemplateIDs: []string{" noisy ", "other"},
 	}
-	if err := validateTemplateSet(dynamic); err != nil {
-		t.Fatalf("dynamic exclusions rejected: %v", err)
+	if err := validateTemplateSet(exclude); err != nil {
+		t.Fatalf("exclude mode rejected: %v", err)
 	}
-	if dynamic.Name != "dynamic" || dynamic.ExcludedTemplateIDs[0] != "noisy" {
-		t.Fatalf("dynamic exclusions were not normalized: %+v", dynamic)
+	if exclude.Name != "exclude" || exclude.ExcludedTemplateIDs[0] != "noisy" {
+		t.Fatalf("exclude mode was not normalized: %+v", exclude)
 	}
 }

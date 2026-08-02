@@ -48,10 +48,13 @@ type portableTemplateJSON struct {
 }
 
 type portableSet struct {
-	Name                string   `json:"name"`
-	DynamicAll          bool     `json:"dynamic_all,omitempty"`
-	TemplateIDs         []string `json:"template_ids"`
-	ExcludedTemplateIDs []string `json:"excluded_template_ids,omitempty"`
+	Name                string                `json:"name"`
+	Mode                store.TemplateSetMode `json:"mode,omitempty"`
+	TemplateIDs         []string              `json:"template_ids,omitempty"`
+	ExcludedTemplateIDs []string              `json:"excluded_template_ids,omitempty"`
+	// LegacyDynamicAll accepts archives produced before the explicit mode contract.
+	// It is normalized during validation and never emitted in new exports.
+	LegacyDynamicAll *bool `json:"dynamic_all,omitempty"`
 }
 
 type portableJSONArchive struct {
@@ -113,7 +116,7 @@ func (s *Server) handleExportTemplateSet(w http.ResponseWriter, r *http.Request)
 		ids       []string
 		templates []store.Template
 	)
-	if !set.DynamicAll {
+	if set.Mode == store.TemplateSetModeExact {
 		members, err := s.store.ListTemplateSetMembers(r.Context(), set.ID)
 		if err != nil {
 			s.writeStoreErr(w, err)
@@ -128,7 +131,7 @@ func (s *Server) handleExportTemplateSet(w http.ResponseWriter, r *http.Request)
 			s.serverError(w, "load template set export", err)
 			return
 		}
-	} else {
+	} else if set.Mode == store.TemplateSetModeExclude {
 		exclusions, err := s.store.ListTemplateSetExclusions(r.Context(), set.ID)
 		if err != nil {
 			s.writeStoreErr(w, err)
@@ -138,15 +141,15 @@ func (s *Server) handleExportTemplateSet(w http.ResponseWriter, r *http.Request)
 		for i, exclusion := range exclusions {
 			ids[i] = exclusion.ID
 		}
-		// A dynamic set must remain dynamic on import. Include only the
+		// An exclude set must remain an exclude set on import. Include only the
 		// referenced exclusions so custom YAML can travel with the set without
 		// freezing the full active catalog.
 		templates = exclusions
 	}
-	setDoc := &portableSet{Name: set.Name, DynamicAll: set.DynamicAll}
-	if set.DynamicAll {
+	setDoc := &portableSet{Name: set.Name, Mode: set.Mode}
+	if set.Mode == store.TemplateSetModeExclude {
 		setDoc.ExcludedTemplateIDs = ids
-	} else {
+	} else if set.Mode == store.TemplateSetModeExact {
 		setDoc.TemplateIDs = ids
 	}
 	s.writePortableExport(w, r, safeDownloadName(set.Name), templates, setDoc)
@@ -320,7 +323,7 @@ func (s *Server) handlePortableImport(w http.ResponseWriter, r *http.Request, re
 			http.Error(w, formatTemplateImportValidationError(validationErr.Result), http.StatusBadRequest)
 		case errors.Is(err, errTemplateValidatorUnavailable):
 			s.serviceUnavailable(w, "validate template import", err)
-		case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrTemplateSetDynamic), errors.Is(err, store.ErrTemplateSetExact):
+		case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrTemplateSetNonExact), errors.Is(err, store.ErrTemplateSetExclusionsUnsupported):
 			http.Error(w, err.Error(), http.StatusConflict)
 		case errors.Is(err, store.ErrInvalidRef):
 			http.Error(w, "archive references template ids unavailable in this catalog", http.StatusBadRequest)
@@ -565,15 +568,38 @@ func validatePortableEntries(
 		if set.Name == "" {
 			return parsedPortableArchive{}, errors.New("set name is required")
 		}
+		if set.Mode == "" {
+			if set.LegacyDynamicAll != nil {
+				if *set.LegacyDynamicAll {
+					if len(set.ExcludedTemplateIDs) > 0 {
+						set.Mode = store.TemplateSetModeExclude
+					} else {
+						set.Mode = store.TemplateSetModeAll
+					}
+				} else {
+					set.Mode = store.TemplateSetModeExact
+				}
+			} else {
+				set.Mode = store.TemplateSetModeExact
+			}
+		} else if set.LegacyDynamicAll != nil {
+			return parsedPortableArchive{}, errors.New("set must not contain both mode and dynamic_all")
+		}
+		set.LegacyDynamicAll = nil
+		switch set.Mode {
+		case store.TemplateSetModeExact, store.TemplateSetModeAll, store.TemplateSetModeExclude:
+		default:
+			return parsedPortableArchive{}, fmt.Errorf("invalid template set mode %q", set.Mode)
+		}
 		set.TemplateIDs = uniqueStrings(set.TemplateIDs)
-		if set.DynamicAll && len(set.TemplateIDs) > 0 {
+		if set.Mode != store.TemplateSetModeExact && len(set.TemplateIDs) > 0 {
 			return parsedPortableArchive{}, errors.New(
-				"dynamic set must not contain template_ids")
+				"catalog-derived set must not contain template_ids")
 		}
 		set.ExcludedTemplateIDs = uniqueStrings(set.ExcludedTemplateIDs)
-		if !set.DynamicAll && len(set.ExcludedTemplateIDs) > 0 {
+		if set.Mode != store.TemplateSetModeExclude && len(set.ExcludedTemplateIDs) > 0 {
 			return parsedPortableArchive{}, errors.New(
-				"exact set must not contain excluded_template_ids")
+				"only exclude sets may contain excluded_template_ids")
 		}
 		for _, id := range set.TemplateIDs {
 			if _, ok := seen[id]; !ok {

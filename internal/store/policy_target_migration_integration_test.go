@@ -57,6 +57,15 @@ func TestTargetIndependentPoliciesUpgradePostgres(t *testing.T) {
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("upgrade through target-independent policies: %v", err)
 	}
+	var templateSetMode string
+	if err := st.pool.QueryRow(ctx,
+		`SELECT mode FROM template_sets WHERE id = $1`, templateSetID,
+	).Scan(&templateSetMode); err != nil {
+		t.Fatalf("read migrated template-set mode: %v", err)
+	}
+	if templateSetMode != "all" {
+		t.Fatalf("migrated template-set mode = %q, want all", templateSetMode)
+	}
 
 	policy, err := st.GetScanPolicy(ctx, policyID)
 	if err != nil {

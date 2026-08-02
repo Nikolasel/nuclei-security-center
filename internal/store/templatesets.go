@@ -11,33 +11,55 @@ import (
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
-// TemplateSet selects which Nuclei templates a scan runs. Exact sets are driven
-// by template_set_members; DynamicAll resolves to every active catalog template
-// at read and dispatch time.
+// TemplateSetMode controls how a template set resolves its templates.
+type TemplateSetMode string
+
+const (
+	TemplateSetModeExact   TemplateSetMode = "exact"
+	TemplateSetModeAll     TemplateSetMode = "all"
+	TemplateSetModeExclude TemplateSetMode = "exclude"
+)
+
+func normalizeTemplateSetMode(mode TemplateSetMode) (TemplateSetMode, error) {
+	if mode == "" {
+		return TemplateSetModeExact, nil
+	}
+	switch mode {
+	case TemplateSetModeExact, TemplateSetModeAll, TemplateSetModeExclude:
+		return mode, nil
+	default:
+		return "", ErrInvalidTemplateSetMode
+	}
+}
+
+// TemplateSet selects which Nuclei templates a scan runs. Exact sets are
+// driven by template_set_members; all sets resolve to every active catalog
+// template; exclude sets resolve to every active template except their stored
+// exclusions.
 type TemplateSet struct {
-	ID                  string    `json:"id"`
-	Name                string    `json:"name"`
-	DynamicAll          bool      `json:"dynamic_all"`
-	MemberCount         int       `json:"member_count"`
-	ExclusionCount      int       `json:"exclusion_count"`
-	ExcludedTemplateIDs []string  `json:"excluded_template_ids,omitempty"`
-	CreatedBy           string    `json:"created_by,omitempty"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	ID                  string          `json:"id"`
+	Name                string          `json:"name"`
+	Mode                TemplateSetMode `json:"mode"`
+	MemberCount         int             `json:"member_count"`
+	ExclusionCount      int             `json:"exclusion_count"`
+	ExcludedTemplateIDs []string        `json:"excluded_template_ids,omitempty"`
+	CreatedBy           string          `json:"created_by,omitempty"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
 }
 
 // tmplSetCols is the read projection shared by Get/List/Update. member_count is
 // the effective selected count: stored exact membership for exact sets, or
-// active catalog rows minus dynamic exclusions for dynamic sets.
-const tmplSetCols = `id, name, dynamic_all,
-	CASE WHEN dynamic_all
+// active catalog rows minus exclusions for catalog-derived sets.
+const tmplSetCols = `id, name, mode,
+	CASE WHEN mode IN ('all', 'exclude')
 	     THEN (SELECT count(*) FROM templates
 	            WHERE availability = 'active'
-	              AND NOT EXISTS (
+	              AND (template_sets.mode = 'all' OR NOT EXISTS (
 	                  SELECT 1 FROM template_set_exclusions e
 	                   WHERE e.template_set_id = template_sets.id
 	                     AND e.template_id = templates.id
-	              ))
+	              )))
 	     ELSE (SELECT count(*) FROM template_set_members m WHERE m.template_set_id = template_sets.id)
 	END,
 	(SELECT count(*) FROM template_set_exclusions e WHERE e.template_set_id = template_sets.id),
@@ -50,21 +72,26 @@ func (s *Store) CreateTemplateSet(ctx context.Context, in TemplateSet) (Template
 		return TemplateSet{}, fmt.Errorf("begin create template set: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if !in.DynamicAll && len(in.ExcludedTemplateIDs) > 0 {
-		return TemplateSet{}, ErrTemplateSetExact
+	mode, err := normalizeTemplateSetMode(in.Mode)
+	if err != nil {
+		return TemplateSet{}, err
 	}
+	if mode != TemplateSetModeExclude && len(in.ExcludedTemplateIDs) > 0 {
+		return TemplateSet{}, ErrTemplateSetExclusionsUnsupported
+	}
+	in.Mode = mode
 	in.ID = types.NewID()
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO template_sets (id, name, dynamic_all, created_by)
+		`INSERT INTO template_sets (id, name, mode, created_by)
 		 VALUES ($1, $2, $3, $4)`,
-		in.ID, in.Name, in.DynamicAll, nullStr(in.CreatedBy),
+		in.ID, in.Name, in.Mode, nullStr(in.CreatedBy),
 	); err != nil {
 		if isUniqueViolation(err) {
 			return TemplateSet{}, ErrConflict
 		}
 		return TemplateSet{}, fmt.Errorf("insert template set: %w", err)
 	}
-	if in.DynamicAll && len(in.ExcludedTemplateIDs) > 0 {
+	if in.Mode == TemplateSetModeExclude && len(in.ExcludedTemplateIDs) > 0 {
 		if err := insertTemplateSetExclusions(ctx, tx, in.ID, in.ExcludedTemplateIDs, in.CreatedBy); err != nil {
 			return TemplateSet{}, fmt.Errorf("insert template set exclusions: %w", err)
 		}
@@ -121,39 +148,38 @@ func (s *Store) UpdateTemplateSet(ctx context.Context, id string, in TemplateSet
 	} else if err != nil {
 		return TemplateSet{}, err
 	}
-	if !in.DynamicAll && len(in.ExcludedTemplateIDs) > 0 {
-		return TemplateSet{}, ErrTemplateSetExact
+	mode, err := normalizeTemplateSetMode(in.Mode)
+	if err != nil {
+		return TemplateSet{}, err
+	}
+	if mode != TemplateSetModeExclude && len(in.ExcludedTemplateIDs) > 0 {
+		return TemplateSet{}, ErrTemplateSetExclusionsUnsupported
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE template_sets
-		 SET name = $2, dynamic_all = $3, updated_at = now()
+		 SET name = $2, mode = $3, updated_at = now()
 		 WHERE id = $1`,
-		id, in.Name, in.DynamicAll); err != nil {
+		id, in.Name, mode); err != nil {
 		if isUniqueViolation(err) {
 			return TemplateSet{}, ErrConflict
 		}
 		return TemplateSet{}, err
 	}
-	if in.DynamicAll {
+	if mode != TemplateSetModeExact {
 		if _, err := tx.Exec(ctx,
 			`DELETE FROM template_set_members WHERE template_set_id = $1`, id); err != nil {
-			return TemplateSet{}, fmt.Errorf("clear dynamic template set members: %w", err)
+			return TemplateSet{}, fmt.Errorf("clear non-exact template set members: %w", err)
 		}
-		if in.ExcludedTemplateIDs != nil {
-			if _, err := tx.Exec(ctx,
-				`DELETE FROM template_set_exclusions WHERE template_set_id = $1`, id); err != nil {
-				return TemplateSet{}, fmt.Errorf("clear dynamic template set exclusions: %w", err)
-			}
-			if len(in.ExcludedTemplateIDs) > 0 {
-				if err := insertTemplateSetExclusions(ctx, tx, id, in.ExcludedTemplateIDs, in.CreatedBy); err != nil {
-					return TemplateSet{}, fmt.Errorf("insert dynamic template set exclusions: %w", err)
-				}
-			}
-		}
-	} else {
+	}
+	if mode != TemplateSetModeExclude || in.ExcludedTemplateIDs != nil {
 		if _, err := tx.Exec(ctx,
 			`DELETE FROM template_set_exclusions WHERE template_set_id = $1`, id); err != nil {
-			return TemplateSet{}, fmt.Errorf("clear exact template set exclusions: %w", err)
+			return TemplateSet{}, fmt.Errorf("clear template set exclusions: %w", err)
+		}
+		if mode == TemplateSetModeExclude && len(in.ExcludedTemplateIDs) > 0 {
+			if err := insertTemplateSetExclusions(ctx, tx, id, in.ExcludedTemplateIDs, in.CreatedBy); err != nil {
+				return TemplateSet{}, fmt.Errorf("insert template set exclusions: %w", err)
+			}
 		}
 	}
 	t, err := scanTemplateSet(tx.QueryRow(ctx,
@@ -185,8 +211,9 @@ func (s *Store) DeleteTemplateSet(ctx context.Context, id string) error {
 // scanTemplateSet reads one row (projected with tmplSetCols) into a TemplateSet.
 func scanTemplateSet(row pgx.Row) (TemplateSet, error) {
 	var t TemplateSet
+	var mode string
 	var createdBy *string
-	err := row.Scan(&t.ID, &t.Name, &t.DynamicAll,
+	err := row.Scan(&t.ID, &t.Name, &mode,
 		&t.MemberCount, &t.ExclusionCount, &createdBy, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -194,6 +221,7 @@ func scanTemplateSet(row pgx.Row) (TemplateSet, error) {
 		}
 		return TemplateSet{}, err
 	}
+	t.Mode = TemplateSetMode(mode)
 	t.CreatedBy = deref(createdBy)
 	return t, nil
 }

@@ -278,9 +278,9 @@ func (s *Server) resolvePolicySpec(ctx context.Context, policyID, targetID strin
 
 // resolveConfigSpec builds a scan spec + config link from a stored target and an
 // required template set. The scan carries concrete ids plus the digest of the
-// full active catalog bundle already distributed to the node. A dynamic set
-// resolves to every active catalog template except its exclusions; an empty
-// exact or fully-excluded dynamic set fails closed.
+// full active catalog bundle already distributed to the node. Catalog-derived
+// sets resolve from the active catalog; exclude mode subtracts its exclusions.
+// An empty exact or fully-excluded exclude set fails closed.
 func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID string) (types.ScanSpec, store.ScanLink, error) {
 	target, err := s.store.GetTarget(ctx, targetID)
 	if err != nil {
@@ -297,13 +297,13 @@ func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID 
 		}
 		return types.ScanSpec{}, store.ScanLink{}, err
 	}
-	if !ts.DynamicAll && ts.MemberCount == 0 {
+	if ts.Mode == store.TemplateSetModeExact && ts.MemberCount == 0 {
 		return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("template set %q is empty", ts.Name)
 	}
 	link := store.ScanLink{TargetID: target.ID, TemplateSetID: ts.ID}
 
 	var selectedIDs []string
-	if !ts.DynamicAll {
+	if ts.Mode == store.TemplateSetModeExact {
 		members, err := s.store.ListTemplateSetMembers(ctx, ts.ID)
 		if err != nil {
 			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("list template set members: %w", err)
@@ -334,7 +334,7 @@ func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID 
 	if len(entries) == 0 {
 		return types.ScanSpec{}, store.ScanLink{}, errors.New("active template catalog is empty")
 	}
-	if ts.DynamicAll {
+	if ts.Mode == store.TemplateSetModeExclude {
 		excludedIDs, err := s.store.ListTemplateSetExclusionIDs(ctx, ts.ID)
 		if err != nil {
 			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("list template set exclusions: %w", err)
@@ -353,7 +353,7 @@ func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID 
 		if len(selectedIDs) == 0 {
 			return types.ScanSpec{}, store.ScanLink{}, fmt.Errorf("template set %q resolves to no active templates after exclusions", ts.Name)
 		}
-	} else {
+	} else if ts.Mode == store.TemplateSetModeExact {
 		active := make(map[string]struct{}, len(entries))
 		for _, entry := range entries {
 			active[entry.ID] = struct{}{}
@@ -369,6 +369,11 @@ func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID 
 				"template set contains unavailable templates: %s — update its explicit selection first",
 				strings.Join(unavailable, ", "),
 			)
+		}
+	} else {
+		selectedIDs = make([]string, 0, len(entries))
+		for _, entry := range entries {
+			selectedIDs = append(selectedIDs, entry.ID)
 		}
 	}
 	spec.Templates.TemplateIDs = selectedIDs

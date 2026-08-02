@@ -298,8 +298,8 @@ template catalog) to launch scans from:
 ```sh
 # create a target (the hosts list is the scope allowlist)
 curl -sb jar.txt -X POST localhost:8080/api/targets -d '{"name":"prod-web","hosts":["scanme.sh"],"tags":["prod"]}'
-# create a template set, then select its members (see below)
-curl -sb jar.txt -X POST localhost:8080/api/template-sets -d '{"name":"critical-web"}'
+# create an exact template set, then select its members (see below)
+curl -sb jar.txt -X POST localhost:8080/api/template-sets -d '{"name":"critical-web","mode":"exact"}'
 # ...then bundle them into a scan policy (see Config: scan policies below)
 ```
 
@@ -314,9 +314,9 @@ cascades its future schedules; reusable scan policies are unaffected.
 
 ### Template-set membership
 
-A template set is either an **exact list of individual catalog templates** or an explicit
-`dynamic_all` set that resolves every active catalog template at scan time, except its stored
-exclusions:
+A template set has an explicit `mode`: `exact` stores individual catalog template IDs, `all`
+resolves every active catalog template at scan time, and `exclude` resolves every active template
+except its stored exclusions:
 
 ```sh
 # set a set's membership to exactly these catalog template ids (the editor's "save")
@@ -327,29 +327,30 @@ curl -sb jar.txt -X POST   localhost:8080/api/template-sets/<set_id>/members -d 
 curl -sb jar.txt -X DELETE localhost:8080/api/template-sets/<set_id>/members/tech-detect
 # list a set's member templates (catalog rows, yaml omitted)
 curl -sb jar.txt localhost:8080/api/template-sets/<set_id>/members
-# replace the exclusions for a dynamic set (empty list clears them)
+# replace the exclusions for an exclude-mode set (empty list clears them)
 curl -sb jar.txt -X PUT localhost:8080/api/template-sets/<set_id>/exclusions \
   -H 'content-type: application/json' -d '{"template_ids":["noisy-template","incompatible-check"]}'
 # list excluded catalog templates (yaml omitted)
 curl -sb jar.txt localhost:8080/api/template-sets/<set_id>/exclusions
 ```
 
-A template set reports `dynamic_all` and a live `member_count`. For an exact set, the count is its
-stored membership; for a dynamic set, it is the current active-catalog size after exclusions. A
-dynamic set also reports `exclusion_count`; the exclusions endpoint returns the catalog rows and
-the editor displays their IDs. The old top-level
+A template set reports `mode` and a live `member_count`. For an exact set, the count is its stored
+membership; for `all`, it is the current active-catalog size; for `exclude`, it is the active-catalog
+size after exclusions. An exclude set also reports `exclusion_count`; the exclusions endpoint
+returns the catalog rows and the editor displays their IDs. The old top-level
 `git_ref` / `severities` / `tags` / `paths` fields and their compatibility/conversion path are no
 longer part of the table or API contract.
 
 Reads are `viewer`; membership edits are `operator`, audited as `config_changed`
 (`template_set.members_replace` / `_add` / `_remove`). An unknown `template_id` is a `400`; an
 unknown set is a `404`. Exclusion replacement is also an operator-only audited config change
-(`template_set.exclusions_replace`), and exact sets return `409` for exclusion reads/writes.
-Direct membership edits on a dynamic set return `409` because it has no stored member rows.
-For `PUT /api/template-sets/{id}`, omitting `excluded_template_ids` preserves the existing
-dynamic exclusions for backward-compatible partial updates; sending an empty list clears them.
+(`template_set.exclusions_replace`), and exact/all sets return `409` for exclusion reads/writes.
+Direct membership edits on an all/exclude set return `409` because those modes have no stored member
+rows. For `PUT /api/template-sets/{id}`, omitting `excluded_template_ids` preserves the existing
+exclude-mode exclusions; sending an empty list clears them. The field is only valid with
+`mode=exclude`.
 The dedicated exclusions endpoint is the unambiguous replacement operation.
-Dispatch resolves every set to concrete `template_ids`; empty exact sets and dynamic sets whose
+Dispatch resolves every set to concrete `template_ids`; empty exact sets and exclude sets whose
 active catalog is fully excluded fail closed. A set containing a tombstoned/unavailable exact
 template also fails until its selection is updated.
 
@@ -460,10 +461,10 @@ curl -sb jar.txt -X POST -F file=@portable-set.tar.gz \
 `format=yaml` is a gzip-compressed tar with `manifest.json`, the verbatim files under
 `templates/<source>/<path>`, and (for set exports) `set.json`. `format=json` is one JSON document
 carrying the same manifest fields and each template's verbatim YAML string; a set export includes a
-`set` object. Both forms carry SHA-256 digests and round-trip custom YAML byte-for-byte. A dynamic
-set export records `dynamic_all:true` plus `excluded_template_ids`; YAML for referenced custom
-exclusions is included so the exclusion list can travel with the set, while the active catalog is
-never frozen.
+`set` object. Both forms carry SHA-256 digests and round-trip custom YAML byte-for-byte. A set
+export records its explicit `mode`; `exclude` exports `excluded_template_ids` and includes YAML
+for referenced custom exclusions so the exclusion list can travel with the set, while catalog-
+derived membership is never frozen.
 
 The optional `on_conflict` strategy defaults to `skip`:
 
@@ -482,10 +483,11 @@ files, rejects traversal, links, duplicate/unreferenced files, unknown JSON fiel
 invalid YAML, and incomplete sets. Imports are audited as `config_changed` with action
 `templates.import`.
 
-Dynamic set imports apply the same fail-closed rule to `excluded_template_ids`: every excluded id
+Exclude-mode imports apply the same fail-closed rule to `excluded_template_ids`: every excluded id
 must exist in the destination catalog (or be supplied as a custom template in the archive), so an
 export from a newer catalog can return `400` on an older destination rather than silently losing a
-deny-list entry.
+deny-list entry. Archives from the pre-mode shape are accepted and normalized (`dynamic_all=false`
+to `exact`, `dynamic_all=true` without exclusions to `all`, otherwise to `exclude`).
 
 After conflict resolution, every custom template selected for create, overwrite, or rename is packed
 into one transient verified bundle and sent to a known-healthy scanner node. The node runs a single
@@ -499,7 +501,7 @@ validated; it omits `validation` when the conflict policy selected no custom wri
 ## Config: scan policies
 
 A **scan policy** is the central, reusable **how to scan** configuration. It bundles a required
-**template set** (`template_set_id`, exact or dynamic all-active) and Nuclei's execution knobs
+**template set** (`template_set_id`, exact/all/exclude) and Nuclei's execution knobs
 (`rate_limit` / `concurrency` / `timeout_sec` / `max_host_error`). Every scan and schedule
 selects both a policy and an approved target, allowing one policy to be reused across scopes.
 Each knob is optional: a `null` (omitted) field means "use the built-in default" (rate `150` /

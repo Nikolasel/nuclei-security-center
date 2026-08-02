@@ -8,33 +8,33 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// requireStaticTemplateSet locks the set row and rejects dynamic membership
-// edits. A dynamic set always resolves from the active catalog.
+// requireStaticTemplateSet locks the set row and rejects membership edits for
+// catalog-derived sets. Only exact sets store editable member rows.
 func requireStaticTemplateSet(ctx context.Context, tx pgx.Tx, setID string) error {
-	var dynamic bool
+	var mode TemplateSetMode
 	err := tx.QueryRow(ctx,
-		`SELECT dynamic_all FROM template_sets WHERE id = $1 FOR UPDATE`, setID,
-	).Scan(&dynamic)
+		`SELECT mode FROM template_sets WHERE id = $1 FOR UPDATE`, setID,
+	).Scan(&mode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
-	if dynamic {
-		return ErrTemplateSetDynamic
+	if mode != TemplateSetModeExact {
+		return ErrTemplateSetNonExact
 	}
 	return nil
 }
 
-// ListTemplateSetMembers returns the catalog rows for a set's members, ordered
-// like the catalog list (yaml omitted). Dynamic sets resolve to every active
-// template except their stored exclusions. ErrNotFound if the set is unknown.
+// ListTemplateSetMembers returns the effective catalog rows for a set, ordered
+// like the catalog list (yaml omitted). Catalog-derived sets resolve from the
+// active catalog at read time. ErrNotFound if the set is unknown.
 func (s *Store) ListTemplateSetMembers(ctx context.Context, setID string) ([]Template, error) {
-	var dynamic bool
+	var mode TemplateSetMode
 	err := s.pool.QueryRow(ctx,
-		`SELECT dynamic_all FROM template_sets WHERE id = $1`, setID,
-	).Scan(&dynamic)
+		`SELECT mode FROM template_sets WHERE id = $1`, setID,
+	).Scan(&mode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -46,7 +46,12 @@ func (s *Store) ListTemplateSetMembers(ctx context.Context, setID string) ([]Tem
 		WHERE m.template_set_id = $1
 		ORDER BY lower(name), id`
 	args := []any{setID}
-	if dynamic {
+	if mode == TemplateSetModeAll {
+		query = `SELECT ` + tmplListCols + ` FROM templates
+			WHERE availability = 'active'
+			ORDER BY lower(name), id`
+		args = nil
+	} else if mode == TemplateSetModeExclude {
 		query = `SELECT ` + tmplListCols + ` FROM templates
 			WHERE availability = 'active'
 			  AND NOT EXISTS (
@@ -75,8 +80,9 @@ func (s *Store) ListTemplateSetMembers(ctx context.Context, setID string) ([]Tem
 
 // ReplaceTemplateSetMembers sets a set's membership to exactly the given ids (the
 // editor's save). It runs in one transaction: clear, then insert the deduped
-// ids. An unknown template id is ErrInvalidRef (FK); an unknown set is
-// ErrNotFound. Returns the resulting member count.
+// ids. A non-exact set returns ErrTemplateSetNonExact. An unknown template id
+// is ErrInvalidRef (FK); an unknown set is ErrNotFound. Returns the resulting
+// member count.
 func (s *Store) ReplaceTemplateSetMembers(ctx context.Context, setID string, ids []string, addedBy string) (int, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {

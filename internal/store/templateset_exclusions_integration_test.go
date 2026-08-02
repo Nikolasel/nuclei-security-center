@@ -10,11 +10,11 @@ import (
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
-// TestDynamicTemplateSetExclusionsPostgres exercises the migration, effective
+// TestTemplateSetExclusionsPostgres exercises the migration, effective
 // member count, read/write APIs, and the exact-set guardrail together against
 // the real PostgreSQL schema. It is opt-in like the other store integration
 // tests because ordinary unit runs do not require a database.
-func TestDynamicTemplateSetExclusionsPostgres(t *testing.T) {
+func TestTemplateSetExclusionsPostgres(t *testing.T) {
 	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("NSC_TEST_DATABASE_URL is not set")
@@ -37,12 +37,12 @@ func TestDynamicTemplateSetExclusionsPostgres(t *testing.T) {
 	}
 
 	set, err := st.CreateTemplateSet(ctx, TemplateSet{
-		Name:                "dynamic exclusions " + types.NewID(),
-		DynamicAll:          true,
+		Name:                "exclude mode " + types.NewID(),
+		Mode:                TemplateSetModeExclude,
 		ExcludedTemplateIDs: []string{" dynamic-excluded "},
 	})
 	if err != nil {
-		t.Fatalf("create dynamic set: %v", err)
+		t.Fatalf("create exclude set: %v", err)
 	}
 	if set.MemberCount != 2 || set.ExclusionCount != 1 {
 		t.Fatalf("created set counts = members:%d exclusions:%d, want 2/1", set.MemberCount, set.ExclusionCount)
@@ -72,22 +72,39 @@ func TestDynamicTemplateSetExclusionsPostgres(t *testing.T) {
 
 	set, err = st.UpdateTemplateSet(ctx, set.ID, TemplateSet{
 		Name:                set.Name,
-		DynamicAll:          true,
+		Mode:                TemplateSetModeExclude,
 		ExcludedTemplateIDs: []string{"dynamic-include-one", "dynamic-include-two"},
 	})
 	if err != nil {
-		t.Fatalf("update dynamic exclusions: %v", err)
+		t.Fatalf("update exclude mode: %v", err)
 	}
 	if set.MemberCount != 1 || set.ExclusionCount != 2 {
 		t.Fatalf("updated set counts = members:%d exclusions:%d, want 1/2", set.MemberCount, set.ExclusionCount)
+	}
+
+	all, err := st.CreateTemplateSet(ctx, TemplateSet{
+		Name: "all mode " + types.NewID(), Mode: TemplateSetModeAll,
+	})
+	if err != nil {
+		t.Fatalf("create all set: %v", err)
+	}
+	if all.MemberCount != 3 || all.ExclusionCount != 0 {
+		t.Fatalf("all set counts = members:%d exclusions:%d, want 3/0", all.MemberCount, all.ExclusionCount)
+	}
+	allMembers, err := st.ListTemplateSetMembers(ctx, all.ID)
+	if err != nil {
+		t.Fatalf("list all-mode members: %v", err)
+	}
+	if len(allMembers) != 3 {
+		t.Fatalf("all-mode members = %d, want 3", len(allMembers))
 	}
 
 	exact, err := st.CreateTemplateSet(ctx, TemplateSet{
 		Name:                "exact exclusions " + types.NewID(),
 		ExcludedTemplateIDs: []string{"dynamic-excluded"},
 	})
-	if !errors.Is(err, ErrTemplateSetExact) || exact.ID != "" {
-		t.Fatalf("exact create with exclusions = set:%+v err:%v, want ErrTemplateSetExact", exact, err)
+	if !errors.Is(err, ErrTemplateSetExclusionsUnsupported) || exact.ID != "" {
+		t.Fatalf("exact create with exclusions = set:%+v err:%v, want ErrTemplateSetExclusionsUnsupported", exact, err)
 	}
 	exact, err = st.CreateTemplateSet(ctx, TemplateSet{
 		Name: "exact set " + types.NewID(),
@@ -95,7 +112,7 @@ func TestDynamicTemplateSetExclusionsPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create exact set: %v", err)
 	}
-	if _, err := st.ReplaceTemplateSetExclusions(ctx, exact.ID, []string{"dynamic-excluded"}, "test"); !errors.Is(err, ErrTemplateSetExact) {
-		t.Fatalf("replace exact exclusions = %v, want ErrTemplateSetExact", err)
+	if _, err := st.ReplaceTemplateSetExclusions(ctx, exact.ID, []string{"dynamic-excluded"}, "test"); !errors.Is(err, ErrTemplateSetExclusionsUnsupported) {
+		t.Fatalf("replace exact exclusions = %v, want ErrTemplateSetExclusionsUnsupported", err)
 	}
 }

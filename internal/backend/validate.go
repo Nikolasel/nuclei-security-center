@@ -45,8 +45,16 @@ func validateTemplateSet(t *store.TemplateSet) error {
 	if t.Name == "" {
 		return errors.New("name is required")
 	}
-	if !t.DynamicAll && len(t.ExcludedTemplateIDs) > 0 {
-		return errors.New("excluded_template_ids are only allowed for dynamic_all template sets")
+	if t.Mode == "" {
+		t.Mode = store.TemplateSetModeExact
+	}
+	switch t.Mode {
+	case store.TemplateSetModeExact, store.TemplateSetModeAll, store.TemplateSetModeExclude:
+	default:
+		return errors.New(`mode must be "exact", "all", or "exclude"`)
+	}
+	if t.Mode != store.TemplateSetModeExclude && len(t.ExcludedTemplateIDs) > 0 {
+		return errors.New("excluded_template_ids are only allowed for mode=exclude template sets")
 	}
 	for i, id := range t.ExcludedTemplateIDs {
 		id = strings.TrimSpace(id)
@@ -60,7 +68,7 @@ func validateTemplateSet(t *store.TemplateSet) error {
 
 // validateScanPolicy trims and checks a scan policy in place. A policy is the
 // target-independent HOW-to-scan config, so it must name a template set.
-// "All templates" is represented by an explicit dynamic set, never an omitted
+// "All templates" is represented by an explicit all-mode set, never an omitted
 // reference. Their existence is enforced by the store (FK → ErrInvalidRef).
 // Every execution knob is optional
 // (nil = built-in default), but any knob that IS set must be positive — a

@@ -9,29 +9,29 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// requireDynamicTemplateSet locks the set row and rejects exclusions on exact
-// sets. Exact membership remains driven only by template_set_members.
-func requireDynamicTemplateSet(ctx context.Context, tx pgx.Tx, setID string) error {
-	var dynamic bool
+// requireExcludeTemplateSet locks the set row and permits exclusions only on
+// the explicit exclude mode. Exact and all modes have no exclusion rows.
+func requireExcludeTemplateSet(ctx context.Context, tx pgx.Tx, setID string) error {
+	var mode TemplateSetMode
 	err := tx.QueryRow(ctx,
-		`SELECT dynamic_all FROM template_sets WHERE id = $1 FOR UPDATE`, setID,
-	).Scan(&dynamic)
+		`SELECT mode FROM template_sets WHERE id = $1 FOR UPDATE`, setID,
+	).Scan(&mode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
-	if !dynamic {
-		return ErrTemplateSetExact
+	if mode != TemplateSetModeExclude {
+		return ErrTemplateSetExclusionsUnsupported
 	}
 	return nil
 }
 
-// ListTemplateSetExclusions returns the catalog rows excluded by a dynamic
-// set, ordered like the catalog list. Exact sets have no exclusion contract.
+// ListTemplateSetExclusions returns the catalog rows excluded by an exclude
+// set, ordered like the catalog list. Other modes have no exclusion contract.
 func (s *Store) ListTemplateSetExclusions(ctx context.Context, setID string) ([]Template, error) {
-	if err := s.requireDynamicTemplateSetRead(ctx, setID); err != nil {
+	if err := s.requireExcludeTemplateSetRead(ctx, setID); err != nil {
 		return nil, err
 	}
 	rows, err := s.pool.Query(ctx,
@@ -54,10 +54,10 @@ func (s *Store) ListTemplateSetExclusions(ctx context.Context, setID string) ([]
 	return out, rows.Err()
 }
 
-// ListTemplateSetExclusionIDs returns the stored ids excluded by a dynamic set.
+// ListTemplateSetExclusionIDs returns the stored ids excluded by an exclude set.
 // It is the lightweight form used by scan-policy resolution.
 func (s *Store) ListTemplateSetExclusionIDs(ctx context.Context, setID string) ([]string, error) {
-	if err := s.requireDynamicTemplateSetRead(ctx, setID); err != nil {
+	if err := s.requireExcludeTemplateSetRead(ctx, setID); err != nil {
 		return nil, err
 	}
 	rows, err := s.pool.Query(ctx,
@@ -78,16 +78,16 @@ func (s *Store) ListTemplateSetExclusionIDs(ctx context.Context, setID string) (
 	return out, rows.Err()
 }
 
-// ReplaceTemplateSetExclusions replaces a dynamic set's exclusion list in one
-// transaction. Unknown template ids return ErrInvalidRef; exact sets return
-// ErrTemplateSetExact.
+// ReplaceTemplateSetExclusions replaces an exclude set's exclusion list in one
+// transaction. Unknown template ids return ErrInvalidRef; other modes return
+// ErrTemplateSetExclusionsUnsupported.
 func (s *Store) ReplaceTemplateSetExclusions(ctx context.Context, setID string, ids []string, addedBy string) (int, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin replace template set exclusions: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := requireDynamicTemplateSet(ctx, tx, setID); err != nil {
+	if err := requireExcludeTemplateSet(ctx, tx, setID); err != nil {
 		return 0, err
 	}
 	if _, err := tx.Exec(ctx,
@@ -105,7 +105,7 @@ func (s *Store) ReplaceTemplateSetExclusions(ctx context.Context, setID string, 
 }
 
 // insertTemplateSetExclusions inserts a deduplicated list into an existing
-// transaction. The caller owns the dynamic/exact mode check.
+// transaction. The caller owns the mode check.
 func insertTemplateSetExclusions(ctx context.Context, tx pgx.Tx, setID string, ids []string, addedBy string) error {
 	unique := uniqueTemplateIDs(ids)
 	if len(unique) == 0 {
@@ -141,19 +141,19 @@ func uniqueTemplateIDs(ids []string) []string {
 	return out
 }
 
-func (s *Store) requireDynamicTemplateSetRead(ctx context.Context, setID string) error {
-	var dynamic bool
+func (s *Store) requireExcludeTemplateSetRead(ctx context.Context, setID string) error {
+	var mode TemplateSetMode
 	err := s.pool.QueryRow(ctx,
-		`SELECT dynamic_all FROM template_sets WHERE id = $1`, setID,
-	).Scan(&dynamic)
+		`SELECT mode FROM template_sets WHERE id = $1`, setID,
+	).Scan(&mode)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return err
 	}
-	if !dynamic {
-		return ErrTemplateSetExact
+	if mode != TemplateSetModeExclude {
+		return ErrTemplateSetExclusionsUnsupported
 	}
 	return nil
 }

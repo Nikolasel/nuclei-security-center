@@ -251,10 +251,12 @@ func (s *Server) writeStoreErr(w http.ResponseWriter, err error) {
 		http.Error(w, "a resource with that name already exists", http.StatusConflict)
 	case errors.Is(err, store.ErrTemplateReadOnly):
 		http.Error(w, err.Error(), http.StatusConflict)
-	case errors.Is(err, store.ErrTemplateSetDynamic):
+	case errors.Is(err, store.ErrTemplateSetNonExact):
 		http.Error(w, err.Error(), http.StatusConflict)
-	case errors.Is(err, store.ErrTemplateSetExact):
+	case errors.Is(err, store.ErrTemplateSetExclusionsUnsupported):
 		http.Error(w, err.Error(), http.StatusConflict)
+	case errors.Is(err, store.ErrInvalidTemplateSetMode):
+		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, store.ErrTemplateSetInUse):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, store.ErrTemplateSetExclusionInUse):

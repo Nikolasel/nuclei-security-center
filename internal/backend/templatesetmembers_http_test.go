@@ -35,8 +35,8 @@ func TestWriteMemberErrMapsInvalidRef(t *testing.T) {
 		t.Errorf("ErrNotFound → %d, want 404", rr.Code)
 	}
 	rr = httptest.NewRecorder()
-	s.writeMemberErr(rr, store.ErrTemplateSetDynamic)
+	s.writeMemberErr(rr, store.ErrTemplateSetNonExact)
 	if rr.Code != 409 {
-		t.Errorf("ErrTemplateSetDynamic → %d, want 409", rr.Code)
+		t.Errorf("ErrTemplateSetNonExact → %d, want 409", rr.Code)
 	}
 }

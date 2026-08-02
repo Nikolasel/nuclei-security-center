@@ -67,10 +67,12 @@ export interface ScannerNodeInput {
   tls_client_key?: string;
 }
 
+export type TemplateSetMode = "exact" | "all" | "exclude";
+
 export interface TemplateSet {
   id: string;
   name: string;
-  dynamic_all: boolean;
+  mode: TemplateSetMode;
   member_count: number;
   exclusion_count: number;
   excluded_template_ids?: string[];

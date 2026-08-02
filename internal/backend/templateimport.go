@@ -46,7 +46,7 @@ func (s *Server) applyPortableImport(
 		setDoc := archive.Set
 		memberIDs := make([]string, 0, len(setDoc.TemplateIDs))
 		exclusionIDs := make([]string, 0, len(setDoc.ExcludedTemplateIDs))
-		if !setDoc.DynamicAll {
+		if setDoc.Mode == store.TemplateSetModeExact {
 			for _, originalID := range setDoc.TemplateIDs {
 				id := originalID
 				if replacement := renamed[originalID]; replacement != "" {
@@ -60,7 +60,7 @@ func (s *Server) applyPortableImport(
 				}
 				memberIDs = append(memberIDs, id)
 			}
-		} else {
+		} else if setDoc.Mode == store.TemplateSetModeExclude {
 			for _, originalID := range setDoc.ExcludedTemplateIDs {
 				id := originalID
 				if replacement := renamed[originalID]; replacement != "" {
@@ -92,7 +92,7 @@ func (s *Server) applyPortableImport(
 		switch {
 		case existingSet == nil:
 			setWrite = &store.TemplateSetImportWrite{
-				Name: name, DynamicAll: setDoc.DynamicAll, TemplateIDs: memberIDs,
+				Name: name, Mode: setDoc.Mode, TemplateIDs: memberIDs,
 				ExcludedTemplateIDs: exclusionIDs,
 			}
 			response.SetStatus = "created"
@@ -102,14 +102,14 @@ func (s *Server) applyPortableImport(
 		case strategy == "overwrite":
 			setWrite = &store.TemplateSetImportWrite{
 				ExistingID: existingSet.ID, Name: existingSet.Name,
-				DynamicAll: setDoc.DynamicAll, TemplateIDs: memberIDs,
+				Mode: setDoc.Mode, TemplateIDs: memberIDs,
 				ExcludedTemplateIDs: exclusionIDs,
 			}
 			response.SetStatus = "updated"
 		case strategy == "rename":
 			name = nextImportedSetName(name, sets)
 			setWrite = &store.TemplateSetImportWrite{
-				Name: name, DynamicAll: setDoc.DynamicAll, TemplateIDs: memberIDs,
+				Name: name, Mode: setDoc.Mode, TemplateIDs: memberIDs,
 				ExcludedTemplateIDs: exclusionIDs,
 			}
 			response.SetStatus = "renamed"

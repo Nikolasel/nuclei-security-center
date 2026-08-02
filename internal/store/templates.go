@@ -355,7 +355,7 @@ func (s *Store) UpdateCustomTemplate(ctx context.Context, id string, t Template)
 
 // DeleteCustomTemplate removes a custom template. Upstream rows are read-only
 // (ErrTemplateReadOnly); a missing id is ErrNotFound. A template named by a
-// dynamic-set exclusion is protected by ErrTemplateSetExclusionInUse so the
+// exclude-set exclusion is protected by ErrTemplateSetExclusionInUse so the
 // deny-list cannot disappear silently.
 func (s *Store) DeleteCustomTemplate(ctx context.Context, id string) error {
 	if err := s.assertCustom(ctx, id); err != nil {

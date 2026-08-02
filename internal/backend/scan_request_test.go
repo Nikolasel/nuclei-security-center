@@ -48,8 +48,8 @@ func TestBuildScanSpecRejectsUnapprovedTargetPostgres(t *testing.T) {
 	st := openScanRequestTestStore(t, ctx, dsn)
 
 	templateSet, err := st.CreateTemplateSet(ctx, store.TemplateSet{
-		Name:       "scope-guard-templates-" + types.NewID(),
-		DynamicAll: true,
+		Name: "scope-guard-templates-" + types.NewID(),
+		Mode: store.TemplateSetModeAll,
 	})
 	if err != nil {
 		t.Fatalf("create template set: %v", err)
@@ -73,7 +73,7 @@ func TestBuildScanSpecRejectsUnapprovedTargetPostgres(t *testing.T) {
 	}
 }
 
-func TestResolveConfigSpecHonorsDynamicTemplateExclusionsPostgres(t *testing.T) {
+func TestResolveConfigSpecHonorsExcludeTemplateSetPostgres(t *testing.T) {
 	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("NSC_TEST_DATABASE_URL is not set")
@@ -92,12 +92,12 @@ func TestResolveConfigSpecHonorsDynamicTemplateExclusionsPostgres(t *testing.T) 
 	}
 
 	templateSet, err := st.CreateTemplateSet(ctx, store.TemplateSet{
-		Name:                "resolver-dynamic-" + types.NewID(),
-		DynamicAll:          true,
+		Name:                "resolver-exclude-" + types.NewID(),
+		Mode:                store.TemplateSetModeExclude,
 		ExcludedTemplateIDs: []string{"resolver-exclude"},
 	})
 	if err != nil {
-		t.Fatalf("create dynamic template set: %v", err)
+		t.Fatalf("create exclude template set: %v", err)
 	}
 	target, err := st.CreateTarget(ctx, store.Target{
 		Name:  "resolver-target-" + types.NewID(),
@@ -110,7 +110,7 @@ func TestResolveConfigSpecHonorsDynamicTemplateExclusionsPostgres(t *testing.T) 
 	server := Server{store: st}
 	spec, _, err := server.resolveConfigSpec(ctx, target.ID, templateSet.ID)
 	if err != nil {
-		t.Fatalf("resolve dynamic config: %v", err)
+		t.Fatalf("resolve exclude config: %v", err)
 	}
 	if len(spec.Templates.TemplateIDs) != 1 || spec.Templates.TemplateIDs[0] != "resolver-keep" {
 		t.Fatalf("resolved template ids = %v, want [resolver-keep]", spec.Templates.TemplateIDs)
@@ -118,13 +118,13 @@ func TestResolveConfigSpecHonorsDynamicTemplateExclusionsPostgres(t *testing.T) 
 
 	if _, err := st.UpdateTemplateSet(ctx, templateSet.ID, store.TemplateSet{
 		Name:                templateSet.Name,
-		DynamicAll:          true,
+		Mode:                store.TemplateSetModeExclude,
 		ExcludedTemplateIDs: []string{"resolver-keep", "resolver-exclude"},
 	}); err != nil {
-		t.Fatalf("exclude all dynamic templates: %v", err)
+		t.Fatalf("exclude all templates: %v", err)
 	}
 	if _, _, err := server.resolveConfigSpec(ctx, target.ID, templateSet.ID); err == nil || !strings.Contains(err.Error(), "no active templates after exclusions") {
-		t.Fatalf("fully excluded dynamic config error = %v, want fail-closed error", err)
+		t.Fatalf("fully excluded config error = %v, want fail-closed error", err)
 	}
 }
 

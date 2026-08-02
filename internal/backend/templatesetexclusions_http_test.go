@@ -27,9 +27,9 @@ func TestWriteExclusionErrMapsSentinels(t *testing.T) {
 		t.Errorf("ErrInvalidRef -> %d, want 400", rr.Code)
 	}
 	rr = httptest.NewRecorder()
-	s.writeExclusionErr(rr, store.ErrTemplateSetExact)
+	s.writeExclusionErr(rr, store.ErrTemplateSetExclusionsUnsupported)
 	if rr.Code != 409 {
-		t.Errorf("ErrTemplateSetExact -> %d, want 409", rr.Code)
+		t.Errorf("ErrTemplateSetExclusionsUnsupported -> %d, want 409", rr.Code)
 	}
 	rr = httptest.NewRecorder()
 	s.writeExclusionErr(rr, store.ErrNotFound)

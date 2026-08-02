@@ -365,7 +365,7 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
       }),
   });
   const sets = useQuery({ queryKey: ["template-sets"], queryFn: () => api.listTemplateSets() });
-  const explicitSets = (sets.data ?? []).filter((set) => !set.dynamic_all);
+  const explicitSets = (sets.data ?? []).filter((set) => set.mode === "exact");
   const add = useMutation({
     mutationFn: () => api.addTemplateSetMembers(setID, [...selected]),
     onSuccess: (set) => {
@@ -376,7 +376,7 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
   });
   const create = useMutation({
     mutationFn: async () => {
-      const set = await api.createTemplateSet({ name: setName.trim() });
+      const set = await api.createTemplateSet({ name: setName.trim(), mode: "exact" });
       return api.replaceTemplateSetMembers(set.id, [...selected]);
     },
     onSuccess: (set) => {

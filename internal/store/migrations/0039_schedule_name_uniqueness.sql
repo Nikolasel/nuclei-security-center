@@ -3,14 +3,24 @@
 -- case-sensitive column UNIQUE from 0007 let "Nightly scan" and "nightly scan"
 -- coexist. Replace it with a unique index on lower(name).
 --
--- Collision policy: before the new index is built, any existing rows that
--- differ only in case are resolved deterministically. The earliest-created row
--- (ties broken by id) keeps its name; every later row in the group is renamed
--- by appending " (N)" where N is its 1-based rank within the group (so the
--- first duplicate in a group becomes "nightly scan (2)"), repeating until each
--- lowercase name is distinct. No schedule is deleted and scan provenance
--- (scans.schedule_id → schedules.id) is untouched; these are alpha-era config
--- rows, so renaming is cheaper than failing to apply.
+-- Collision policy: any existing rows that differ only in case are resolved
+-- deterministically. The earliest-created row (ties broken by id) keeps its
+-- name; every later row in the group is renamed by appending " (N)" where N is
+-- its 1-based rank within the group. Renames are re-ranked until every
+-- lowercase name is distinct. Because a rename can land on a generated name
+-- another row already holds (e.g. a hand-suffixed "weekly scan (2)"), the
+-- cascade can also re-rename rows that never had a case-duplicate of their own
+-- — a plain name change is not a sign of corruption. No schedule is deleted and
+-- scan provenance (scans.schedule_id → schedules.id) is untouched; these are
+-- alpha-era config rows, so renaming is cheaper than failing to apply.
+
+-- Drop the case-sensitive column constraint (its backing index goes with it)
+-- BEFORE resolving collisions: every UPDATE in the loop below must not be
+-- checked against the very constraint being replaced. Renaming "weekly scan"
+-- to "weekly scan (2)" while a row of that exact name exists would otherwise
+-- abort the whole migration on the case it exists to clean up.
+ALTER TABLE schedules DROP CONSTRAINT IF EXISTS schedules_name_key;
+
 DO $$
 DECLARE
     renamed_rows integer;
@@ -35,7 +45,8 @@ BEGIN
 END
 $$;
 
--- Drop the case-sensitive column constraint (its backing index goes with it)
--- and rebuild uniqueness on lower(name), matching the other named resources.
-ALTER TABLE schedules DROP CONSTRAINT IF EXISTS schedules_name_key;
-CREATE UNIQUE INDEX IF NOT EXISTS schedules_name_key ON schedules (lower(name));
+-- Rebuild uniqueness on lower(name), matching the other named resources. No
+-- IF NOT EXISTS: the name was just freed by the DROP above, and silently
+-- reusing a differently-shaped index that happened to carry this name would
+-- leave case-insensitive uniqueness unenforced without any error.
+CREATE UNIQUE INDEX schedules_name_key ON schedules (lower(name));

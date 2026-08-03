@@ -62,6 +62,11 @@ func TestScheduleNameUniquenessUpgradePostgres(t *testing.T) {
 	keepID := insertSchedule("Nightly scan", base)                 // earliest → keeps its name
 	dupID := insertSchedule("nightly scan", base.Add(time.Minute)) // later duplicate → renamed
 	exactDupID := insertSchedule("NIGHTLY SCAN", base.Add(2*time.Minute))
+	// A hand-suffixed name that the ranked rename will land on: dupID becomes
+	// "nightly scan (2)", which collides byte-identically with this row. The
+	// old case-sensitive constraint must already be dropped, or this seeded
+	// (real-world) layout aborts the migration.
+	takenNameID := insertSchedule("nightly scan (2)", base.Add(3*time.Minute))
 
 	if err := st.Migrate(ctx); err != nil {
 		t.Fatalf("migrate through 0039: %v", err)
@@ -93,6 +98,11 @@ func TestScheduleNameUniquenessUpgradePostgres(t *testing.T) {
 	}
 	if names[exactDupID] != "NIGHTLY SCAN (3)" {
 		t.Fatalf("second duplicate = %q, want %q", names[exactDupID], "NIGHTLY SCAN (3)")
+	}
+	// The pre-existing owner of the generated name outranks the row that just
+	// acquired it, so the cascade renames the original " (2)" row, not dupID.
+	if names[takenNameID] != "nightly scan (2) (2)" {
+		t.Fatalf("hand-suffixed owner = %q, want %q", names[takenNameID], "nightly scan (2) (2)")
 	}
 	seen := map[string]bool{}
 	for _, name := range names {

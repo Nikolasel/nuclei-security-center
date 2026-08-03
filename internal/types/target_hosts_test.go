@@ -13,6 +13,7 @@ func TestNormalizeTargetHost(t *testing.T) {
 	}{
 		{name: "hostname", in: " Example.COM ", want: "example.com"},
 		{name: "hostname with port", in: "Example.COM:8443", want: "example.com:8443"},
+		{name: "empty port", in: "Example.COM:", want: "example.com"},
 		{name: "URL host only", in: "HTTPS://EXAMPLE.com/AdminPanel", want: "https://example.com/AdminPanel"},
 		{name: "IP unchanged", in: "10.0.0.1", want: "10.0.0.1"},
 		{name: "CIDR unchanged", in: "2001:DB8::/64", want: "2001:DB8::/64"},
@@ -34,14 +35,44 @@ func TestDeduplicateTargetHostsPreservesOrder(t *testing.T) {
 		"https://example.com/adminpanel",
 		"10.0.0.0/24",
 		"10.0.0.0/24",
+		"2001:DB8::/120",
+		"2001:db8::/120",
+		"2001:DB8::1",
+		"2001:db8::1",
+		"::1",
+		"0:0:0:0:0:0:0:1",
+		"[2001:DB8::1]:8080",
+		"[2001:db8::1]:8080",
 	})
 	want := []string{
 		"example.com",
 		"https://example.com/AdminPanel",
 		"https://example.com/adminpanel",
 		"10.0.0.0/24",
+		"2001:DB8::/120",
+		"2001:DB8::1",
+		"::1",
+		"[2001:DB8::1]:8080",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("DeduplicateTargetHosts = %v, want %v", got, want)
+	}
+}
+
+func TestDeduplicateTargetHostsKeepsDistinctURLRequestIdentity(t *testing.T) {
+	got := DeduplicateTargetHosts([]string{
+		"HTTPS://User:Pass@EXAMPLE.com:8443/Path",
+		"https://user:Pass@example.com:8443/Path",
+		"https://example.com:8443/Path",
+		"https://example.com/Path",
+	})
+	want := []string{
+		"https://User:Pass@example.com:8443/Path",
+		"https://user:Pass@example.com:8443/Path",
+		"https://example.com:8443/Path",
+		"https://example.com/Path",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("URL target identity = %v, want %v", got, want)
 	}
 }

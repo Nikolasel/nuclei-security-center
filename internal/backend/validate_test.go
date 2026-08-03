@@ -105,6 +105,9 @@ func TestValidateTarget(t *testing.T) {
 	if err := validateTarget(&store.Target{Name: "web", Hosts: []string{"ok.com", "bad host"}}); err == nil {
 		t.Error("expected error for invalid host in list")
 	}
+	if err := validateTarget(&store.Target{Name: "web", Hosts: []string{"BAD__HOST!!"}}); err == nil || !strings.Contains(err.Error(), "BAD__HOST!!") {
+		t.Errorf("invalid host error = %v, want original input", err)
+	}
 	// Valid, and it trims/normalizes in place.
 	tg := &store.Target{
 		Name: "  web  ",

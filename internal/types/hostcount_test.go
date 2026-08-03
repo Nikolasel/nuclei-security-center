@@ -48,6 +48,11 @@ func TestHostCount(t *testing.T) {
 			[]string{"10.0.0.0/24", "10.0.0.0/24"},
 			256,
 		},
+		{
+			"IPv6 spelling variants count once",
+			[]string{"2001:DB8::/120", "2001:db8::/120", "2001:DB8::1", "2001:db8::1"},
+			257,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

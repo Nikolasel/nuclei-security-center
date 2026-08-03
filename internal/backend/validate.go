@@ -30,10 +30,11 @@ func validateTarget(t *store.Target) error {
 		return errors.New("at least one host is required")
 	}
 	hosts := make([]string, 0, len(t.Hosts))
-	for _, h := range t.Hosts {
-		h = types.NormalizeTargetHost(h)
+	for _, raw := range t.Hosts {
+		raw = strings.TrimSpace(raw)
+		h := types.NormalizeTargetHost(raw)
 		if err := validateHost(h); err != nil {
-			return fmt.Errorf("host %q: %w", h, err)
+			return fmt.Errorf("host %q: %w", raw, err)
 		}
 		hosts = append(hosts, h)
 	}

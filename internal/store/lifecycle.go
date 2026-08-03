@@ -231,7 +231,6 @@ func ingestFindingOccurrence(ctx context.Context, tx pgx.Tx, scanID, targetID st
 		    type                 = CASE WHEN %[1]s THEN excluded.type ELSE finding_lifecycle.type END,
 		    cve                  = CASE WHEN %[1]s THEN excluded.cve ELSE finding_lifecycle.cve END,
 		    tags                 = CASE WHEN %[1]s THEN excluded.tags ELSE finding_lifecycle.tags END,
-		    result_discriminator = excluded.result_discriminator,
 		    latest_occurrence_id = CASE WHEN %[1]s THEN excluded.latest_occurrence_id ELSE finding_lifecycle.latest_occurrence_id END,
 		    times_mitigated      = finding_lifecycle.times_mitigated + CASE
 		        WHEN %[1]s

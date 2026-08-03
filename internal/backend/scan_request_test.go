@@ -102,10 +102,17 @@ func TestResolveConfigSpecHonorsExcludeTemplateSetPostgres(t *testing.T) {
 	}
 	target, err := st.CreateTarget(ctx, store.Target{
 		Name:  "resolver-target-" + types.NewID(),
-		Hosts: []string{"resolver.invalid", "resolver.invalid", "second.invalid", "resolver.invalid"},
+		Hosts: []string{"Resolver.invalid", "resolver.invalid", "second.invalid", "RESOLVER.INVALID"},
 	})
 	if err != nil {
 		t.Fatalf("create target: %v", err)
+	}
+	storedTarget, err := st.GetTarget(ctx, target.ID)
+	if err != nil {
+		t.Fatalf("read target: %v", err)
+	}
+	if want := []string{"resolver.invalid", "second.invalid"}; !slices.Equal(storedTarget.Hosts, want) || storedTarget.HostCount != 2 {
+		t.Fatalf("stored target normalization = hosts %v, count %d; want hosts %v, count 2", storedTarget.Hosts, storedTarget.HostCount, want)
 	}
 
 	server := Server{store: st}

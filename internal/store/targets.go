@@ -43,6 +43,7 @@ func (s *Store) CreateTarget(ctx context.Context, in Target) (Target, error) {
 		}
 		return Target{}, fmt.Errorf("insert target: %w", err)
 	}
+	in.Hosts = types.DeduplicateTargetHosts(in.Hosts)
 	in.HostCount = types.HostCount(in.Hosts)
 	return in, nil
 }
@@ -62,6 +63,7 @@ func (s *Store) GetTarget(ctx context.Context, id string) (Target, error) {
 		return Target{}, err
 	}
 	t.CreatedBy = deref(createdBy)
+	t.Hosts = types.DeduplicateTargetHosts(t.Hosts)
 	t.HostCount = types.HostCount(t.Hosts)
 	return t, nil
 }
@@ -84,6 +86,7 @@ func (s *Store) ListTargets(ctx context.Context) ([]Target, error) {
 			return nil, err
 		}
 		t.CreatedBy = deref(createdBy)
+		t.Hosts = types.DeduplicateTargetHosts(t.Hosts)
 		t.HostCount = types.HostCount(t.Hosts)
 		out = append(out, t)
 	}
@@ -131,6 +134,7 @@ func (s *Store) UpdateTarget(ctx context.Context, id string, in Target) (Target,
 		return Target{}, fmt.Errorf("update target: %w", err)
 	}
 	in.CreatedBy = deref(createdBy)
+	in.Hosts = types.DeduplicateTargetHosts(in.Hosts)
 	in.HostCount = types.HostCount(in.Hosts)
 	return in, nil
 }

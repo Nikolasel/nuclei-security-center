@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
 // hostnameRe matches DNS hostnames: dot-separated labels of alphanumerics and
@@ -30,32 +31,15 @@ func validateTarget(t *store.Target) error {
 	}
 	hosts := make([]string, 0, len(t.Hosts))
 	for _, h := range t.Hosts {
-		h = strings.TrimSpace(h)
+		h = types.NormalizeTargetHost(h)
 		if err := validateHost(h); err != nil {
 			return fmt.Errorf("host %q: %w", h, err)
 		}
 		hosts = append(hosts, h)
 	}
-	t.Hosts = deduplicateTargetHosts(hosts)
+	t.Hosts = types.DeduplicateTargetHosts(hosts)
 	t.Tags = trimAll(t.Tags)
 	return nil
-}
-
-// deduplicateTargetHosts keeps the first occurrence of each normalized target
-// host and preserves the caller's ordering. Target hosts are normalized by
-// validateTarget before this helper is called on write; scan resolution also
-// uses it to protect the scanner from duplicate hosts in older stored targets.
-func deduplicateTargetHosts(hosts []string) []string {
-	seen := make(map[string]struct{}, len(hosts))
-	out := make([]string, 0, len(hosts))
-	for _, host := range hosts {
-		if _, ok := seen[host]; ok {
-			continue
-		}
-		seen[host] = struct{}{}
-		out = append(out, host)
-	}
-	return out
 }
 
 // validateTemplateSet trims and checks a template set in place.

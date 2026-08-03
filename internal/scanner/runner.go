@@ -191,7 +191,7 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 	}
 
 	targetsFile := filepath.Join(dir, "targets.txt")
-	if err := os.WriteFile(targetsFile, []byte(strings.Join(spec.Targets, "\n")+"\n"), 0o640); err != nil {
+	if err := writeTargetsFile(targetsFile, spec.Targets); err != nil {
 		j.fail(fmt.Errorf("write targets file: %w", err))
 		return
 	}
@@ -333,6 +333,10 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 	}
 
 	j.complete(findingCount)
+}
+
+func writeTargetsFile(path string, targets []string) error {
+	return os.WriteFile(path, []byte(strings.Join(types.DeduplicateTargetHosts(targets), "\n")+"\n"), 0o640)
 }
 
 // buildArgs assembles the Nuclei command line from the spec.

@@ -289,7 +289,7 @@ func (s *Server) resolveConfigSpec(ctx context.Context, targetID, templateSetID 
 		}
 		return types.ScanSpec{}, store.ScanLink{}, err
 	}
-	spec := types.ScanSpec{Targets: deduplicateTargetHosts(target.Hosts), Options: defaultOptions()}
+	spec := types.ScanSpec{Targets: types.DeduplicateTargetHosts(target.Hosts), Options: defaultOptions()}
 	ts, err := s.store.GetTemplateSet(ctx, templateSetID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {

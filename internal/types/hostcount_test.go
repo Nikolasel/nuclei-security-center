@@ -38,6 +38,16 @@ func TestHostCount(t *testing.T) {
 			[]string{"2001:db8::/64", "2001:db9::/64"},
 			maxHostCount,
 		},
+		{
+			"case-insensitive duplicate hostnames count once",
+			[]string{"Example.COM", "example.com"},
+			1,
+		},
+		{
+			"duplicate CIDR entries count once",
+			[]string{"10.0.0.0/24", "10.0.0.0/24"},
+			256,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -107,9 +107,12 @@ func TestValidateTarget(t *testing.T) {
 	}
 	// Valid, and it trims/normalizes in place.
 	tg := &store.Target{
-		Name:  "  web  ",
-		Hosts: []string{" example.com ", "example.com", "second.example.com", " example.com "},
-		Tags:  []string{" prod ", ""},
+		Name: "  web  ",
+		Hosts: []string{
+			" Example.COM ", "example.com", "https://EXAMPLE.com/AdminPanel",
+			"https://example.com/AdminPanel", "https://example.com/adminpanel",
+		},
+		Tags: []string{" prod ", ""},
 	}
 	if err := validateTarget(tg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -117,7 +120,9 @@ func TestValidateTarget(t *testing.T) {
 	if tg.Name != "web" {
 		t.Errorf("name not trimmed: %q", tg.Name)
 	}
-	if want := []string{"example.com", "second.example.com"}; !slices.Equal(tg.Hosts, want) {
+	if want := []string{
+		"example.com", "https://example.com/AdminPanel", "https://example.com/adminpanel",
+	}; !slices.Equal(tg.Hosts, want) {
 		t.Errorf("hosts not trimmed and deduplicated: %v, want %v", tg.Hosts, want)
 	}
 	if len(tg.Tags) != 1 || tg.Tags[0] != "prod" {

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
 // hostnameRe matches DNS hostnames: dot-separated labels of alphanumerics and
@@ -28,13 +29,16 @@ func validateTarget(t *store.Target) error {
 	if len(t.Hosts) == 0 {
 		return errors.New("at least one host is required")
 	}
-	for i, h := range t.Hosts {
-		h = strings.TrimSpace(h)
+	hosts := make([]string, 0, len(t.Hosts))
+	for _, raw := range t.Hosts {
+		raw = strings.TrimSpace(raw)
+		h := types.NormalizeTargetHost(raw)
 		if err := validateHost(h); err != nil {
-			return fmt.Errorf("host %q: %w", h, err)
+			return fmt.Errorf("host %q: %w", raw, err)
 		}
-		t.Hosts[i] = h
+		hosts = append(hosts, h)
 	}
+	t.Hosts = types.DeduplicateTargetHosts(hosts)
 	t.Tags = trimAll(t.Tags)
 	return nil
 }

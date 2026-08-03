@@ -18,13 +18,14 @@ const maxHostCount = math.MaxInt64
 // hostname, IP, or URL counts as one; a CIDR entry counts as the full size of
 // its address range (e.g. "10.0.0.0/24" is 256), computed exactly via
 // math/big so a large IPv6 block can't silently wrap a fixed-width integer.
-// Unparseable entries (a bare hostname, a URL, garbage input) count as one —
-// this is a sizing helper for display, not a validator; validateHost is the
-// source of truth for whether an entry is well-formed.
+// Duplicate entries count once after target-host normalization. Unparseable
+// entries (a bare hostname, a URL, garbage input) count as one — this is a
+// sizing helper for display, not a validator; validateHost is the source of
+// truth for whether an entry is well-formed.
 func HostCount(hosts []string) int64 {
 	max := big.NewInt(maxHostCount)
 	total := new(big.Int)
-	for _, h := range hosts {
+	for _, h := range DeduplicateTargetHosts(hosts) {
 		total.Add(total, cidrSize(strings.TrimSpace(h)))
 		if total.Cmp(max) >= 0 {
 			return maxHostCount

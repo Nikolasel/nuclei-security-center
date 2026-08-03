@@ -1,6 +1,8 @@
 package scanner
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -66,6 +68,30 @@ func TestBuildArgsMinimal(t *testing.T) {
 	}
 	if !slices.Contains(args, "-jsonl") {
 		t.Errorf("expected -jsonl in args: %v", args)
+	}
+}
+
+func TestWriteTargetsFileDeduplicatesAndPreservesURLPaths(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "targets.txt")
+	targets := []string{
+		"Example.COM",
+		"example.com",
+		"https://EXAMPLE.com/AdminPanel",
+		"https://example.com/AdminPanel",
+		"https://example.com/adminpanel",
+		"10.0.0.0/24",
+		"10.0.0.0/24",
+	}
+	if err := writeTargetsFile(path, targets); err != nil {
+		t.Fatalf("writeTargetsFile: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read targets file: %v", err)
+	}
+	want := "example.com\nhttps://example.com/AdminPanel\nhttps://example.com/adminpanel\n10.0.0.0/24\n"
+	if string(got) != want {
+		t.Errorf("targets file = %q, want %q", got, want)
 	}
 }
 

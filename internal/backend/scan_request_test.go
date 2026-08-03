@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -101,16 +102,26 @@ func TestResolveConfigSpecHonorsExcludeTemplateSetPostgres(t *testing.T) {
 	}
 	target, err := st.CreateTarget(ctx, store.Target{
 		Name:  "resolver-target-" + types.NewID(),
-		Hosts: []string{"resolver.invalid"},
+		Hosts: []string{"Resolver.invalid", "resolver.invalid", "second.invalid", "RESOLVER.INVALID"},
 	})
 	if err != nil {
 		t.Fatalf("create target: %v", err)
+	}
+	storedTarget, err := st.GetTarget(ctx, target.ID)
+	if err != nil {
+		t.Fatalf("read target: %v", err)
+	}
+	if want := []string{"resolver.invalid", "second.invalid"}; !slices.Equal(storedTarget.Hosts, want) || storedTarget.HostCount != 2 {
+		t.Fatalf("stored target normalization = hosts %v, count %d; want hosts %v, count 2", storedTarget.Hosts, storedTarget.HostCount, want)
 	}
 
 	server := Server{store: st}
 	spec, _, err := server.resolveConfigSpec(ctx, target.ID, templateSet.ID)
 	if err != nil {
 		t.Fatalf("resolve exclude config: %v", err)
+	}
+	if want := []string{"resolver.invalid", "second.invalid"}; !slices.Equal(spec.Targets, want) {
+		t.Fatalf("resolved target hosts = %v, want %v", spec.Targets, want)
 	}
 	if len(spec.Templates.TemplateIDs) != 1 || spec.Templates.TemplateIDs[0] != "resolver-keep" {
 		t.Fatalf("resolved template ids = %v, want [resolver-keep]", spec.Templates.TemplateIDs)

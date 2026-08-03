@@ -16,13 +16,15 @@ import (
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
-// Scan bundle (#136): export a complete scan as a self-contained, versioned
-// manifest (JSON, or the same document zipped as manifest.json) and import it
-// on another instance. The bundle carries the scan record, the resolved config
-// that produced it, every occurrence with its preserved Nuclei raw JSON, and
-// the complete finding lifecycle for the scan's findings — so import updates
-// the destination's lifecycle (dispositions, recast severities, first/last-seen,
-// mitigation counters) instead of only re-inserting occurrences.
+// Scan bundle (#136): export a complete scan result as a self-contained,
+// versioned manifest (JSON, or the same document zipped as manifest.json) and
+// import it on another instance. Like a scan-results file (a Nessus .ness
+// import), the bundle carries the scan record, the resolved config that
+// produced it, and every occurrence with its preserved Nuclei raw JSON — never
+// the exporter's globally deduplicated finding lifecycle. Import re-derives the
+// destination's own lifecycle (dedup identity, detection state, first/last-seen,
+// mitigation counters, analyst overlays) from the results exactly as if it had
+// scanned the target itself.
 //
 // Import is fail-soft on references: a scan policy / template set / target /
 // node / schedule that doesn't exist locally falls back to its default (NULL),
@@ -103,32 +105,43 @@ func isZipBundle(body []byte) bool {
 	}
 }
 
-// readZipBundleManifest extracts manifest.json from a zip bundle, bounding the
-// decompressed size so a zip bomb cannot exceed the upload ceiling.
+// readZipBundleManifest extracts manifest.json from a zip bundle. It rejects a
+// zip with more than one manifest.json (so no ambiguity about which reader
+// would pick) and bounds the decompressed size by ScanBundleMaxManifest, well
+// below the request-body ceiling, so a zip bomb cannot expand to the full
+// upload cap.
 func readZipBundleManifest(body []byte) ([]byte, error) {
 	zr, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
 	if err != nil {
 		return nil, fmt.Errorf("invalid zip bundle: %w", err)
 	}
+	var manifest []byte
+	matches := 0
 	for _, f := range zr.File {
 		if f.Name != types.ScanBundleManifestName {
 			continue
+		}
+		matches++
+		if matches > 1 {
+			return nil, fmt.Errorf("bundle contains more than one %s", types.ScanBundleManifestName)
 		}
 		rc, err := f.Open()
 		if err != nil {
 			return nil, fmt.Errorf("open %s: %w", types.ScanBundleManifestName, err)
 		}
-		defer rc.Close()
-		manifest, err := io.ReadAll(io.LimitReader(rc, types.ScanBundleMaxUpload+1))
+		manifest, err = io.ReadAll(io.LimitReader(rc, types.ScanBundleMaxManifest+1))
+		_ = rc.Close()
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", types.ScanBundleManifestName, err)
 		}
-		if len(manifest) > types.ScanBundleMaxUpload {
-			return nil, fmt.Errorf("bundle %s exceeds the %d MiB limit", types.ScanBundleManifestName, types.ScanBundleMaxUpload>>20)
+		if len(manifest) > types.ScanBundleMaxManifest {
+			return nil, fmt.Errorf("bundle %s exceeds the %d MiB limit", types.ScanBundleManifestName, types.ScanBundleMaxManifest>>20)
 		}
-		return manifest, nil
 	}
-	return nil, fmt.Errorf("bundle contains no %s", types.ScanBundleManifestName)
+	if manifest == nil {
+		return nil, fmt.Errorf("bundle contains no %s", types.ScanBundleManifestName)
+	}
+	return manifest, nil
 }
 
 // handleImportScanBundle recreates a scan from a bundle on this instance

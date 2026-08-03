@@ -20,6 +20,7 @@ func sampleBundleForTest() types.ScanBundle {
 		Scan: types.ScanBundleScan{
 			ID:        types.NewID(),
 			State:     string(types.ScanComplete),
+			Source:    "adhoc",
 			CreatedAt: t0,
 			Spec:      json.RawMessage(`{}`),
 		},
@@ -101,10 +102,22 @@ func TestReadZipBundleManifestRejects(t *testing.T) {
 		var buf bytes.Buffer
 		zw := zip.NewWriter(&buf)
 		f, _ := zw.Create(types.ScanBundleManifestName)
-		_, _ = f.Write(bytes.Repeat([]byte("x"), types.ScanBundleMaxUpload+1))
+		_, _ = f.Write(bytes.Repeat([]byte("x"), types.ScanBundleMaxManifest+1))
 		_ = zw.Close()
 		if _, err := readZipBundleManifest(buf.Bytes()); err == nil || !strings.Contains(err.Error(), "exceeds the") {
 			t.Fatalf("expected size-limit error, got %v", err)
+		}
+	})
+	t.Run("multiple manifest entries", func(t *testing.T) {
+		var buf bytes.Buffer
+		zw := zip.NewWriter(&buf)
+		for range 2 {
+			f, _ := zw.Create(types.ScanBundleManifestName)
+			_, _ = f.Write([]byte(`{"format":"nuclei-security-center/scan-bundle"}`))
+		}
+		_ = zw.Close()
+		if _, err := readZipBundleManifest(buf.Bytes()); err == nil || !strings.Contains(err.Error(), "more than one manifest.json") {
+			t.Fatalf("expected multiple-manifest error, got %v", err)
 		}
 	})
 }

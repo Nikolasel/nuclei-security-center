@@ -39,11 +39,21 @@ const (
 	ScanBundleFormatVersion = 1
 	// ScanBundleManifestName is the manifest file's name inside a zip bundle.
 	ScanBundleManifestName = "manifest.json"
+	// scanBundleMaxFutureSkew is how far past "now" a bundle timestamp may be
+	// before Validate rejects it (clock drift allowance).
+	scanBundleMaxFutureSkew = 5 * time.Minute
 	// ScanBundleMaxUpload is the request-size ceiling for an import (raw JSON or
 	// compressed zip), mirroring the orchestrator's own results-stream ceiling.
 	ScanBundleMaxUpload = 512 << 20
-	// ScanBundleMaxFindings caps the occurrence count an import will accept, so a
-	// pathological bundle cannot exhaust backend memory while decoding.
+	// ScanBundleMaxManifest is the decompressed ceiling for a zip bundle's
+	// manifest, set well below the request-body ceiling — compressed manifests
+	// expand far better than 1:1, and io.ReadAll has already materialized the
+	// body before decoding.
+	ScanBundleMaxManifest = 128 << 20
+	// ScanBundleMaxFindings caps the occurrence count a manifest may carry. It
+	// is a sanity limit on the already-decoded manifest (json.Unmarshal must
+	// materialize the slice before Validate can check it); the actual
+	// decode-time memory bound is the upload/manifest ceilings above.
 	ScanBundleMaxFindings = 1 << 20
 )
 
@@ -180,6 +190,22 @@ func (b *ScanBundle) Validate() error {
 	}
 	if scan.CreatedAt.IsZero() {
 		return errors.New("scan bundle: scan.created_at is required")
+	}
+	// The bundle's timestamps are chronology authority on import (which scan is
+	// "newer" decides last-seen and coverage evidence), so a manifest dated in
+	// the future must not be accepted — beyond a small skew for clock drift, a
+	// future-dated scan is meaningless regardless of who wrote it.
+	if scan.CreatedAt.After(time.Now().Add(scanBundleMaxFutureSkew)) {
+		return errors.New("scan bundle: scan.created_at is in the future")
+	}
+	if scan.StartedAt != nil && scan.StartedAt.After(time.Now().Add(scanBundleMaxFutureSkew)) {
+		return errors.New("scan bundle: scan.started_at is in the future")
+	}
+	if scan.FinishedAt != nil && scan.FinishedAt.After(time.Now().Add(scanBundleMaxFutureSkew)) {
+		return errors.New("scan bundle: scan.finished_at is in the future")
+	}
+	if scan.Source == "" {
+		return errors.New("scan bundle: scan.source is required")
 	}
 	switch scan.State {
 	case string(ScanQueued), string(ScanRunning), string(ScanComplete), string(ScanFailed), string(ScanCancelled):

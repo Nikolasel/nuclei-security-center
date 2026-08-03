@@ -98,11 +98,16 @@ scope follows the resolved destination target. References (target / template set
 node / schedule) that don't exist here **fall back to NULL** and are listed in the response's
 `fallbacks`; a missing entity never fails the import (fail-soft on references, fail-hard on the
 bundle itself). An in-flight (queued/running) export imports as `failed`. A destination
-analyst's overlays are never touched (they were never exported). The default conflict policy
+analyst's overlays are never touched (they were never exported). Coverage evidence is applied
+only to lifecycle findings the bundle actually carries observations for, and only when the
+imported scan completed — a manifest that merely claims coverage can never close a finding it
+did not observe. The default conflict policy
 `error` returns **409** when the exported scan id already exists locally; `conflict=duplicate`
 imports under a fresh id instead. A bundle must be a format/version this backend understands
-and must validate (`400` otherwise); zip bundles are sniffed by the `PK` magic and extracted
-from `manifest.json`, with a 512 MiB upload ceiling.
+and must validate (`400` otherwise) — including a `scan.source` and no future-dated
+timestamps. Zip bundles are sniffed by the `PK` magic, must contain exactly one
+`manifest.json`, and are extracted with a 512 MiB upload ceiling (decompressed manifest
+capped at 128 MiB).
 
 ```sh
 # download the manifest for one scan (viewer)

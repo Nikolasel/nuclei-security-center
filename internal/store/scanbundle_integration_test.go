@@ -434,3 +434,101 @@ func TestScanBundleImportFallbackPostgres(t *testing.T) {
 		t.Fatalf("expected 1 occurrence on the imported scan, got %d", total)
 	}
 }
+
+// TestScanBundleImportCannotCloseUnobservedPostgres locks the review finding
+// that a coverage-only manifest must never advance the destination's detection
+// state: coverage evidence on import is anchored on the occurrences the bundle
+// actually carries, never on its claimed covered_endpoints, so a bundle with
+// zero findings cannot mark an existing open finding mitigated (or pin it so).
+//
+//	NSC_TEST_DATABASE_URL=postgres://... go test ./internal/store -run TestScanBundleImportCannotCloseUnobservedPostgres
+func TestScanBundleImportCannotCloseUnobservedPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	dest := openIsolatedPostgres(t, ctx, dsn, "0039_schedule_name_uniqueness.sql")
+
+	suffix := types.NewID()
+	target, err := dest.CreateTarget(ctx, Target{Name: "coverage-import-" + suffix, Hosts: []string{"coverage.invalid"}})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+
+	// A real scan observes tpl-cover once on fine coverage.invalid:443 and
+	// completes, so the lifecycle row's last_covering_scan points at it.
+	finding := types.NucleiFinding{
+		TemplateID: "tpl-close",
+		Host:       "coverage.invalid",
+		MatchedAt:  "https://coverage.invalid/",
+		Type:       "http",
+		Info:       types.NucleiInfo{Name: "close-check", Severity: "high"},
+	}
+	raw, err := json.Marshal(finding)
+	if err != nil {
+		t.Fatalf("marshal finding: %v", err)
+	}
+	firstScanID, err := dest.CreateScan(ctx, types.ScanSpec{Targets: target.Hosts}, ScanLink{TargetID: target.ID, Source: "manual"})
+	if err != nil {
+		t.Fatalf("create first scan: %v", err)
+	}
+	if err := dest.IngestFinding(ctx, firstScanID, target.ID, finding, raw); err != nil {
+		t.Fatalf("ingest finding: %v", err)
+	}
+	coverage := []types.EndpointCoverage{{TemplateID: "tpl-close", Endpoint: "coverage.invalid:443"}}
+	if err := dest.SetScanCoverage(ctx, firstScanID, coverage, ""); err != nil {
+		t.Fatalf("set coverage: %v", err)
+	}
+	if err := dest.MarkComplete(ctx, firstScanID, "3.3.0", "coverage-commit"); err != nil {
+		t.Fatalf("complete scan: %v", err)
+	}
+	var coveringBefore string
+	if err := dest.pool.QueryRow(ctx,
+		`SELECT last_covering_scan FROM finding_lifecycle WHERE template_id = $1`, "tpl-close").Scan(&coveringBefore); err != nil {
+		t.Fatalf("read covering scan: %v", err)
+	}
+	if coveringBefore != firstScanID {
+		t.Fatalf("covering scan = %q, want %q", coveringBefore, firstScanID)
+	}
+
+	// A forged bundle: complete, newer, attributing the exact coverage pair, but
+	// carrying zero findings. Under the old coverage_pairs join this would click
+	// last_covering_scan forward and close the finding; import must refuse to.
+	bundle := &types.ScanBundle{
+		Format:        types.ScanBundleFormat,
+		FormatVersion: types.ScanBundleFormatVersion,
+		ExportedAt:    time.Now().UTC(),
+		Config:        types.ScanBundleConfig{TargetID: target.ID},
+		Scan: types.ScanBundleScan{
+			ID:               types.NewID(),
+			State:            string(types.ScanComplete),
+			Source:           "manual",
+			CreatedAt:        time.Now().UTC().Add(time.Minute),
+			CoveredEndpoints: coverage,
+			Spec:             json.RawMessage(`{"targets":["coverage.invalid"]}`),
+		},
+		Findings: nil,
+	}
+	if err := bundle.Validate(); err != nil {
+		t.Fatalf("forged bundle fails validation: %v", err)
+	}
+	result, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError)
+	if err != nil {
+		t.Fatalf("import coverage-only bundle: %v", err)
+	}
+	if result.FindingsImported != 0 {
+		t.Fatalf("expected 0 findings imported, got %d", result.FindingsImported)
+	}
+
+	var coveringAfter string
+	if err := dest.pool.QueryRow(ctx,
+		`SELECT last_covering_scan FROM finding_lifecycle WHERE template_id = $1`, "tpl-close").Scan(&coveringAfter); err != nil {
+		t.Fatalf("read covering scan after: %v", err)
+	}
+	if coveringAfter != firstScanID {
+		t.Fatalf("coverage-only import moved last_covering_scan to %q (want %q)", coveringAfter, coveringBefore)
+	}
+}

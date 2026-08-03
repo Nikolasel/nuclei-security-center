@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
@@ -317,6 +318,13 @@ func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, confl
 		b.Scan.SkippedFindingCount, b.Scan.CreatedAt, b.Scan.StartedAt, b.Scan.FinishedAt,
 		orEmpty(b.Scan.DiscoveredTargets), coveredJSON, nullStr(b.Scan.CoverageWarning),
 	); err != nil {
+		// Two concurrent imports of the same bundle can both clear the existence
+		// pre-check under READ COMMITTED; surface the unique-violation loser as
+		// the intended 409 instead of a 500.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, ErrScanBundleConflict
+		}
 		return nil, fmt.Errorf("insert imported scan: %w", err)
 	}
 
@@ -357,11 +365,14 @@ func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, confl
 		result.FindingsImported++
 	}
 
-	// The imported scan's coverage evidence (exact template+endpoint pairs) can
-	// advance the destination's last_covering_scan pointers exactly like a scan
-	// completing normally would — detection states stay evidence-driven.
-	if err := applyScanCoverage(ctx, tx, scanID); err != nil {
-		return nil, fmt.Errorf("apply imported scan coverage: %w", err)
+	// A completed scan's coverage evidence advances the destination's
+	// last_covering_scan pointers exactly like a scan finishing normally. It is
+	// deliberately withheld for failed/cancelled imports — a failed scan's
+	// coverage is unreliable, so it proves nothing (closure stays evidence-driven).
+	if state == string(types.ScanComplete) {
+		if err := applyScanCoverage(ctx, tx, scanID); err != nil {
+			return nil, fmt.Errorf("apply imported scan coverage: %w", err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
@@ -417,50 +428,29 @@ func resolveScanBundleRefs(ctx context.Context, tx pgx.Tx, b *types.ScanBundle) 
 }
 
 // applyScanCoverage advances the destination's last_covering_scan evidence
-// pointers for the imported scan's exact coverage pairs — the same evidence
-// update MarkComplete performs at normal completion, without flipping the scan
-// state or its timestamps.
+// pointers for the lifecycle rows the imported scan actually observed — the
+// same evidence update MarkComplete performs at normal completion, without
+// flipping the scan state or its timestamps. The candidate set is anchored on
+// the imported occurrences, never on the bundle's covered_endpoints list: an
+// import must not close a finding it carries no evidence about, so a manifest
+// that only claims coverage (with zero findings) cannot advance anyone's
+// detection state.
 func applyScanCoverage(ctx context.Context, tx pgx.Tx, scanID string) error {
 	_, err := tx.Exec(ctx,
 		`WITH completed_scan AS (
-		    SELECT id, target_id, covered_endpoints, skipped_finding_count, created_at
+		    SELECT id, target_id, created_at
 		      FROM scans WHERE id = $1
 		 ),
-		 coverage_pairs AS MATERIALIZED (
-		    SELECT pair->>'template_id' AS template_id,
-		           pair->>'endpoint' AS endpoint
-		      FROM completed_scan
-		      CROSS JOIN LATERAL jsonb_array_elements(
-		          CASE WHEN completed_scan.skipped_finding_count = 0
-		               THEN COALESCE(completed_scan.covered_endpoints, '[]'::jsonb)
-		               ELSE '[]'::jsonb END
-		      ) AS pair
-		     WHERE jsonb_typeof(pair) = 'object'
-		 ),
-		 candidate_lifecycle AS MATERIALIZED (
-		    SELECT lifecycle.id
-		      FROM coverage_pairs coverage
-		      JOIN finding_lifecycle lifecycle
-		        ON lifecycle.template_id = coverage.template_id
-		       AND lifecycle.endpoint_key = coverage.endpoint
-		     WHERE lifecycle.endpoint_key <> ''
-		    UNION
-		    SELECT observed.finding_id
+		 observed AS MATERIALIZED (
+		    SELECT DISTINCT observed.finding_id
 		      FROM completed_scan
 		      JOIN findings observed ON observed.scan_id = completed_scan.id
 		     WHERE observed.finding_id IS NOT NULL
 		 )
 		 UPDATE finding_lifecycle lifecycle
 		    SET last_covering_scan = completed_scan.id
-		   FROM completed_scan, candidate_lifecycle candidate
-		  WHERE lifecycle.id = candidate.id
-		    AND EXISTS (
-		        SELECT 1
-		          FROM findings associated
-		          JOIN scans associated_scan ON associated_scan.id = associated.scan_id
-		         WHERE associated.finding_id = lifecycle.id
-		           AND associated_scan.target_id IS NOT DISTINCT FROM completed_scan.target_id
-		    )
+		   FROM completed_scan, observed candidate
+		  WHERE lifecycle.id = candidate.finding_id
 		    AND (
 		        lifecycle.last_covering_scan IS NULL
 		        OR EXISTS (

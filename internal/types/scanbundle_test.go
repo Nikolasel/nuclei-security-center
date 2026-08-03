@@ -52,6 +52,11 @@ func TestScanBundleValidateRejects(t *testing.T) {
 		{"missing scan id", func(b *ScanBundle) { b.Scan.ID = "" }, "scan.id is required"},
 		{"non-uuid scan id", func(b *ScanBundle) { b.Scan.ID = "not-a-uuid" }, "not a UUID"},
 		{"zero created at", func(b *ScanBundle) { b.Scan.CreatedAt = time.Time{} }, "scan.created_at is required"},
+		{"future created at", func(b *ScanBundle) { b.Scan.CreatedAt = time.Now().Add(10 * time.Minute) }, "created_at is in the future"},
+		{"future finished at", func(b *ScanBundle) {
+			b.Scan.FinishedAt = timePtr(time.Now().Add(10 * time.Minute))
+		}, "finished_at is in the future"},
+		{"missing source", func(b *ScanBundle) { b.Scan.Source = "" }, "scan.source is required"},
 		{"unknown state", func(b *ScanBundle) { b.Scan.State = "flying" }, "unknown scan state"},
 		{"negative skipped count", func(b *ScanBundle) { b.Scan.SkippedFindingCount = -1 }, "cannot be negative"},
 		{"missing spec", func(b *ScanBundle) { b.Scan.Spec = nil }, "spec is required"},
@@ -95,3 +100,5 @@ func TestScanBundleValidateRejects(t *testing.T) {
 	})
 	_ = t0
 }
+
+func timePtr(t time.Time) *time.Time { return &t }

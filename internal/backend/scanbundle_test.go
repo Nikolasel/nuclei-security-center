@@ -28,10 +28,6 @@ func sampleBundleForTest() types.ScanBundle {
 			Host: "scanme.invalid", MatchedAt: "https://scanme.invalid/", Type: "http",
 			CreatedAt: t0, Raw: json.RawMessage(`{"template-id":"cve-x"}`),
 		}},
-		Lifecycle: []types.ScanBundleLifecycle{{
-			TemplateID: "cve-x", MatchedAt: "https://scanme.invalid/",
-			FirstSeenAt: t0, LastSeenAt: t0, Disposition: "accepted",
-		}},
 	}
 }
 
@@ -132,8 +128,5 @@ func TestScanBundleJSONRoundTrip(t *testing.T) {
 	}
 	if len(decoded.Findings) != 1 || decoded.Findings[0].TemplateID == "" {
 		t.Errorf("findings lost: %+v", decoded.Findings)
-	}
-	if len(decoded.Lifecycle) != 1 || decoded.Lifecycle[0].Disposition != "accepted" {
-		t.Errorf("lifecycle lost: %+v", decoded.Lifecycle)
 	}
 }

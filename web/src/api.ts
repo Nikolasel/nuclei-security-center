@@ -353,9 +353,12 @@ export interface ImportScanBundleResponse {
 }
 
 /** importScanBundle uploads a scan bundle (a .nsc-bundle JSON or zip, #136) and
- *  recreates the scan, its findings, and its finding lifecycle on this instance.
- *  conflict=duplicate imports under a fresh id instead of failing with 409 when
- *  the exported scan id already exists here. */
+ *  recreates the scan and its results on this instance: the findings are
+ *  re-derived via the normal ingest path, so this instance computes its own
+*  instance computes its own finding lifecycle from the imported results. The
+ *  exporter's analyst overlays are never carried over. conflict=duplicate
+ *  imports under a fresh id instead of failing with 409 when the exported scan
+ *  id already exists here. */
 export async function importScanBundle(
   file: File,
   conflict: "error" | "duplicate" = "error",

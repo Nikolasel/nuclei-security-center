@@ -10,19 +10,23 @@ import (
 )
 
 // Scan bundle (#136): a self-contained, versioned representation of a complete
-// scan that round-trips between deployments. A bundle is a single JSON document
-// (optionally wrapped in a zip archive as manifest.json) carrying:
+// scan that round-trips between deployments. Like a scan-results file (a Nessus
+// .ness import into Tenable Security Center), the bundle carries **the scan's
+// data**, not the exporter's globally deduplicated finding lifecycle: the
+// destination re-derives the lifecycle from the imported results under its own
+// rules exactly as if it had scanned the target itself. A bundle is a single
+// JSON document (optionally wrapped in a zip archive as manifest.json) carrying:
 //
 //   - the scan record itself (timestamps, state, provenance, discovered targets,
 //     covered-endpoint evidence, resolved template ids + templates commit, and
 //     the verbatim dispatch spec);
 //   - the resolved config that produced it (target / template set / scan policy
 //     snapshots plus the reference ids on the exporting instance, so a bundle is
-//     understandable standalone);
-//   - every immutable occurrence with its preserved Nuclei raw JSON; and
-//   - the complete finding lifecycle for the scan's findings (triage overlays,
-//     first/last-seen, mitigation counters), so import updates the destination's
-//     lifecycle rather than only re-inserting occurrences.
+//     understandable standalone); and
+//   - every immutable occurrence with its preserved Nuclei raw JSON — the import
+//     recomputes each occurrence's dedup identity from that raw payload and
+//     lets this instance's own detection-state / first-last-seen / mitigation
+//     rules and analyst overlays decide the lifecycle.
 //
 // The format is deliberately versioned: FormatVersion is the contract; import
 // rejects a bundle newer than it understands and never silently guesses.
@@ -45,13 +49,12 @@ const (
 
 // ScanBundle is the top-level manifest of the own-format scan bundle (#136).
 type ScanBundle struct {
-	Format        string                `json:"format"`
-	FormatVersion int                   `json:"format_version"`
-	ExportedAt    time.Time             `json:"exported_at"`
-	Scan          ScanBundleScan        `json:"scan"`
-	Findings      []ScanBundleFinding   `json:"findings"`
-	Lifecycle     []ScanBundleLifecycle `json:"lifecycle,omitempty"`
-	Config        ScanBundleConfig      `json:"config,omitempty"`
+	Format        string              `json:"format"`
+	FormatVersion int                 `json:"format_version"`
+	ExportedAt    time.Time           `json:"exported_at"`
+	Scan          ScanBundleScan      `json:"scan"`
+	Findings      []ScanBundleFinding `json:"findings"`
+	Config        ScanBundleConfig    `json:"config,omitempty"`
 }
 
 // ScanBundleScan is the scan record as captured in a bundle.
@@ -141,42 +144,11 @@ type ScanBundleFinding struct {
 	CVE        []string  `json:"cve,omitempty"`
 	Tags       []string  `json:"tags,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
-	// Raw is the preserved Nuclei result (COALESCE(raw_line, raw::text)) — the
-	// verbatim JSONL of this occurrence. Import re-derives the lifecycle
-	// identity from it; the exported bytes are never trusted blindly.
+	// Raw is the preserved Nuclei result (COALESCE(raw_line, raw::text)).
+	// The finding lifecycle identity is re-derived from it on import; the
+	// bundle carries the scan's results, never the exporter's globally
+	// deduplicated lifecycle (a .ness file, not an analysis).
 	Raw json.RawMessage `json:"raw,omitempty"`
-}
-
-// ScanBundleLifecycle is the complete lifecycle state for one global finding
-// observed by the exported scan: analyst overlays, first/last-seen, mitigation
-// counter, and the identity components (template_id / matched_at /
-// result_discriminator) from which import recomputes the dedup key. DedupKey is
-// exported for human inspection; import deliberately recomputes rather than
-// trusting it.
-type ScanBundleLifecycle struct {
-	DedupKey            string     `json:"dedup_key,omitempty"`
-	TemplateID          string     `json:"template_id"`
-	MatchedAt           string     `json:"matched_at,omitempty"`
-	ResultDiscriminator string     `json:"result_discriminator,omitempty"`
-	Name                string     `json:"name,omitempty"`
-	Severity            string     `json:"severity,omitempty"`
-	Host                string     `json:"host,omitempty"`
-	Type                string     `json:"type,omitempty"`
-	CVE                 []string   `json:"cve,omitempty"`
-	Tags                []string   `json:"tags,omitempty"`
-	EndpointKey         string     `json:"endpoint_key,omitempty"`
-	FirstSeenAt         time.Time  `json:"first_seen_at"`
-	LastSeenAt          time.Time  `json:"last_seen_at"`
-	TimesMitigated      int        `json:"times_mitigated"`
-	Disposition         string     `json:"disposition"`
-	AcceptExpiresAt     *time.Time `json:"accept_expires_at,omitempty"`
-	DispositionNote     string     `json:"disposition_note,omitempty"`
-	DispositionBy       string     `json:"disposition_by,omitempty"`
-	DispositionAt       *time.Time `json:"disposition_at,omitempty"`
-	RecastSeverity      string     `json:"recast_severity,omitempty"`
-	RecastNote          string     `json:"recast_note,omitempty"`
-	RecastBy            string     `json:"recast_by,omitempty"`
-	RecastAt            *time.Time `json:"recast_at,omitempty"`
 }
 
 // ErrBundleUnsupported signals a bundle this backend does not understand.
@@ -232,17 +204,6 @@ func (b *ScanBundle) Validate() error {
 		}
 		if len(f.Raw) == 0 || !json.Valid(f.Raw) {
 			return fmt.Errorf("scan bundle: finding %d has invalid or missing raw payload", i)
-		}
-	}
-	for i, l := range b.Lifecycle {
-		if l.TemplateID == "" {
-			return fmt.Errorf("scan bundle: lifecycle %d has no template_id", i)
-		}
-		if l.FirstSeenAt.IsZero() || l.LastSeenAt.IsZero() {
-			return fmt.Errorf("scan bundle: lifecycle %d has missing first/last seen timestamps", i)
-		}
-		if l.TimesMitigated < 0 {
-			return fmt.Errorf("scan bundle: lifecycle %d has negative times_mitigated", i)
 		}
 	}
 	return nil

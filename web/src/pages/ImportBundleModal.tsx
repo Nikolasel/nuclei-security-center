@@ -30,9 +30,11 @@ export function ImportBundleModal({ onClose }: { onClose: () => void }) {
     <Modal open onOpenChange={(v) => !v && onClose()} title="Import scan bundle">
       <div className="space-y-4">
         <p className="text-sm text-neutral-500">
-          Recreate a scan and its findings lifecycle from an exported{" "}
+          Recreate a scan and its results from an exported
           <span className="font-mono">.nsc-bundle.json</span> or{" "}
           <span className="font-mono">.nsc-bundle.zip</span> file (#136).
+          Findings are re-ingested as if the target had been scanned: this
+          instance re-derives its own finding lifecycle from the results.
           References to targets, template sets or scan policies that do not exist
           here fall back to their defaults.
         </p>

@@ -13,11 +13,12 @@ import (
 )
 
 // Scan bundle import/export (#136). Export reads the complete record of one scan
-// (scan row + dispatch spec + occurrence log + the lifecycle rows for the scan's
-// findings) into structs the backend assembles into the versioned manifest;
-// import recreates the scan and its findings on this instance and merges the
-// destination finding lifecycle from the bundle, with missing referenced
-// entities falling back to their default (NULL) value.
+// (scan row + dispatch spec + occurrence log) into structs the backend assembles
+// into the versioned manifest; import recreates the scan on this instance and
+// ingests its findings through the normal lifecycle path, so the destination
+// derives its own dedup/lifecycle state from the results exactly as if it had
+// scanned the target itself. Missing referenced entities fall back to their
+// default (NULL) value.
 
 // BundleFinding is one immutable occurrence plus the preserved Nuclei JSON
 // (`COALESCE(raw_line, raw::text)`), ready for the manifest.
@@ -36,38 +37,8 @@ type BundleFinding struct {
 	Raw        json.RawMessage `json:"raw,omitempty"`
 }
 
-// BundleLifecycle is the full lifecycle state of one global finding observed by
-// the exported scan, so the destination updates its lifecycle from the bundle
-// rather than only re-inserting occurrences.
-type BundleLifecycle struct {
-	DedupKey            string     `json:"dedup_key,omitempty"`
-	ResultDiscriminator string     `json:"result_discriminator,omitempty"`
-	TemplateID          string     `json:"template_id"`
-	Name                string     `json:"name,omitempty"`
-	Severity            string     `json:"severity,omitempty"`
-	Host                string     `json:"host,omitempty"`
-	MatchedAt           string     `json:"matched_at,omitempty"`
-	Type                string     `json:"type,omitempty"`
-	CVE                 []string   `json:"cve,omitempty"`
-	Tags                []string   `json:"tags,omitempty"`
-	EndpointKey         string     `json:"endpoint_key,omitempty"`
-	FirstSeenAt         time.Time  `json:"first_seen_at"`
-	LastSeenAt          time.Time  `json:"last_seen_at"`
-	TimesMitigated      int        `json:"times_mitigated"`
-	Disposition         string     `json:"disposition"`
-	AcceptExpiresAt     *time.Time `json:"accept_expires_at,omitempty"`
-	DispositionNote     string     `json:"disposition_note,omitempty"`
-	DispositionBy       string     `json:"disposition_by,omitempty"`
-	DispositionAt       *time.Time `json:"disposition_at,omitempty"`
-	RecastSeverity      string     `json:"recast_severity,omitempty"`
-	RecastNote          string     `json:"recast_note,omitempty"`
-	RecastBy            string     `json:"recast_by,omitempty"`
-	RecastAt            *time.Time `json:"recast_at,omitempty"`
-}
-
 // ScanExportBundle is the exporter's view of one scan: the scan row (including
-// the reference ids and the verbatim dispatch spec) plus its findings and the
-// lifecycle rows for those findings.
+// the reference ids and the verbatim dispatch spec) plus its findings.
 type ScanExportBundle struct {
 	ID                  string
 	State               string
@@ -89,7 +60,6 @@ type ScanExportBundle struct {
 	CoverageWarning     string
 	Spec                json.RawMessage
 	Findings            []BundleFinding
-	Lifecycle           []BundleLifecycle
 }
 
 func scanExportBundleRow(row pgx.Row) (*ScanExportBundle, error) {
@@ -123,9 +93,9 @@ func scanExportBundleRow(row pgx.Row) (*ScanExportBundle, error) {
 	return &e, nil
 }
 
-// ExportScanBundle reads everything a bundle for one scan needs — the scan row,
-// its occurrences (with preserved raw JSON), and the lifecycle rows for those
-// occurrences. It returns ErrNotFound when the scan is unknown.
+// ExportScanBundle reads everything a bundle for one scan needs — the scan row
+// and its occurrences (with preserved raw JSON). It returns ErrNotFound when
+// the scan is unknown.
 func (s *Store) ExportScanBundle(ctx context.Context, scanID string) (*ScanExportBundle, error) {
 	scan, err := scanExportBundleRow(s.pool.QueryRow(ctx,
 		`SELECT id, state, source, target_id, template_set_id, scan_policy_id, node_id, schedule_id,
@@ -161,50 +131,13 @@ func (s *Store) ExportScanBundle(ctx context.Context, scanID string) (*ScanExpor
 		f.Raw = json.RawMessage(raw)
 		scan.Findings = append(scan.Findings, f)
 	}
-	if err := findingRows.Err(); err != nil {
-		return nil, err
-	}
-	findingRows.Close()
-
-	lifecycleRows, err := s.pool.Query(ctx,
-		`SELECT DISTINCT l.id, l.dedup_key, l.result_discriminator, l.template_id, l.name, l.severity, l.host,
-		        l.matched_at, l.type, l.cve, l.tags, l.endpoint_key,
-		        l.first_seen_at, l.last_seen_at, l.times_mitigated,
-		        l.disposition, l.accept_expires_at, l.disposition_note, l.disposition_by, l.disposition_at,
-		        l.recast_severity, l.recast_note, l.recast_by, l.recast_at
-		   FROM finding_lifecycle l
-		   JOIN findings f ON f.finding_id = l.id
-		  WHERE f.scan_id = $1
-		  ORDER BY l.id`, scanID)
-	if err != nil {
-		return nil, err
-	}
-	defer lifecycleRows.Close()
-	for lifecycleRows.Next() {
-		var l BundleLifecycle
-		var lcID int64
-		var dispositionNote, dispositionBy, recastSeverity, recastNote, recastBy *string
-		if err := lifecycleRows.Scan(&lcID, &l.DedupKey, &l.ResultDiscriminator, &l.TemplateID, &l.Name, &l.Severity,
-			&l.Host, &l.MatchedAt, &l.Type, &l.CVE, &l.Tags, &l.EndpointKey,
-			&l.FirstSeenAt, &l.LastSeenAt, &l.TimesMitigated,
-			&l.Disposition, &l.AcceptExpiresAt, &dispositionNote, &dispositionBy, &l.DispositionAt,
-			&recastSeverity, &recastNote, &recastBy, &l.RecastAt); err != nil {
-			return nil, err
-		}
-		l.DispositionNote = deref(dispositionNote)
-		l.DispositionBy = deref(dispositionBy)
-		l.RecastSeverity = deref(recastSeverity)
-		l.RecastNote = deref(recastNote)
-		l.RecastBy = deref(recastBy)
-		scan.Lifecycle = append(scan.Lifecycle, l)
-	}
-	return scan, lifecycleRows.Err()
+	return scan, findingRows.Err()
 }
 
-// ScanBundleForExport assembles the versioned manifest for one scan: the scan
-// record, its occurrence log, the lifecycle rows for its findings, and the
-// resolved config snapshots (target / template set / scan policy) so the bundle
-// is understandable standalone. It returns ErrNotFound when the scan is unknown.
+// ScanBundleForExport assembles the versioned manifest for one scan result: the
+// scan record, its occurrence log, and the resolved config snapshots (target /
+// template set / scan policy) so the bundle is understandable standalone. It
+// returns ErrNotFound when the scan is unknown.
 func (s *Store) ScanBundleForExport(ctx context.Context, scanID string) (*types.ScanBundle, error) {
 	export, err := s.ExportScanBundle(ctx, scanID)
 	if err != nil {
@@ -262,18 +195,6 @@ func (s *Store) ScanBundleForExport(ctx context.Context, scanID string) (*types.
 			CVE: f.CVE, Tags: f.Tags, CreatedAt: f.CreatedAt, Raw: f.Raw,
 		})
 	}
-	lifecycle := make([]types.ScanBundleLifecycle, 0, len(export.Lifecycle))
-	for _, l := range export.Lifecycle {
-		lifecycle = append(lifecycle, types.ScanBundleLifecycle{
-			DedupKey: l.DedupKey, TemplateID: l.TemplateID, MatchedAt: l.MatchedAt,
-			ResultDiscriminator: l.ResultDiscriminator, Name: l.Name, Severity: l.Severity,
-			Host: l.Host, Type: l.Type, CVE: l.CVE, Tags: l.Tags, EndpointKey: l.EndpointKey,
-			FirstSeenAt: l.FirstSeenAt, LastSeenAt: l.LastSeenAt, TimesMitigated: l.TimesMitigated,
-			Disposition: l.Disposition, AcceptExpiresAt: l.AcceptExpiresAt,
-			DispositionNote: l.DispositionNote, DispositionBy: l.DispositionBy, DispositionAt: l.DispositionAt,
-			RecastSeverity: l.RecastSeverity, RecastNote: l.RecastNote, RecastBy: l.RecastBy, RecastAt: l.RecastAt,
-		})
-	}
 
 	return &types.ScanBundle{
 		Format:        types.ScanBundleFormat,
@@ -288,8 +209,7 @@ func (s *Store) ScanBundleForExport(ctx context.Context, scanID string) (*types.
 			DiscoveredTargets: export.DiscoveredTargets, CoveredEndpoints: export.CoveredEndpoints,
 			CoverageWarning: export.CoverageWarning, TemplateIDs: templateIDs, Spec: export.Spec,
 		},
-		Findings:  findings,
-		Lifecycle: lifecycle,
+		Findings: findings,
 	}, nil
 }
 
@@ -325,10 +245,12 @@ type ScanImportResult struct {
 // already exists locally under the default (error) conflict policy.
 var ErrScanBundleConflict = errors.New("scan already exists")
 
-// ImportScanBundle recreates a scan and its findings on this instance and merges
-// the destination lifecycle from the bundle. It runs in one transaction, so a
-// malformed bundle leaves no partial state. Referenced entities missing locally
-// fall back to NULL — the same default a deleted target/policy leaves behind.
+// ImportScanBundle recreates a scan and ingests its findings on this instance
+// through the normal lifecycle path, so the destination derives its own
+// dedup/lifecycle state from the results exactly as if it had scanned the
+// target itself. It runs in one transaction, so a malformed bundle leaves no
+// partial state. Referenced entities missing locally fall back to NULL — the
+// same default a deleted target/policy leaves behind.
 //
 // The manifest is validated by the caller (types.ScanBundle.Validate); this
 // function still fails closed on any per-row projection error.
@@ -355,9 +277,6 @@ func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, confl
 
 	if !json.Valid(b.Scan.Spec) {
 		return nil, fmt.Errorf("scan bundle: scan.spec is not valid JSON")
-	}
-	if err := validateBundleTriage(b); err != nil {
-		return nil, err
 	}
 
 	// Missing referenced entities fall back to NULL; the import must not assume
@@ -401,32 +320,34 @@ func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, confl
 		return nil, fmt.Errorf("insert imported scan: %w", err)
 	}
 
-	// Per-occurrence lifecycle: the dedup identity is recomputed from the raw
-	// payload (never trusted from the bundle), mapped to the bundle's lifecycle
-	// entry by that identity, and the occurrence + lifecycle upsert + link happen
-	// per finding. An occurrence whose identity has no lifecycle entry in the
-	// bundle (a crafted or older bundle) still gets a synthesized, neutral
-	// lifecycle row — every occurrence must link to one.
-	lifecycleByKey := make(map[string]types.ScanBundleLifecycle, len(b.Lifecycle))
-	for _, l := range b.Lifecycle {
-		lifecycleByKey[DedupKey(l.TemplateID, l.MatchedAt, l.ResultDiscriminator)] = l
-	}
-
+	// Ingest each occurrence like a normally completed scan: the dedup identity
+	// is recomputed from the verbatim raw payload and the existing lifecycle
+	// path derives the destination's own first/last-seen, mitigation counters,
+	// and evidence pointers. Analyst overlays already on the destination are
+	// never touched (import is the scan result, not the exporter's analysis).
 	result := &ScanImportResult{ScanID: scanID, Fallbacks: fallbacks}
-	for _, f := range b.Findings {
-		rawProjection, err := findingJSONBProjection(f.Raw)
-		if err != nil {
-			return nil, fmt.Errorf("scan bundle: finding %q/%q raw payload: %w", f.TemplateID, f.MatchedAt, err)
+	for _, bf := range b.Findings {
+		f := types.NucleiFinding{
+			TemplateID: bf.TemplateID,
+			Type:       bf.Type,
+			Host:       bf.Host,
+			MatchedAt:  bf.MatchedAt,
+			Info: types.NucleiInfo{
+				Name:     bf.Name,
+				Severity: bf.Severity,
+				Tags:     orEmpty(bf.Tags),
+			},
 		}
-		discriminator, err := resultDiscriminator(rawProjection)
-		if err != nil {
-			return nil, fmt.Errorf("scan bundle: finding %q/%q result identity: %w", f.TemplateID, f.MatchedAt, err)
+		if len(bf.CVE) > 0 {
+			f.Info.Classification = &types.NucleiClassification{CVEID: bf.CVE}
 		}
-		key := DedupKey(f.TemplateID, f.MatchedAt, discriminator)
-		entry, hasEntry := lifecycleByKey[key]
-		created, err := upsertImportedLifecycle(ctx, tx, scanID, scan.TargetID, b.Scan.CreatedAt, f, entry, hasEntry, key, discriminator, rawProjection)
+		prep, prepErr := prepareOccurrence(f, bf.Raw)
+		if prepErr != nil {
+			return nil, fmt.Errorf("scan bundle: prepare finding %q/%q: %w", bf.TemplateID, bf.MatchedAt, prepErr)
+		}
+		created, err := ingestFindingOccurrence(ctx, tx, scanID, scan.TargetID, b.Scan.CreatedAt, prep, bf.CreatedAt)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("scan bundle: ingest finding %q/%q: %w", bf.TemplateID, bf.MatchedAt, err)
 		}
 		if created {
 			result.LifecycleCreated++
@@ -493,185 +414,6 @@ func resolveScanBundleRefs(ctx context.Context, tx pgx.Tx, b *types.ScanBundle) 
 		}
 	}
 	return out, fallbacks, nil
-}
-
-// validateBundleTriage enforces the analyst-overlay vocabulary on the bundle's
-// lifecycle entries (defense in depth — the DB CHECKs would reject them too)
-// and rejects duplicate lifecycle identities, so every recomputed dedup key
-// maps to at most one bundle entry.
-func validateBundleTriage(b *types.ScanBundle) error {
-	seen := make(map[string]struct{}, len(b.Lifecycle))
-	for i, l := range b.Lifecycle {
-		if !ValidDisposition(l.Disposition) {
-			return fmt.Errorf("scan bundle: lifecycle %d has invalid disposition %q", i, l.Disposition)
-		}
-		if l.RecastSeverity != "" && !ValidSeverity(l.RecastSeverity) {
-			return fmt.Errorf("scan bundle: lifecycle %d has invalid recast severity %q", i, l.RecastSeverity)
-		}
-		key := DedupKey(l.TemplateID, l.MatchedAt, l.ResultDiscriminator)
-		if _, dup := seen[key]; dup {
-			return fmt.Errorf("scan bundle: lifecycle %d duplicates an earlier lifecycle identity", i)
-		}
-		seen[key] = struct{}{}
-	}
-	return nil
-}
-
-// upsertImportedLifecycle inserts one occurrence and upserts its lifecycle row,
-// mirroring IngestFinding's chronology rules plus the bundle's analyst overlays:
-//
-//   - first/last-seen follow the stable (scan.created_at, scan.id) order, so an
-//     older imported scan can never move last_seen backwards;
-//   - times_mitigated takes the greatest of the local and bundle counters, so no
-//     mitigation history is ever lost by a merge;
-//   - the bundle's disposition applies only when the local row has none, and its
-//     recast only when the local row has none — a destination analyst's existing
-//     overlay always wins over an imported one.
-//
-// It reports whether the lifecycle row was created.
-func upsertImportedLifecycle(ctx context.Context, tx pgx.Tx, scanID, targetID string, scanCreatedAt time.Time,
-	f types.ScanBundleFinding, entry types.ScanBundleLifecycle, hasEntry bool, key, discriminator string, rawProjection []byte) (bool, error) {
-	finding := types.NucleiFinding{
-		TemplateID: f.TemplateID,
-		Type:       f.Type,
-		Host:       f.Host,
-		MatchedAt:  f.MatchedAt,
-		Info: types.NucleiInfo{
-			Name:     f.Name,
-			Severity: f.Severity,
-			Tags:     orEmpty(f.Tags),
-		},
-	}
-	if len(f.CVE) > 0 {
-		finding.Info.Classification = &types.NucleiClassification{CVEID: f.CVE}
-	}
-	finding = findingTextProjection(finding)
-	rawLine := findingRawLine(f.Raw)
-	endpointKey := postgresText(types.EndpointKey(f.MatchedAt, f.Type))
-
-	// The occurrence's scope is the scan's resolved scope (findings_scan_scope_fk
-	// constrains target_id to the owning scan), so the exported occurrence's
-	// denormalized target copy is replaced by the fallback-resolved one.
-	var occID int64
-	if err := tx.QueryRow(ctx,
-		`INSERT INTO findings
-		   (scan_id, target_id, dedup_key, result_discriminator, template_id, name, severity,
-		    host, matched_at, type, cve, tags, raw, raw_line, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-		 RETURNING id`,
-		scanID, nullStr(targetID), key, discriminator, finding.TemplateID, finding.Info.Name, finding.Info.Severity,
-		finding.Host, finding.MatchedAt, finding.Type, orEmpty(finding.CVEs()), orEmpty(finding.Info.Tags), rawProjection, rawLine, f.CreatedAt,
-	).Scan(&occID); err != nil {
-		return false, fmt.Errorf("insert imported occurrence: %w", err)
-	}
-
-	firstSeenAt, lastSeenAt := f.CreatedAt, f.CreatedAt
-	timesMitigated := 0
-	disposition := "none"
-	var acceptExpiresAt *time.Time
-	var dispositionNote, dispositionBy, recastSeverity, recastNote, recastBy string
-	var dispositionAt, recastAt *time.Time
-	if hasEntry {
-		if !entry.FirstSeenAt.IsZero() {
-			firstSeenAt = entry.FirstSeenAt
-		}
-		if !entry.LastSeenAt.IsZero() {
-			lastSeenAt = entry.LastSeenAt
-		}
-		if entry.TimesMitigated > 0 {
-			timesMitigated = entry.TimesMitigated
-		}
-		disposition = entry.Disposition
-		acceptExpiresAt = entry.AcceptExpiresAt
-		dispositionNote, dispositionBy = entry.DispositionNote, entry.DispositionBy
-		dispositionAt = entry.DispositionAt
-		recastSeverity, recastNote, recastBy = entry.RecastSeverity, entry.RecastNote, entry.RecastBy
-		recastAt = entry.RecastAt
-	}
-
-	// (scan.created_at, scan.id) tuple comparisons keep the lifecycle chronology
-	// stable: an imported scan from an older time never moves last_seen backwards
-	// or first_seen forwards.
-	const incomingNewer = `COALESCE((
-		SELECT (current_scan.created_at, current_scan.id) < ($26::timestamptz, $27::uuid)
-		  FROM scans current_scan
-		 WHERE current_scan.id = finding_lifecycle.last_seen_scan
-	), true)`
-	const incomingOlder = `COALESCE((
-		SELECT ($26::timestamptz, $27::uuid) < (current_scan.created_at, current_scan.id)
-		  FROM scans current_scan
-		 WHERE current_scan.id = finding_lifecycle.first_seen_scan
-	), true)`
-	upsert := fmt.Sprintf(
-		`INSERT INTO finding_lifecycle
-		   (dedup_key, result_discriminator, template_id, name, severity, host,
-		    matched_at, endpoint_key, type, cve, tags, first_seen_scan, first_seen_at, last_seen_scan,
-		    last_seen_at, latest_occurrence_id, times_mitigated,
-		    disposition, accept_expires_at, disposition_note, disposition_by, disposition_at,
-		    recast_severity, recast_note, recast_by, recast_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $12, $14, $15, $16,
-		         $17, $18, $19, $20, $21, $22, $23, $24, $25)
-		 ON CONFLICT (dedup_key) DO UPDATE SET
-		    first_seen_scan      = CASE WHEN %[2]s THEN excluded.first_seen_scan ELSE finding_lifecycle.first_seen_scan END,
-		    first_seen_at        = least(finding_lifecycle.first_seen_at, excluded.first_seen_at),
-		    last_seen_scan       = CASE WHEN %[1]s THEN excluded.last_seen_scan ELSE finding_lifecycle.last_seen_scan END,
-		    last_seen_at         = greatest(finding_lifecycle.last_seen_at, excluded.last_seen_at),
-		    name                 = CASE WHEN %[1]s THEN excluded.name ELSE finding_lifecycle.name END,
-		    severity             = CASE WHEN %[1]s THEN excluded.severity ELSE finding_lifecycle.severity END,
-		    host                 = CASE WHEN %[1]s THEN excluded.host ELSE finding_lifecycle.host END,
-		    matched_at           = CASE WHEN %[1]s THEN excluded.matched_at ELSE finding_lifecycle.matched_at END,
-		    endpoint_key         = CASE WHEN %[1]s THEN excluded.endpoint_key ELSE finding_lifecycle.endpoint_key END,
-		    type                 = CASE WHEN %[1]s THEN excluded.type ELSE finding_lifecycle.type END,
-		    cve                  = CASE WHEN %[1]s THEN excluded.cve ELSE finding_lifecycle.cve END,
-		    tags                 = CASE WHEN %[1]s THEN excluded.tags ELSE finding_lifecycle.tags END,
-		    result_discriminator = excluded.result_discriminator,
-		    latest_occurrence_id = CASE WHEN %[1]s THEN excluded.latest_occurrence_id ELSE finding_lifecycle.latest_occurrence_id END,
-		    times_mitigated      = greatest(finding_lifecycle.times_mitigated, excluded.times_mitigated),
-		    disposition          = CASE
-		                               WHEN finding_lifecycle.disposition <> 'none' OR finding_lifecycle.accept_expires_at IS NOT NULL
-		                               THEN finding_lifecycle.disposition ELSE excluded.disposition END,
-		    accept_expires_at    = CASE
-		                               WHEN finding_lifecycle.disposition <> 'none' OR finding_lifecycle.accept_expires_at IS NOT NULL
-		                               THEN finding_lifecycle.accept_expires_at ELSE excluded.accept_expires_at END,
-		    disposition_note     = CASE
-		                               WHEN finding_lifecycle.disposition <> 'none' OR finding_lifecycle.accept_expires_at IS NOT NULL
-		                               THEN finding_lifecycle.disposition_note ELSE excluded.disposition_note END,
-		    disposition_by       = CASE
-		                               WHEN finding_lifecycle.disposition <> 'none' OR finding_lifecycle.accept_expires_at IS NOT NULL
-		                               THEN finding_lifecycle.disposition_by ELSE excluded.disposition_by END,
-		    disposition_at       = CASE
-		                               WHEN finding_lifecycle.disposition <> 'none' OR finding_lifecycle.accept_expires_at IS NOT NULL
-		                               THEN finding_lifecycle.disposition_at ELSE excluded.disposition_at END,
-		    recast_severity      = CASE
-		                               WHEN finding_lifecycle.recast_severity IS NOT NULL
-		                               THEN finding_lifecycle.recast_severity ELSE excluded.recast_severity END,
-		    recast_note          = CASE
-		                               WHEN finding_lifecycle.recast_severity IS NOT NULL
-		                               THEN finding_lifecycle.recast_note ELSE excluded.recast_note END,
-		    recast_by            = CASE
-		                               WHEN finding_lifecycle.recast_severity IS NOT NULL
-		                               THEN finding_lifecycle.recast_by ELSE excluded.recast_by END,
-		    recast_at            = CASE
-		                               WHEN finding_lifecycle.recast_severity IS NOT NULL
-		                               THEN finding_lifecycle.recast_at ELSE excluded.recast_at END
-		 RETURNING id, (xmax = 0) AS created`,
-		incomingNewer, incomingOlder)
-	var lcID int64
-	var lcCreated bool
-	if err := tx.QueryRow(ctx, upsert,
-		key, discriminator, finding.TemplateID, finding.Info.Name, finding.Info.Severity, finding.Host,
-		finding.MatchedAt, endpointKey, finding.Type, orEmpty(finding.CVEs()), orEmpty(finding.Info.Tags),
-		scanID, firstSeenAt, lastSeenAt, occID, timesMitigated,
-		disposition, acceptExpiresAt, nullStr(dispositionNote), nullStr(dispositionBy), dispositionAt,
-		nullStr(recastSeverity), nullStr(recastNote), nullStr(recastBy), recastAt,
-		scanCreatedAt, scanID,
-	).Scan(&lcID, &lcCreated); err != nil {
-		return false, fmt.Errorf("upsert imported lifecycle: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE findings SET finding_id = $1 WHERE id = $2`, lcID, occID); err != nil {
-		return false, fmt.Errorf("link imported occurrence: %w", err)
-	}
-	return lcCreated, nil
 }
 
 // applyScanCoverage advances the destination's last_covering_scan evidence

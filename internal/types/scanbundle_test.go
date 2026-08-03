@@ -29,10 +29,6 @@ func sampleBundle() ScanBundle {
 			Host: "scanme.invalid", MatchedAt: "https://scanme.invalid/", Type: "http",
 			CreatedAt: t0, Raw: json.RawMessage(`{"template-id":"cve-x","host":"scanme.invalid"}`),
 		}},
-		Lifecycle: []ScanBundleLifecycle{{
-			TemplateID: "cve-x", MatchedAt: "https://scanme.invalid/",
-			FirstSeenAt: t0, LastSeenAt: t0, TimesMitigated: 0, Disposition: "none",
-		}},
 	}
 }
 
@@ -69,15 +65,6 @@ func TestScanBundleValidateRejects(t *testing.T) {
 		{"finding with broken raw", func(b *ScanBundle) {
 			b.Findings[0].Raw = json.RawMessage(`not json`)
 		}, "invalid or missing raw"},
-		{"lifecycle without template", func(b *ScanBundle) {
-			b.Lifecycle[0].TemplateID = ""
-		}, "no template_id"},
-		{"lifecycle negative mitigations", func(b *ScanBundle) {
-			b.Lifecycle[0].TimesMitigated = -2
-		}, "negative times_mitigated"},
-		{"lifecycle missing timestamps", func(b *ScanBundle) {
-			b.Lifecycle[0].FirstSeenAt = time.Time{}
-		}, "missing first/last seen"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

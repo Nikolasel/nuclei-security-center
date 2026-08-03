@@ -124,7 +124,7 @@ func TestScanBundleHTTPRoundTripPostgres(t *testing.T) {
 	if err := jsonBundle.Validate(); err != nil {
 		t.Fatalf("exported bundle fails validation: %v", err)
 	}
-	if jsonBundle.Scan.ID != scanID || len(jsonBundle.Findings) != 1 || len(jsonBundle.Lifecycle) != 1 {
+	if jsonBundle.Scan.ID != scanID || len(jsonBundle.Findings) != 1 {
 		t.Fatalf("json export contents wrong: %s", jsonRR.Body.String())
 	}
 

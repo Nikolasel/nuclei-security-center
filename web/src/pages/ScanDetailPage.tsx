@@ -75,7 +75,7 @@ export function ScanDetailPage() {
             <a
               href={scanBundleExportUrl(id, "zip")}
               className="text-sm font-normal text-indigo-600 hover:underline dark:text-indigo-400"
-              title="Complete scan bundle: scan record, findings, raw output and finding lifecycle (#136)"
+              title="Export scan bundle: scan record, resolved config and every occurrence as preserved raw JSON — the destination re-derives its own finding lifecycle (#136)"
             >
               Download bundle (zip)
             </a>

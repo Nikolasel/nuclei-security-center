@@ -134,7 +134,9 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 		t.Fatalf("mirror scan policy on destination: %v", err)
 	}
 
-	// Analyst overlays on the source lifecycle rows.
+	// Analyst overlays on the source lifecycle rows. These must NOT leak into the
+	// bundle: a bundle carries the scan's results, not the exporter's analysis,
+	// so the destination re-derives its own lifecycle (a .ness file, not one).
 	rows, _, err := origin.ListLifecycleFindings(ctx, FindingQuery{}, 50, 0)
 	if err != nil {
 		t.Fatalf("list lifecycle: %v", err)
@@ -163,8 +165,8 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 	if bundle.Scan.State != string(types.ScanComplete) || bundle.Scan.TemplatesCommit != "roundtrip-commit" {
 		t.Fatalf("bundle scan record wrong: state=%s commit=%s", bundle.Scan.State, bundle.Scan.TemplatesCommit)
 	}
-	if len(bundle.Findings) != 2 || len(bundle.Lifecycle) != 2 {
-		t.Fatalf("bundle contents wrong: %d findings, %d lifecycle", len(bundle.Findings), len(bundle.Lifecycle))
+	if len(bundle.Findings) != 2 {
+		t.Fatalf("bundle contents wrong: %d findings", len(bundle.Findings))
 	}
 	if bundle.Config.TargetID != target.ID || bundle.Config.TemplateSetID != templateSet.ID || bundle.Config.ScanPolicyID != policy.ID {
 		t.Fatalf("bundle config refs wrong: %+v", bundle.Config)
@@ -222,7 +224,9 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 		t.Fatalf("tpl-a occurrence missing")
 	}
 
-	// Lifecycle: both rows, overlays carried, occurrence link + coverage evidence.
+	// Lifecycle: both rows are re-derived by the destination's own rules with NO
+	// overlays (analyst dispositions/recasts are never exported), plus occurrence
+	// links and coverage evidence.
 	lifecycle, _, err := dest.ListLifecycleFindings(ctx, FindingQuery{}, 50, 0)
 	if err != nil {
 		t.Fatalf("list imported lifecycle: %v", err)
@@ -234,17 +238,17 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 	for _, row := range lifecycle {
 		lcByTemplate[row.TemplateID] = row
 	}
-	if lcByTemplate["tpl-a"].Disposition != "accepted" {
-		t.Fatalf("imported disposition wrong: %q", lcByTemplate["tpl-a"].Disposition)
+	if lcByTemplate["tpl-a"].Disposition != "none" {
+		t.Fatalf("imported disposition must be none (overlays are never carried), got %q", lcByTemplate["tpl-a"].Disposition)
 	}
-	if lcByTemplate["tpl-b"].RecastSeverity == nil || *lcByTemplate["tpl-b"].RecastSeverity != "critical" {
-		t.Fatalf("imported recast wrong: %v", lcByTemplate["tpl-b"].RecastSeverity)
+	if lcByTemplate["tpl-b"].RecastSeverity != nil {
+		t.Fatalf("imported recast must be nil (overlays are never carried), got %v", lcByTemplate["tpl-b"].RecastSeverity)
 	}
 	if lcByTemplate["tpl-a"].LastSeenScan == nil || *lcByTemplate["tpl-a"].LastSeenScan != scanID {
-		t.Fatalf("last_covering_scan evidence missing after import: %v", lcByTemplate["tpl-a"].LastSeenScan)
+		t.Fatalf("last_seen_scan evidence missing after import: %v", lcByTemplate["tpl-a"].LastSeenScan)
 	}
 
-	// Re-export from the destination: the scan/findings/lifecycle must round-trip
+	// Re-export from the destination: the scan and its results must round-trip
 	// exactly (config snapshots may differ only in that the refs resolved on the
 	// origin instance — here both are the same ids since the destination is empty).
 	reBundle, err := dest.ScanBundleForExport(ctx, scanID)
@@ -337,7 +341,9 @@ func TestScanBundleImportFallbackPostgres(t *testing.T) {
 	}
 
 	// A bundle whose every reference is unknown locally, exported while the scan
-	// was still running, carrying a neutral disposition for the same finding.
+	// was still running. Like any bundle it carries only the scan's results —
+	// never a lifecycle or analyst analysis — so nothing can overwrite the
+	// local overlay even in principle.
 	bundle := &types.ScanBundle{
 		Format:        types.ScanBundleFormat,
 		FormatVersion: types.ScanBundleFormatVersion,
@@ -365,18 +371,6 @@ func TestScanBundleImportFallbackPostgres(t *testing.T) {
 			Type:       finding.Type,
 			CreatedAt:  time.Now().UTC().Add(-time.Hour),
 			Raw:        raw,
-		}},
-		Lifecycle: []types.ScanBundleLifecycle{{
-			TemplateID:  finding.TemplateID,
-			MatchedAt:   finding.MatchedAt,
-			Name:        finding.Info.Name,
-			Severity:    finding.Info.Severity,
-			Host:        finding.Host,
-			Type:        finding.Type,
-			EndpointKey: types.EndpointKey(finding.MatchedAt, finding.Type),
-			FirstSeenAt: time.Now().UTC().Add(-2 * time.Hour),
-			LastSeenAt:  time.Now().UTC().Add(-time.Hour),
-			Disposition: "none",
 		}},
 	}
 	if err := bundle.Validate(); err != nil {
@@ -413,8 +407,9 @@ func TestScanBundleImportFallbackPostgres(t *testing.T) {
 		t.Fatalf("missing schedule must fall back to NULL, got %q", *importedSchedule)
 	}
 
-	// The destination analyst's overlay must still win over the bundle's neutral
-	// disposition, and the local occurrence count is now two.
+	// The destination analyst's overlay must still win (import never carries an
+	// analysis), the local occurrence count is now two, and the imported
+	// occurrence did not roll the lifecycle back to the bundle's older dates.
 	lifecycle, _, err := dest.ListLifecycleFindings(ctx, FindingQuery{}, 50, 0)
 	if err != nil {
 		t.Fatalf("list lifecycle: %v", err)

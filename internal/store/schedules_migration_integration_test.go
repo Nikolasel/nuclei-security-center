@@ -99,8 +99,10 @@ func TestScheduleNameUniquenessUpgradePostgres(t *testing.T) {
 	if names[exactDupID] != "NIGHTLY SCAN (3)" {
 		t.Fatalf("second duplicate = %q, want %q", names[exactDupID], "NIGHTLY SCAN (3)")
 	}
-	// The pre-existing owner of the generated name outranks the row that just
-	// acquired it, so the cascade renames the original " (2)" row, not dupID.
+	// dupID was seeded a minute earlier than this row, and ranking is purely
+	// (created_at, id) — so the row that just acquired the generated name
+	// outranks the pre-existing owner, and the cascade renames the original
+	// " (2)" row, not dupID.
 	if names[takenNameID] != "nightly scan (2) (2)" {
 		t.Fatalf("hand-suffixed owner = %q, want %q", names[takenNameID], "nightly scan (2) (2)")
 	}

@@ -428,13 +428,14 @@ func resolveScanBundleRefs(ctx context.Context, tx pgx.Tx, b *types.ScanBundle) 
 }
 
 // applyScanCoverage advances the destination's last_covering_scan evidence
-// pointers for the lifecycle rows the imported scan actually observed — the
-// same evidence update MarkComplete performs at normal completion, without
-// flipping the scan state or its timestamps. The candidate set is anchored on
-// the imported occurrences, never on the bundle's covered_endpoints list: an
-// import must not close a finding it carries no evidence about, so a manifest
-// that only claims coverage (with zero findings) cannot advance anyone's
-// detection state.
+// pointers for the lifecycle rows the imported scan actually observed. This is
+// deliberately narrower than MarkComplete's completion-time update: a real scan
+// advances coverage from its covered_endpoints list (verified evidence that the
+// node probed the pair), while an import may only advance it for occurrences it
+// actually carries — a manifest that merely claims coverage has no observations
+// behind it, so it must not close a finding it never saw. The caller gates this
+// on state == ScanComplete, so a failed import proves nothing either. No scan
+// state or timestamps are flipped here.
 func applyScanCoverage(ctx context.Context, tx pgx.Tx, scanID string) error {
 	_, err := tx.Exec(ctx,
 		`WITH completed_scan AS (

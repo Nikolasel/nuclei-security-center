@@ -7,10 +7,12 @@ import (
 )
 
 // NormalizeTargetHost canonicalizes the case-insensitive parts of a target
-// entry without changing URL paths or IP/CIDR text. URL paths, userinfo, and
-// non-empty explicit ports remain part of the target identity because they can change
-// the request Nuclei sends. Validation remains the backend's responsibility;
-// this helper only trims and canonicalizes values.
+// entry without changing URL paths or ordinary IP/CIDR text. IPv4-mapped IPv6
+// literals are emitted in their IPv4 form so the identity and scanner input
+// agree. URL paths, userinfo, and non-empty explicit ports remain part of the
+// target identity because they can change the request Nuclei sends. Validation
+// remains the backend's responsibility; this helper only trims and
+// canonicalizes values.
 func NormalizeTargetHost(host string) string {
 	host = strings.TrimSpace(host)
 	if strings.Contains(host, "://") {
@@ -28,6 +30,12 @@ func NormalizeTargetHost(host string) string {
 	if strings.Contains(host, "/") {
 		return host
 	}
+	if addrPort, err := netip.ParseAddrPort(host); err == nil {
+		if addrPort.Addr().Is4In6() {
+			return netip.AddrPortFrom(addrPort.Addr().Unmap(), addrPort.Port()).String()
+		}
+		return host
+	}
 	if strings.Count(host, ":") == 1 {
 		i := strings.LastIndex(host, ":")
 		hostPart, port := host[:i], host[i+1:]
@@ -39,10 +47,10 @@ func NormalizeTargetHost(host string) string {
 		}
 		return strings.ToLower(hostPart) + ":" + port
 	}
-	if _, err := netip.ParseAddrPort(host); err == nil {
-		return host
-	}
-	if _, err := netip.ParseAddr(host); err == nil {
+	if addr, err := netip.ParseAddr(host); err == nil {
+		if addr.Is4In6() {
+			return addr.Unmap().String()
+		}
 		return host
 	}
 	return strings.ToLower(host)
@@ -50,7 +58,8 @@ func NormalizeTargetHost(host string) string {
 
 // targetHostIdentity returns a canonical comparison key for IP and CIDR
 // spellings. The output value itself remains the first normalized/trimmed
-// representation so target text is not rewritten merely to deduplicate it.
+// representation, apart from IPv4-mapped IPv6 which NormalizeTargetHost
+// converts to IPv4 for scanner compatibility.
 func targetHostIdentity(host string) string {
 	if prefix, err := netip.ParsePrefix(host); err == nil {
 		return prefix.Masked().String()

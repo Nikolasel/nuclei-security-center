@@ -16,6 +16,8 @@ func TestNormalizeTargetHost(t *testing.T) {
 		{name: "empty port", in: "Example.COM:", want: "example.com"},
 		{name: "URL host only", in: "HTTPS://EXAMPLE.com/AdminPanel", want: "https://example.com/AdminPanel"},
 		{name: "IP unchanged", in: "10.0.0.1", want: "10.0.0.1"},
+		{name: "mapped IPv4 address", in: "::ffff:10.0.0.1", want: "10.0.0.1"},
+		{name: "mapped IPv4 address with port", in: "[::ffff:10.0.0.1]:80", want: "10.0.0.1:80"},
 		{name: "CIDR unchanged", in: "2001:DB8::/64", want: "2001:DB8::/64"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -43,6 +45,10 @@ func TestDeduplicateTargetHostsPreservesOrder(t *testing.T) {
 		"0:0:0:0:0:0:0:1",
 		"[2001:DB8::1]:8080",
 		"[2001:db8::1]:8080",
+		"::ffff:10.0.0.1",
+		"10.0.0.1",
+		"[::ffff:10.0.0.1]:80",
+		"10.0.0.1:80",
 	})
 	want := []string{
 		"example.com",
@@ -53,6 +59,8 @@ func TestDeduplicateTargetHostsPreservesOrder(t *testing.T) {
 		"2001:DB8::1",
 		"::1",
 		"[2001:DB8::1]:8080",
+		"10.0.0.1",
+		"10.0.0.1:80",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("DeduplicateTargetHosts = %v, want %v", got, want)

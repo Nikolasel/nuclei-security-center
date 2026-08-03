@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -101,7 +102,7 @@ func TestResolveConfigSpecHonorsExcludeTemplateSetPostgres(t *testing.T) {
 	}
 	target, err := st.CreateTarget(ctx, store.Target{
 		Name:  "resolver-target-" + types.NewID(),
-		Hosts: []string{"resolver.invalid"},
+		Hosts: []string{"resolver.invalid", "resolver.invalid", "second.invalid", "resolver.invalid"},
 	})
 	if err != nil {
 		t.Fatalf("create target: %v", err)
@@ -111,6 +112,9 @@ func TestResolveConfigSpecHonorsExcludeTemplateSetPostgres(t *testing.T) {
 	spec, _, err := server.resolveConfigSpec(ctx, target.ID, templateSet.ID)
 	if err != nil {
 		t.Fatalf("resolve exclude config: %v", err)
+	}
+	if want := []string{"resolver.invalid", "second.invalid"}; !slices.Equal(spec.Targets, want) {
+		t.Fatalf("resolved target hosts = %v, want %v", spec.Targets, want)
 	}
 	if len(spec.Templates.TemplateIDs) != 1 || spec.Templates.TemplateIDs[0] != "resolver-keep" {
 		t.Fatalf("resolved template ids = %v, want [resolver-keep]", spec.Templates.TemplateIDs)

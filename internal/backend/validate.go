@@ -28,15 +28,34 @@ func validateTarget(t *store.Target) error {
 	if len(t.Hosts) == 0 {
 		return errors.New("at least one host is required")
 	}
-	for i, h := range t.Hosts {
+	hosts := make([]string, 0, len(t.Hosts))
+	for _, h := range t.Hosts {
 		h = strings.TrimSpace(h)
 		if err := validateHost(h); err != nil {
 			return fmt.Errorf("host %q: %w", h, err)
 		}
-		t.Hosts[i] = h
+		hosts = append(hosts, h)
 	}
+	t.Hosts = deduplicateTargetHosts(hosts)
 	t.Tags = trimAll(t.Tags)
 	return nil
+}
+
+// deduplicateTargetHosts keeps the first occurrence of each normalized target
+// host and preserves the caller's ordering. Target hosts are normalized by
+// validateTarget before this helper is called on write; scan resolution also
+// uses it to protect the scanner from duplicate hosts in older stored targets.
+func deduplicateTargetHosts(hosts []string) []string {
+	seen := make(map[string]struct{}, len(hosts))
+	out := make([]string, 0, len(hosts))
+	for _, host := range hosts {
+		if _, ok := seen[host]; ok {
+			continue
+		}
+		seen[host] = struct{}{}
+		out = append(out, host)
+	}
+	return out
 }
 
 // validateTemplateSet trims and checks a template set in place.

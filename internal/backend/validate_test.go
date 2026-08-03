@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -105,15 +106,19 @@ func TestValidateTarget(t *testing.T) {
 		t.Error("expected error for invalid host in list")
 	}
 	// Valid, and it trims/normalizes in place.
-	tg := &store.Target{Name: "  web  ", Hosts: []string{" example.com "}, Tags: []string{" prod ", ""}}
+	tg := &store.Target{
+		Name:  "  web  ",
+		Hosts: []string{" example.com ", "example.com", "second.example.com", " example.com "},
+		Tags:  []string{" prod ", ""},
+	}
 	if err := validateTarget(tg); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if tg.Name != "web" {
 		t.Errorf("name not trimmed: %q", tg.Name)
 	}
-	if len(tg.Hosts) != 1 || tg.Hosts[0] != "example.com" {
-		t.Errorf("host not trimmed: %v", tg.Hosts)
+	if want := []string{"example.com", "second.example.com"}; !slices.Equal(tg.Hosts, want) {
+		t.Errorf("hosts not trimmed and deduplicated: %v, want %v", tg.Hosts, want)
 	}
 	if len(tg.Tags) != 1 || tg.Tags[0] != "prod" {
 		t.Errorf("tags not cleaned: %v", tg.Tags)

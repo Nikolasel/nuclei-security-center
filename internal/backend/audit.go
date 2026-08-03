@@ -30,6 +30,7 @@ const (
 	eventScanDispatched        = "scan_dispatched"         // ad-hoc scan submit or schedule run
 	eventFindingTriaged        = "finding_triaged"         // disposition / severity recast
 	eventServiceAccountChanged = "service_account_changed" // service-account token create/rotate/revoke
+	eventScanImported          = "scan_imported"           // scan bundle import recreated a scan + findings (#136)
 )
 
 // statusRecorder wraps a ResponseWriter to remember the status code the handler

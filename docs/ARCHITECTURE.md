@@ -292,6 +292,24 @@ so scans survive a busy or briefly-unreachable node.
    entries.
 8. **Failure path** — node timeout/non-zero exit, or dispatch/poll failure → status
    `failed`, capture stderr tail and the reason.
+9. **Bundle export / import (#136)** — a viewer-level `GET /api/scans/{id}/export`
+   serializes the **complete record of one scan** into a versioned, self-contained
+   manifest (`format` + `format_version`, `scan` record incl. timestamps/state/source/
+   `discovered_targets`/`covered_endpoints`/resolved `template_ids` + `templates_commit`/
+   verbatim `spec`, config refs + snapshots, all **occurrences** with their preserved raw
+   JSONL, and the full **finding lifecycle** rows for the scan's findings). The same
+   document ships as `manifest.json` in a zip. An operator-level, audited
+   `POST /api/scans/import` recreates the scan on the destination **in one transaction**:
+   the dedup identity is recomputed from the verbatim raw payload (never trusted from the
+   manifest), each lifecycle row is upserted by that identity with the destination's
+   analyst overlay always winning (disposition/recast), `first/last-seen` only moves
+   outward on the stable `(created_at, id)` scan chronology, and `times_mitigated` takes
+   the greater counter. Missing local references (target / template set / scan policy /
+   node / schedule) fall back to NULL and are reported — never a failure. In-flight
+   exports import as `failed`; a scan id that already exists locally is `409` by default
+   (`conflict=duplicate` mints a fresh id). Import is fail-soft on references but
+   fail-hard on the manifest itself: version-checked, validated, bounded
+   (`ScanBundleMaxFindings` occurrences, 512 MiB upload cap, zip-bomb-limited extraction).
 
 ---
 

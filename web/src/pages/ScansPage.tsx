@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { hasRole, useMe } from "../auth";
 import { Button, Card, ErrorText, Field, Modal, ProgressBar, Spinner, StateBadge } from "../components/ui";
+import { ImportBundleModal } from "./ImportBundleModal";
 
 function RunScanModal({ onClose }: { onClose: () => void }) {
   const navigate = useNavigate();
@@ -95,6 +96,7 @@ export function ScansPage() {
   const canDelete = hasRole(me.data ?? undefined, "admin");
   const showActions = canCancel || canDelete;
   const [runOpen, setRunOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const qc = useQueryClient();
 
   const scans = useQuery({
@@ -118,6 +120,11 @@ export function ScansPage() {
         {canRun && (
           <Button variant="primary" onClick={() => setRunOpen(true)}>
             Run scan
+          </Button>
+        )}
+        {canRun && (
+          <Button variant="ghost" onClick={() => setImportOpen(true)}>
+            Import bundle
           </Button>
         )}
       </div>
@@ -232,6 +239,7 @@ export function ScansPage() {
       )}
 
       {runOpen && <RunScanModal onClose={() => setRunOpen(false)} />}
+      {importOpen && <ImportBundleModal onClose={() => setImportOpen(false)} />}
     </div>
   );
 }

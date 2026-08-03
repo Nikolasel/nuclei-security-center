@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { api, scanLogUrl, scanRawUrl, type EndpointCoverage } from "../api";
+import { api, scanBundleExportUrl, scanLogUrl, scanRawUrl, type EndpointCoverage } from "../api";
 import { hasRole, useMe } from "../auth";
 import { ScanFindingsView } from "../components/ScanFindingsView";
 import { Button, Card, ErrorText, ProgressBar, Spinner, StateBadge } from "../components/ui";
@@ -72,6 +72,20 @@ export function ScanDetailPage() {
                 Download log
               </a>
             )}
+            <a
+              href={scanBundleExportUrl(id, "zip")}
+              className="text-sm font-normal text-indigo-600 hover:underline dark:text-indigo-400"
+              title="Complete scan bundle: scan record, findings, raw output and finding lifecycle (#136)"
+            >
+              Download bundle (zip)
+            </a>
+            <a
+              href={scanBundleExportUrl(id)}
+              className="text-sm font-normal text-indigo-600 hover:underline dark:text-indigo-400"
+              title="Same bundle as readable JSON (#136)"
+            >
+              Download bundle (JSON)
+            </a>
           </span>
         </h1>
       </div>

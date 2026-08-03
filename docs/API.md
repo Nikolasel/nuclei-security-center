@@ -78,6 +78,40 @@ curl -sb jar.txt -X DELETE localhost:8080/api/scans/<scan_id>        # => 204
 To tune how a scan runs, edit or create a [scan policy](#config-scan-policies). Select the target
 separately at launch, so the same policy can be reused across approved scopes.
 
+**Scan bundles — export / import (#136).** `GET /api/scans/{id}/export?format=json|zip` (viewer)
+downloads a complete, self-contained, versioned manifest of one scan: the scan record
+(`state`, timestamps, `source`, `discovered_targets`, `covered_endpoints`, resolved
+`template_ids` + `templates_commit`, and the verbatim dispatch `spec`), the resolved config that
+produced it (target / template-set / scan-policy snapshots plus the reference ids on the
+exporting instance), every immutable **occurrence** with its preserved Nuclei raw JSON, and the
+complete **finding lifecycle** for the scan's findings (dispositions, recast severities,
+first/last-seen, mitigation counters). `format=zip` wraps the same document as `manifest.json`
+inside a zip archive.
+
+`POST /api/scans/import?conflict=error|duplicate` (operator, audited `scan_imported`) recreates
+the scan, its occurrences, and its finding lifecycle on this instance. The dedup identity is
+**recomputed from the verbatim raw payload** — never trusted from the manifest — and occurrence
+scope follows the resolved destination target. References (target / template set / scan policy /
+node / schedule) that don't exist here **fall back to NULL** and are listed in the response's
+`fallbacks`; a missing entity never fails the import (fail-soft on references, fail-hard on the
+bundle itself). An in-flight (queued/running) export imports as `failed`. A destination analyst's
+existing disposition/recast always wins over an imported one; `first/last-seen` only ever moves
+outward and `times_mitigated` takes the greater of the two. The default conflict policy `error`
+returns **409** when the exported scan id already exists locally; `conflict=duplicate` imports
+under a fresh id instead. A bundle must be a format/version this backend understands and must
+validate (`400` otherwise); zip bundles are sniffed by the `PK` magic and extracted from
+`manifest.json`, with a 512 MiB upload ceiling.
+
+```sh
+# download the manifest for one scan (viewer)
+curl -sb jar.txt "localhost:8080/api/scans/<scan_id>/export" -o bundle.nsc-bundle.json
+# the same document zipped
+curl -sb jar.txt "localhost:8080/api/scans/<scan_id>/export?format=zip" -o bundle.nsc-bundle.zip
+# recreate the scan + findings + lifecycle here (operator); 409 if the id already exists
+curl -sb jar.txt -X POST -H 'content-type: application/octet-stream' \
+  --data-binary @bundle.nsc-bundle.zip "localhost:8080/api/scans/import" | jq
+```
+
 ## Findings lifecycle
 
 Findings are **deduplicated** across scans and tracked over time with a **Tenable Security

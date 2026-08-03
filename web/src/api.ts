@@ -336,6 +336,43 @@ export function scanLogUrl(id: string): string {
   return `/api/scans/${id}/log`;
 }
 
+/** scanBundleExportUrl is the download URL for a complete scan bundle (JSON or
+ *  zip, #136). The browser navigates to it so the same-origin session cookie
+ *  authenticates the download, like scanRawUrl. */
+export function scanBundleExportUrl(id: string, format: "json" | "zip" = "json"): string {
+  return `/api/scans/${id}/export?format=${format}`;
+}
+
+/** ImportScanBundleResponse mirrors the backend's ScanImportResult (#136). */
+export interface ImportScanBundleResponse {
+  scan_id: string;
+  findings_imported: number;
+  lifecycle_created: number;
+  lifecycle_updated: number;
+  fallbacks?: { field: string; exporter_id: string }[];
+}
+
+/** importScanBundle uploads a scan bundle (a .nsc-bundle JSON or zip, #136) and
+ *  recreates the scan, its findings, and its finding lifecycle on this instance.
+ *  conflict=duplicate imports under a fresh id instead of failing with 409 when
+ *  the exported scan id already exists here. */
+export async function importScanBundle(
+  file: File,
+  conflict: "error" | "duplicate" = "error",
+): Promise<ImportScanBundleResponse> {
+  const res = await fetch(`/api/scans/import?conflict=${encodeURIComponent(conflict)}`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: await file.arrayBuffer(),
+  });
+  if (!res.ok) {
+    const text = (await res.text()).trim();
+    throw new ApiError(res.status, text || res.statusText);
+  }
+  return (await res.json()) as ImportScanBundleResponse;
+}
+
 // Occurrence is one per-scan observation (the immutable scan-detail row). It
 // links to its deduplicated lifecycle finding via finding_id.
 export interface Occurrence {

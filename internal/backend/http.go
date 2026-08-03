@@ -90,6 +90,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/scans/{id}/raw", s.requireRole(RoleViewer, s.handleGetScanRaw))
 	mux.HandleFunc("GET /api/scans/{id}/log", s.requireRole(RoleViewer, s.handleGetScanLog))
 
+	// Scan bundle (#136): a versioned, round-trippable export of a complete scan.
+	// Export is a viewer read; import recreates a scan + findings + lifecycle on
+	// this instance and is an operator mutation (audited under scan_imported).
+	mux.HandleFunc("GET /api/scans/{id}/export", s.requireRole(RoleViewer, s.handleExportScanBundle))
+	mux.HandleFunc("POST /api/scans/import", s.mutation(eventScanImported, "scan.import", "scan", RoleOperator, s.handleImportScanBundle))
+
 	// Findings — the deduplicated, triageable lifecycle entities (§3). Analyst
 	// overlays (disposition, severity recast) are mutations → operator; reads → viewer.
 	mux.HandleFunc("GET /api/findings", s.requireRole(RoleViewer, s.handleListFindings))

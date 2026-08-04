@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"strings"
@@ -245,5 +246,127 @@ func TestBaselineTargetIndependentPolicyOwnershipPostgres(t *testing.T) {
 	if firstSchedules != 0 || secondSchedules != 1 || policies != 1 {
 		t.Fatalf("post-target-delete rows = first schedules:%d second schedules:%d policies:%d, want 0/1/1",
 			firstSchedules, secondSchedules, policies)
+	}
+}
+
+func TestBaselineDeleteScanSerializesWithFindingIngestPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	st := openIsolatedPostgres(t, ctx, dsn)
+
+	target, err := st.CreateTarget(ctx, Target{
+		Name:  "delete-ingest-lock-order-" + types.NewID(),
+		Hosts: []string{"delete-ingest.invalid"},
+	})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	finding := types.NucleiFinding{
+		TemplateID: "delete-ingest-lock-order",
+		Host:       target.Hosts[0],
+		MatchedAt:  "https://delete-ingest.invalid",
+		Type:       "http",
+		Info: types.NucleiInfo{
+			Name:     "Delete/ingest lock order",
+			Severity: "high",
+		},
+	}
+	raw, err := json.Marshal(finding)
+	if err != nil {
+		t.Fatalf("marshal finding: %v", err)
+	}
+	scanID, err := st.CreateScan(ctx, types.ScanSpec{Targets: target.Hosts}, ScanLink{TargetID: target.ID})
+	if err != nil {
+		t.Fatalf("create scan: %v", err)
+	}
+	if err := st.IngestFinding(ctx, scanID, target.ID, finding, raw); err != nil {
+		t.Fatalf("ingest initial finding: %v", err)
+	}
+	if err := st.MarkComplete(ctx, scanID, "", ""); err != nil {
+		t.Fatalf("complete scan: %v", err)
+	}
+
+	var occurrenceID, lifecycleID int64
+	if err := st.pool.QueryRow(ctx,
+		`SELECT id, finding_id FROM findings WHERE scan_id = $1`, scanID,
+	).Scan(&occurrenceID, &lifecycleID); err != nil {
+		t.Fatalf("read initial occurrence: %v", err)
+	}
+
+	writer, err := st.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin concurrent ingest transaction: %v", err)
+	}
+	defer writer.Rollback(context.Background())
+	if _, err := writer.Exec(ctx, `
+		INSERT INTO findings
+		       (scan_id, template_id, name, severity, host, matched_at, type,
+		        raw, cve, tags, target_id, dedup_key, finding_id, raw_line,
+		        result_discriminator)
+		SELECT scan_id, template_id, name, severity, host, matched_at, type,
+		       raw, cve, tags, target_id, dedup_key, finding_id, raw_line,
+		       result_discriminator
+		  FROM findings
+		 WHERE id = $1`, occurrenceID); err != nil {
+		t.Fatalf("insert concurrent occurrence: %v", err)
+	}
+
+	deleteErr := make(chan error, 1)
+	go func() {
+		_, _, err := st.DeleteScan(ctx, scanID)
+		deleteErr <- err
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var waiting bool
+		if err := st.pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				  FROM pg_stat_activity
+				 WHERE datname = current_database()
+				   AND wait_event_type = 'Lock'
+				   AND ((query LIKE '%raw_object_key%' AND query LIKE '%FOR UPDATE%')
+				        OR query LIKE '%DELETE FROM scans WHERE id%')
+			)`).Scan(&waiting); err != nil {
+			t.Fatalf("inspect blocked delete: %v", err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("DeleteScan did not block behind the in-flight occurrence writer")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if _, err := writer.Exec(ctx,
+		`UPDATE finding_lifecycle SET severity = severity WHERE id = $1`, lifecycleID,
+	); err != nil {
+		t.Fatalf("concurrent lifecycle update deadlocked with DeleteScan: %v", err)
+	}
+	if err := writer.Commit(ctx); err != nil {
+		t.Fatalf("commit concurrent ingest transaction: %v", err)
+	}
+	if err := <-deleteErr; err != nil {
+		t.Fatalf("delete scan after concurrent ingest: %v", err)
+	}
+
+	var lifecycleRows, occurrenceRows int
+	if err := st.pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM finding_lifecycle WHERE id = $1),
+			(SELECT count(*) FROM findings WHERE scan_id = $2)`,
+		lifecycleID, scanID,
+	).Scan(&lifecycleRows, &occurrenceRows); err != nil {
+		t.Fatalf("read repaired lifecycle state: %v", err)
+	}
+	if lifecycleRows != 0 || occurrenceRows != 0 {
+		t.Fatalf("post-delete rows = lifecycle:%d occurrences:%d, want 0/0", lifecycleRows, occurrenceRows)
 	}
 }

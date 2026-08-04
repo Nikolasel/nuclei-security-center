@@ -706,8 +706,11 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 
 	var rkey, lkey *string
 	var state string
-	err = tx.QueryRow(ctx, `SELECT state, raw_object_key, log_object_key FROM scans WHERE id = $1`, id).
-		Scan(&state, &rkey, &lkey)
+	err = tx.QueryRow(ctx, `
+		SELECT state, raw_object_key, log_object_key
+		  FROM scans
+		 WHERE id = $1
+		 FOR UPDATE`, id).Scan(&state, &rkey, &lkey)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return "", "", ErrNotFound

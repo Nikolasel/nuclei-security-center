@@ -85,7 +85,7 @@ func (r *Runner) discover(ctx context.Context, spec types.ScanSpec, targetsFile,
 		if err != nil {
 			return nil, fmt.Errorf("create alive-hosts file: %w", err)
 		}
-		runErr := r.runNaabu(ctx, buildNaabuHostDiscoveryArgs(targetsFile, d), f, logw, tally)
+		runErr := r.runNaabu(ctx, "naabu-host-discovery", buildNaabuHostDiscoveryArgs(targetsFile, d), f, logw, tally)
 		f.Close()
 		if runErr != nil {
 			return nil, fmt.Errorf("host discovery: %w", runErr)
@@ -111,7 +111,7 @@ func (r *Runner) discover(ctx context.Context, spec types.ScanSpec, targetsFile,
 	// did it or because the policy explicitly disabled it. Results go to the
 	// -output file (stdout discarded).
 	outFile := filepath.Join(dir, "discovery.jsonl")
-	if err := r.runNaabu(ctx, buildNaabuPortScanArgs(scanInput, outFile, scanType, d), io.Discard, logw, tally); err != nil {
+	if err := r.runNaabu(ctx, "naabu-port-scan", buildNaabuPortScanArgs(scanInput, outFile, scanType, d), io.Discard, logw, tally); err != nil {
 		return nil, err
 	}
 	return parseNaabuResults(outFile)
@@ -123,7 +123,7 @@ func (r *Runner) discover(ctx context.Context, spec types.ScanSpec, targetsFile,
 // live progress signal. It runs in its own process group so ctx cancel/timeout
 // kills naabu and any child, and maps a deadline to a clear "timed out" error
 // (fail-closed).
-func (r *Runner) runNaabu(ctx context.Context, args []string, stdout, logw io.Writer, tally *discoveryTally) error {
+func (r *Runner) runNaabu(ctx context.Context, phase string, args []string, stdout, logw io.Writer, tally *discoveryTally) error {
 	cmd := exec.CommandContext(ctx, r.naabuPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
@@ -135,6 +135,7 @@ func (r *Runner) runNaabu(ctx context.Context, args []string, stdout, logw io.Wr
 	dw := &discoveryWriter{inner: logw, tally: tally}
 	cmd.Stdout = stdout
 	cmd.Stderr = dw
+	writeCommandLog(logw, phase, r.naabuPath, args)
 	if err := cmd.Run(); err != nil {
 		// A timeout gets a clean message — the OS reason and stderr tail only bury
 		// the cause; the full naabu stderr is in the execution-log archive (#94).

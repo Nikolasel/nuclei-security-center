@@ -8,9 +8,18 @@ import (
 )
 
 const (
-	redactedCommandValue      = "[REDACTED]"
-	maxLoggedTemplatePaths    = 16
-	templatePathSummaryFormat = "[%d template paths omitted]"
+	redactedCommandValue       = "[REDACTED]"
+	maxLoggedTemplatePaths     = 16
+	templatePathSampleEachSide = 4
+	templatePathSummaryFormat  = "[%d template paths omitted]"
+)
+
+type commandTool uint8
+
+const (
+	commandToolUnknown commandTool = iota
+	commandToolNuclei
+	commandToolNaabu
 )
 
 // sensitiveCommandFlags covers values that must not be copied into an execution
@@ -78,16 +87,18 @@ var sensitiveCommandFlagSuffixes = []string{
 // argv boundaries, including spaces and shell metacharacters in paths, without
 // pretending the line is safe to paste into a particular shell. The executable is
 // argv[0], followed by the arguments passed to exec.Command. Large repeated
-// -templates lists are summarized when they exceed maxLoggedTemplatePaths because
-// resolved template IDs are persisted on the scan and a viewer-visible execution
-// log should not be dominated by a megabyte-long single line.
+// -templates lists retain a small first/last sample and summarize the middle when
+// they exceed maxLoggedTemplatePaths because resolved template IDs are persisted
+// on the scan and a viewer-visible execution log should not be dominated by a
+// megabyte-long single line. Redaction is phase-aware because Nuclei's -p is a
+// proxy value while naabu's -p is a port value.
 func writeCommandLog(w io.Writer, phase, executable string, args []string) {
 	if w == nil {
 		return
 	}
 	argv := make([]string, 1, len(args)+1)
 	argv[0] = executable
-	argv = append(argv, redactCommandArgs(compactCommandArgs(args))...)
+	argv = append(argv, redactCommandArgs(compactCommandArgs(args), commandToolForPhase(phase))...)
 	encoded, err := json.Marshal(argv)
 	if err != nil {
 		return // []string cannot fail to marshal; logging must never fail a scan
@@ -106,7 +117,14 @@ func compactCommandArgs(args []string) []string {
 				i += 2
 			}
 			if len(paths) > maxLoggedTemplatePaths {
-				compacted = append(compacted, flag, fmt.Sprintf(templatePathSummaryFormat, len(paths)))
+				for _, path := range paths[:templatePathSampleEachSide] {
+					compacted = append(compacted, flag, path)
+				}
+				omitted := len(paths) - 2*templatePathSampleEachSide
+				compacted = append(compacted, flag, fmt.Sprintf(templatePathSummaryFormat, omitted))
+				for _, path := range paths[len(paths)-templatePathSampleEachSide:] {
+					compacted = append(compacted, flag, path)
+				}
 			} else {
 				for _, path := range paths {
 					compacted = append(compacted, flag, path)
@@ -124,15 +142,26 @@ func isTemplateFlag(arg string) bool {
 	return arg == "-templates" || arg == "--templates"
 }
 
-func redactCommandArgs(args []string) []string {
+func commandToolForPhase(phase string) commandTool {
+	switch {
+	case phase == "nuclei":
+		return commandToolNuclei
+	case strings.HasPrefix(phase, "naabu-"):
+		return commandToolNaabu
+	default:
+		return commandToolUnknown
+	}
+}
+
+func redactCommandArgs(args []string, tool commandTool) []string {
 	redacted := append([]string(nil), args...)
 	for i := 0; i < len(redacted); i++ {
 		flag, _, inline := strings.Cut(redacted[i], "=")
-		if inline && isSensitiveCommandFlag(flag) {
+		if inline && isSensitiveCommandFlag(flag, tool) {
 			redacted[i] = flag + "=" + redactedCommandValue
 			continue
 		}
-		if !inline && isSensitiveCommandFlag(redacted[i]) && i+1 < len(redacted) {
+		if !inline && isSensitiveCommandFlag(redacted[i], tool) && i+1 < len(redacted) {
 			redacted[i+1] = redactedCommandValue
 			i++
 		}
@@ -140,12 +169,15 @@ func redactCommandArgs(args []string) []string {
 	return redacted
 }
 
-func isSensitiveCommandFlag(arg string) bool {
+func isSensitiveCommandFlag(arg string, tool commandTool) bool {
 	flag := strings.TrimSpace(arg)
 	if flag == "-H" || flag == "-V" {
 		return true
 	}
 	normalized := strings.ToLower(flag)
+	if tool == commandToolNaabu && (normalized == "-p" || normalized == "--p") {
+		return false
+	}
 	if _, ok := sensitiveCommandFlags[normalized]; ok {
 		return true
 	}

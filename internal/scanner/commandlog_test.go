@@ -93,11 +93,19 @@ func TestWriteCommandLogCompactsLargeTemplateArgv(t *testing.T) {
 	if len(records) != 1 {
 		t.Fatalf("got %d command records, want 1", len(records))
 	}
-	if !slices.Contains(records[0].argv, fmt.Sprintf(templatePathSummaryFormat, templateCount)) {
+	const sampleEachSide = 4
+	if !slices.Contains(records[0].argv, fmt.Sprintf(templatePathSummaryFormat, templateCount-2*sampleEachSide)) {
 		t.Errorf("command log lacks template summary: %#v", records[0].argv)
 	}
-	if slices.Contains(records[0].argv, templatePaths[0]) || slices.Contains(records[0].argv, templatePaths[len(templatePaths)-1]) {
-		t.Errorf("command log retained full-catalog template paths: %#v", records[0].argv)
+	for _, index := range []int{0, sampleEachSide - 1, templateCount - sampleEachSide, templateCount - 1} {
+		if !slices.Contains(records[0].argv, templatePaths[index]) {
+			t.Errorf("command log lost template sample %q: %#v", templatePaths[index], records[0].argv)
+		}
+	}
+	for _, index := range []int{sampleEachSide, templateCount - sampleEachSide - 1} {
+		if slices.Contains(records[0].argv, templatePaths[index]) {
+			t.Errorf("command log retained omitted template path %q: %#v", templatePaths[index], records[0].argv)
+		}
 	}
 	for _, arg := range []string{"-rate-limit", "42", "-max-host-error", "100"} {
 		if !slices.Contains(records[0].argv, arg) {
@@ -152,6 +160,23 @@ func TestWriteCommandLogRedactsSensitiveArguments(t *testing.T) {
 		if strings.Contains(log.String(), secret) {
 			t.Errorf("command log contains sensitive value %q: %q", secret, log.String())
 		}
+	}
+}
+
+func TestWriteCommandLogKeepsNaabuPortShortFlag(t *testing.T) {
+	var log bytes.Buffer
+	writeCommandLog(&log, "naabu-port-scan", "naabu", []string{
+		"-p", "443,8443",
+		"-rate", "1000",
+	})
+
+	records := parseCommandLog(t, log.String())
+	if len(records) != 1 {
+		t.Fatalf("got %d command records, want 1: %q", len(records), log.String())
+	}
+	want := []string{"naabu", "-p", "443,8443", "-rate", "1000"}
+	if !slices.Equal(records[0].argv, want) {
+		t.Errorf("naabu argv = %#v, want %#v", records[0].argv, want)
 	}
 }
 

@@ -1,3 +1,4 @@
+import * as Dialog from "@radix-ui/react-dialog";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
@@ -17,7 +18,7 @@ import {
   Target,
   X,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import type { Identity } from "../api";
 import { hasRole } from "../auth";
@@ -110,18 +111,15 @@ async function logout() {
 }
 
 /** NavPane renders the section navigation: as an icon rail when `collapsed` is
- *  true (labels dropped onto hover tooltips), or full labelled links otherwise.
- *  `onNavigate` closes the calling chrome (e.g. the mobile drawer) after a link. */
+ *  true (labels dropped onto hover tooltips), or full labelled links otherwise. */
 function NavPane({
   categories,
   collapsed,
   currentPath,
-  onNavigate,
 }: {
   categories: Category[];
   collapsed: boolean;
   currentPath: string;
-  onNavigate?: () => void;
 }) {
   return (
     <Tooltip.Provider delayDuration={0}>
@@ -151,7 +149,6 @@ function NavPane({
                   <NavLink
                     to={p.to}
                     aria-label={p.label}
-                    onClick={onNavigate}
                     className={paneLinkClass(isPaneActive(p, currentPath), collapsed)}
                   >
                     <Icon className="h-4 w-4 shrink-0" aria-hidden />
@@ -219,11 +216,18 @@ export function Layout({
       return !c;
     });
 
+  // Close the mobile drawer on any route change — a nav link click and a
+  // hardware/gesture back both move `currentPath`, so the drawer can't stay
+  // open over the new page (the old onNavigate hook was link-click-only).
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [currentPath]);
+
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
       <header className="border-b border-cyan-300/20 bg-slate-950 text-white shadow-[0_1px_28px_rgba(34,211,238,0.12)] dark:bg-slate-950">
         <div className="mx-auto flex max-w-[96rem] items-center gap-3 px-4 pt-[env(safe-area-inset-top)]">
-          {/* Mobile-only hamburger; the sidebar is a drawer on small viewports. */}
+          {/* Mobile-only hamburger; the sidebar is a dialog on small viewports. */}
           <button
             type="button"
             onClick={() => setMobileOpen(true)}
@@ -280,7 +284,7 @@ export function Layout({
       </header>
       <main className="mx-auto max-w-[96rem] px-4 py-6 pb-[calc(env(safe-area-inset-bottom)+1.5rem)]">
         {/* The sidebar is a fixed grid column on md+; on smaller viewports it
-            collapses into the mobile drawer below and content takes full width. */}
+            collapses into the mobile dialog below and content takes full width. */}
         <div
           className={cn(
             "grid gap-8",
@@ -307,36 +311,36 @@ export function Layout({
           <div className="min-w-0">{children}</div>
         </div>
 
-        {/* Mobile navigation drawer with backdrop. Slide-over nav on touch
-            viewports so content reflows full-width instead of sharing a column
-            with a wide sidebar. */}
-        {mobileOpen && (
-          <div className="fixed inset-0 z-50 md:hidden">
-            <button
-              type="button"
-              aria-label="Close navigation"
-              onClick={() => setMobileOpen(false)}
-              className="absolute inset-0 h-full w-full cursor-default bg-black/50"
-            />
-            <div className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col border-r border-neutral-200 bg-white shadow-xl dark:border-neutral-800 dark:bg-neutral-950">
-              <div className="flex items-center justify-between gap-3 px-3 pb-2 pt-[calc(env(safe-area-inset-top)+1rem)]">
+        {/* Mobile navigation dialog. Radix Dialog supplies what a modal needs —
+            Escape to close, focus trap, focus restore, aria-modal, and scroll
+            lock — and its overlay is not a button, so the only "Close
+            navigation" accessible name is on the X. */}
+        <Dialog.Root open={mobileOpen} onOpenChange={setMobileOpen}>
+          <Dialog.Portal>
+            <Dialog.Overlay className="fixed inset-0 z-40 bg-black/50 md:hidden" />
+            <Dialog.Content
+              aria-label="Navigation menu"
+              className="fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col border-r border-neutral-200 bg-white shadow-xl outline-none dark:border-neutral-800 dark:bg-neutral-950 md:hidden"
+            >
+              <div className="flex items-center justify-between gap-3 px-5 pb-2 pt-[calc(env(safe-area-inset-top)+1rem)]">
                 <Brand compact />
-                <button
-                  type="button"
-                  onClick={() => setMobileOpen(false)}
-                  aria-label="Close navigation"
-                  className="rounded-md p-2 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
-                >
-                  <X className="h-5 w-5" aria-hidden />
-                </button>
+                <Dialog.Close asChild>
+                  <button
+                    type="button"
+                    aria-label="Close navigation"
+                    className="rounded-md p-2 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
+                  >
+                    <X className="h-5 w-5" aria-hidden />
+                  </button>
+                </Dialog.Close>
               </div>
               <div className="h-px bg-neutral-200 dark:bg-neutral-800" />
-              <div className="flex-1 overflow-y-auto px-0 pb-[env(safe-area-inset-bottom)] pt-3">
-                <NavPane categories={visible} collapsed={false} currentPath={currentPath} onNavigate={() => setMobileOpen(false)} />
+              <div className="flex-1 overflow-y-auto px-2 pb-[env(safe-area-inset-bottom)] pt-3">
+                <NavPane categories={visible} collapsed={false} currentPath={currentPath} />
               </div>
-            </div>
-          </div>
-        )}
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
       </main>
     </div>
   );

@@ -20,7 +20,8 @@ jobs:
     services:
       postgres:
         # Keep this server major compatible with the runner's pg_dump client:
-        # pg_dump may be newer than the server, but it cannot be older.
+        # pg_dump may be newer than the server, but it cannot be older. A bad
+        # pairing makes the baseline-equivalence test fail with a version mismatch.
         image: postgres:16
         env:
           POSTGRES_DB: nsc_test
@@ -66,7 +67,9 @@ jobs:
       - name: go test
         env:
           NSC_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/nsc_test?sslmode=disable
-        run: go test -race ./...
+        # Integration tests must exercise the fresh service, never Go's restored
+        # test-result cache.
+        run: go test -race -count=1 ./...
 
   frontend:
     name: SPA typecheck / build

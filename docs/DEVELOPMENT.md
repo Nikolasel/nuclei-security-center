@@ -88,7 +88,8 @@ GitHub Actions runs:
 
 - Go formatting, vet, build, and race-enabled tests;
 - real-PostgreSQL store and backend integration tests, including baseline/alpha equivalence,
-  lifecycle behavior, scope enforcement, and scan-bundle round trips;
+  lifecycle behavior, scope enforcement, and scan-bundle round trips; CI disables Go's test-result
+  cache so every run exercises the fresh PostgreSQL service;
 - `npm ci` and the production SPA build; and
 - on `v*` tags, tests followed by multi-architecture backend/scanner image publication to GHCR.
 

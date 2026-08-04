@@ -17,8 +17,8 @@ import (
 //
 // The canonical byte string is length-prefixed and its extracted results are
 // sorted (duplicates retained), making source-array ordering irrelevant without
-// introducing delimiter ambiguity. Migration 0030 implements the same format
-// in SQL to split historical collisions without forking future observations.
+// introducing delimiter ambiguity. The database digest function implements the
+// same format so SQL and Go never fork future observations.
 func resultDiscriminator(raw []byte) (string, error) {
 	var source map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &source); err != nil {

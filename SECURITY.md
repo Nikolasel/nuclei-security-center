@@ -5,7 +5,7 @@ its own security seriously. Thanks for helping keep it and its users safe.
 
 ## Supported versions
 
-The project is in active alpha development. Security fixes land on the latest `main` and the
+The project is in active beta development. Security fixes land on the latest `main` and the
 most recent tagged release; older tags are not maintained.
 
 | Version | Supported |

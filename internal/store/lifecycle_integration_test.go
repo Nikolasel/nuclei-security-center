@@ -27,7 +27,7 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	st := openIsolatedPostgres(t, ctx, dsn, "9999")
+	st := openIsolatedPostgres(t, ctx, dsn)
 
 	suffix := types.NewID()
 	target, err := st.CreateTarget(ctx, Target{

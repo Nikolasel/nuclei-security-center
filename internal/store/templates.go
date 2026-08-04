@@ -614,7 +614,7 @@ func (s *Store) ApplyUpstreamTemplates(ctx context.Context, runID, ref string, i
 	// subsequent sync. Reparking the path under a per-id 'tombstone:' sentinel
 	// keeps it unique (id is unique per source) while leaving the real path open;
 	// if the id ever returns upstream the ON CONFLICT (id) upsert restores it. The
-	// deferred constraint (migration 0018) lets these renames overlap within the
+	// deferred source/path unique constraint lets these renames overlap within the
 	// transaction. An empty catalog is a valid snapshot only when the source was
 	// genuinely empty; the caller fails parse/walk errors before reaching here.
 	removed, err := tx.Exec(ctx,

@@ -54,8 +54,8 @@ const dedupSep = "\x1f"
 // shift the component boundaries and forge a collision with a different
 // (template, matched_at) tuple, merging/overwriting its lifecycle entity
 // (CWE-345/CWE-707). Real components (UUIDs, Nuclei template ids, URL matched-at)
-// carry no control characters, so this is a no-op for them. Migration 0030
-// applies the identical sanitation while rebuilding the global keys.
+// carry no control characters, so this is a no-op for them. The database digest
+// function applies the identical sanitation.
 func DedupKey(templateID, matchedAt, resultDiscriminator string) string {
 	key := sanitizeKeyComponent(templateID) + dedupSep + sanitizeKeyComponent(matchedAt)
 	if resultDiscriminator != "" {

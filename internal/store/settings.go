@@ -24,7 +24,7 @@ func (a AppSettings) RetentionActive() bool {
 	return a.RetentionEnabled && a.ScanRetentionDays != nil && *a.ScanRetentionDays > 0
 }
 
-// GetAppSettings returns the singleton settings row. Migration 0015 seeds it, so
+// GetAppSettings returns the singleton settings row. The baseline seeds it, so
 // this never has to synthesize a default.
 func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 	var a AppSettings

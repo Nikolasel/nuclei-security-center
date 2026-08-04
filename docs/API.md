@@ -1,11 +1,11 @@
 # API reference
 
 The JSON API lives under `/api/*`. Interactive callers authenticate with the session cookie
-(see [Configuration → Authentication](CONFIGURATION.md#authentication-oidcbff)); headless
+(see [Administration → Authentication](ADMIN_GUIDE.md#3-authentication-service-accounts-and-transport-security)); headless
 automation authenticates with a **service-account token** presented as
 `Authorization: Bearer <token>` (see [Service accounts](#service-accounts)). The examples
 below assume a cookie jar `jar.txt` populated by a real login, or
-[auth-disabled dev mode](CONFIGURATION.md#authentication-oidcbff) for headless use.
+[auth-disabled dev mode](ADMIN_GUIDE.md#authentication-and-sessions) for headless use.
 
 Authorization per endpoint follows the three roles: reads need `viewer`, running scans and
 config writes need `operator`, deletes need `admin`.
@@ -16,9 +16,6 @@ A scan is launched by selecting a **scan policy** (`scan_policy_id`) — the cen
 template and execution configuration — and an approved **target** (`target_id`; see
 [Scan policies](#config-scan-policies)). There is no ad-hoc host/spec path: every scan names a
 stored target, so scope is guaranteed by construction. Create a policy and target first, then:
-
-**Breaking change (#137):** callers must now send both IDs. A body containing only
-`scan_policy_id`, accepted by earlier alpha releases, is rejected with `target_id is required`.
 
 ```sh
 # start a scan using a policy against an approved target
@@ -401,8 +398,8 @@ The backend mirrors the upstream Nuclei template catalog into Postgres (managed 
 `TemplateSyncer`, #85) and lets you add **custom** templates alongside it. Every template is
 keyed by its Nuclei `id`; `source` is `upstream` or `custom`.
 
-For the UI-based operational workflow and PO acceptance test, see
-[Template administration](TEMPLATE_ADMINISTRATION.md).
+For the UI-based operational workflow, see
+[Administration → Template catalog and custom templates](ADMIN_GUIDE.md#template-catalog-and-custom-templates).
 
 ```sh
 # browse/search newest-ingested CVE templates via their canonical tag (paginated)
@@ -615,7 +612,7 @@ curl -sb jar.txt -X POST localhost:8080/api/nodes \
   `https://…`). The CA + client cert are public and returned on `GET`; `tls_client_key` is a
   **write-only secret** like `token` (never returned; blank on update keeps the stored key). On
   create the client cert + key must be supplied together; bad PEM / a mismatched pair is a `400`.
-  See [CONFIGURATION.md](CONFIGURATION.md#service-auth-tls--mtls).
+  See [Administration → Backend-to-scanner TLS and mTLS](ADMIN_GUIDE.md#backend-to-scanner-tls-and-mtls).
 - Endpoints: `GET|POST /api/nodes`, `GET|PUT|DELETE /api/nodes/{id}`.
 - **Health (#98):** the backend polls each node's `GET /v1/capabilities`
   (`nuclei_version`, `templates_commit`) every
@@ -624,7 +621,7 @@ curl -sb jar.txt -X POST localhost:8080/api/nodes \
   for a wrong token vs. a connection error for an unreachable node), so the cause is visible without
   reading server logs. A scan whose matching node is known-unhealthy fails fast with a clear error.
   Config (`SCANNER_URL`/`SCAN_ZONES`) seeds this registry on first boot only —
-  see [CONFIGURATION.md](CONFIGURATION.md#scanner-node-registry).
+  see [Administration → Scanner fleet](ADMIN_GUIDE.md#scanner-fleet).
 
 A node's read view also carries `templates_synced_at` — when the backend last pushed the full
 template catalog to it (#85). The backend does this automatically on a cadence
@@ -749,4 +746,4 @@ curl -sb jar.txt localhost:8080/api/scans/<scan-id>/raw -o scan.jsonl
 
 The scan-detail page shows a **Download raw output** link once the archive exists (`has_raw`).
 With `S3_ENDPOINT` unset the feature is off and the endpoint returns 404. Object-store
-configuration is in [Configuration](CONFIGURATION.md#object-storage).
+configuration is in [Administration → Object storage](ADMIN_GUIDE.md#object-storage).

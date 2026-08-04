@@ -92,20 +92,6 @@ func (s *Store) Close() { s.pool.Close() }
 
 // Migrate applies any embedded migrations not yet recorded, in filename order.
 func (s *Store) Migrate(ctx context.Context) error {
-	if _, err := s.pool.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS schema_migrations (
-			version    TEXT PRIMARY KEY,
-			checksum_sha256 TEXT,
-			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-		)`); err != nil {
-		return fmt.Errorf("ensure schema_migrations: %w", err)
-	}
-	if _, err := s.pool.Exec(ctx,
-		`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum_sha256 TEXT`,
-	); err != nil {
-		return fmt.Errorf("ensure migration checksums: %w", err)
-	}
-
 	entries, err := migrationsFS.ReadDir("migrations")
 	if err != nil {
 		return fmt.Errorf("read migrations: %w", err)
@@ -118,50 +104,120 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	sort.Strings(names)
 
+	type embeddedMigration struct {
+		name     string
+		sql      []byte
+		checksum string
+	}
+	migrations := make([]embeddedMigration, 0, len(names))
+	known := make(map[string]struct{}, len(names))
 	for _, name := range names {
 		sqlBytes, err := migrationsFS.ReadFile("migrations/" + name)
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", name, err)
 		}
 		sum := sha256.Sum256(sqlBytes)
-		checksum := fmt.Sprintf("%x", sum)
+		migrations = append(migrations, embeddedMigration{
+			name:     name,
+			sql:      sqlBytes,
+			checksum: fmt.Sprintf("%x", sum),
+		})
+		known[name] = struct{}{}
+	}
 
-		var recordedChecksum *string
-		err = s.pool.QueryRow(ctx,
-			`SELECT checksum_sha256 FROM schema_migrations WHERE version = $1`, name,
-		).Scan(&recordedChecksum)
-		switch {
-		case errors.Is(err, pgx.ErrNoRows):
-			// Apply below.
-		case err != nil:
-			return fmt.Errorf("check migration %s: %w", name, err)
-		case recordedChecksum == nil:
-			// Older installations predate checksums. Establish their current
-			// embedded migrations as the immutable baseline; separately named
-			// repair migrations handle any already-known historical drift.
-			if _, err := s.pool.Exec(ctx,
-				`UPDATE schema_migrations SET checksum_sha256 = $2 WHERE version = $1`,
-				name, checksum,
-			); err != nil {
-				return fmt.Errorf("baseline migration checksum %s: %w", name, err)
-			}
-			continue
-		case *recordedChecksum != checksum:
-			return fmt.Errorf(
-				"migration %s checksum mismatch: applied migrations are immutable (recorded %s, embedded %s)",
-				name, *recordedChecksum, checksum,
-			)
-		default:
+	if _, err := s.pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    TEXT PRIMARY KEY,
+			checksum_sha256 TEXT,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`); err != nil {
+		return fmt.Errorf("ensure schema_migrations: %w", err)
+	}
+	rows, err := s.pool.Query(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		return fmt.Errorf("list applied migrations: %w", err)
+	}
+	var unknown []string
+	for rows.Next() {
+		var version string
+		if err := rows.Scan(&version); err != nil {
+			rows.Close()
+			return fmt.Errorf("read applied migration: %w", err)
+		}
+		if _, ok := known[version]; !ok {
+			unknown = append(unknown, version)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list applied migrations: %w", err)
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf(
+			"database contains unsupported migration versions %s: alpha databases are not upgradeable; deploy fresh for beta",
+			strings.Join(unknown, ", "),
+		)
+	}
+
+	// Only supported histories may be brought to the checksummed beta format.
+	// In particular, do not mutate an alpha migration table before rejecting it.
+	if _, err := s.pool.Exec(ctx,
+		`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum_sha256 TEXT`,
+	); err != nil {
+		return fmt.Errorf("ensure migration checksums: %w", err)
+	}
+
+	applied := make(map[string]*string, len(names))
+	rows, err = s.pool.Query(ctx, `SELECT version, checksum_sha256 FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		return fmt.Errorf("load applied migration checksums: %w", err)
+	}
+	for rows.Next() {
+		var version string
+		var checksum *string
+		if err := rows.Scan(&version, &checksum); err != nil {
+			rows.Close()
+			return fmt.Errorf("read applied migration checksum: %w", err)
+		}
+		applied[version] = checksum
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("load applied migration checksums: %w", err)
+	}
+
+	// Validate the complete applied history before executing any unseen SQL.
+	for _, migration := range migrations {
+		recordedChecksum, ok := applied[migration.name]
+		if !ok {
 			continue
 		}
-		if _, err := s.pool.Exec(ctx, string(sqlBytes)); err != nil {
-			return fmt.Errorf("apply migration %s: %w", name, err)
+		switch {
+		case recordedChecksum == nil:
+			return fmt.Errorf(
+				"migration %s has no recorded checksum: alpha databases are not upgradeable; deploy fresh for beta",
+				migration.name,
+			)
+		case *recordedChecksum != migration.checksum:
+			return fmt.Errorf(
+				"migration %s checksum mismatch: applied migrations are immutable (recorded %s, embedded %s)",
+				migration.name, *recordedChecksum, migration.checksum,
+			)
+		}
+	}
+
+	for _, migration := range migrations {
+		if _, ok := applied[migration.name]; ok {
+			continue
+		}
+		if _, err := s.pool.Exec(ctx, string(migration.sql)); err != nil {
+			return fmt.Errorf("apply migration %s: %w", migration.name, err)
 		}
 		if _, err := s.pool.Exec(ctx,
 			`INSERT INTO schema_migrations (version, checksum_sha256) VALUES ($1, $2)`,
-			name, checksum,
+			migration.name, migration.checksum,
 		); err != nil {
-			return fmt.Errorf("record migration %s: %w", name, err)
+			return fmt.Errorf("record migration %s: %w", migration.name, err)
 		}
 	}
 	return nil

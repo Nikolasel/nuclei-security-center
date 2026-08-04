@@ -1,140 +1,97 @@
 # Development
 
+Operational deployment and configuration belong in the [Administration guide](ADMIN_GUIDE.md).
+This document covers the local edit/test loop.
+
 ## Backend
 
 ```sh
-go build ./...   # embeds web/dist (a placeholder until the SPA is built)
+go build ./...
 go vet ./...
 go test ./...
-gofmt -l .       # list unformatted files (fix with gofmt -w)
+gofmt -l .       # fix listed files with gofmt -w
 ```
 
-Structured logging is via `log/slog` (JSON handler). Schema changes go in a new numbered file
-under `internal/store/migrations/`; the runner applies unseen files in filename order and records
-them with a SHA-256 checksum in `schema_migrations`. Once a database may have recorded a migration,
-its file is immutable; add a new forward/repair migration instead. The runner baselines legacy
-records that predate checksums because their original bytes are unknowable, so checksums guarantee
-immutability only from this release forward. Known historical drift needs an explicit repair;
-unknown drift in a disposable development database should be reset. The runner fails fast on
-later content drift. Run `gofmt -w`, `go vet`, and `go test` before considering a change done.
+Structured logs use `log/slog` with a JSON handler. Errors should wrap causes with `%w`; HTTP
+handlers return plain-text errors plus an appropriate status.
 
-Repair migration `0029a` intentionally drop/recreates the scan-history index on both historical
-starting states, including a clean install where 0029 just created it, so its definition converges.
-Migration `0031` removes helpers left by an earlier unmerged 0030, but cannot make data rebuilt by
-that development-only revision equivalent; reset such a disposable database if data convergence
-matters.
+### Database migrations
 
-Migration `0030_global_finding_identity.sql` atomically rebuilds lifecycle identities and relinks
-all tracked occurrences. Existing lifecycle IDs survive exact one-to-one identity mappings; real
-splits and merges receive new IDs. For a large finding history, schedule this upgrade in a
-maintenance window because the rewrite can hold table locks and generate substantial WAL.
+`internal/store/migrations/0001_init.sql` is the beta baseline for fresh deployments. Alpha
+databases are intentionally rejected; do not add compatibility or upgrade logic for them.
 
-### Endpoint-coverage upgrade (`0033` + `0034`)
+After beta, each schema change goes in a new numbered SQL file. The runner applies unseen files in
+filename order and records SHA-256 checksums in `schema_migrations`. Applied files are immutable:
+never edit one after a database may have recorded it; add a forward/repair migration instead.
 
-This upgrade deliberately fails closed for historical scans. Migration `0033` resets each
-lifecycle row's `last_covering_scan` to its last observed scan and resets `times_mitigated` to
-zero because old scans have no authoritative request-trace evidence. As a result, findings that
-were previously shown as mitigated can reopen as new/active immediately after the upgrade.
-Analyst dispositions and occurrence history are preserved. Communicate this behavior and schedule
-the upgrade accordingly; subsequent successful traced scans re-establish mitigation evidence.
-
-Migration `0034` is the immutable forward correction from the development-time host-only
-representation to exact template + host:port pairs. It removes the superseded columns after
-backfilling lifecycle endpoint keys. Do not edit `0033` on databases that may already have
-recorded its checksum. Migration `0035` repairs scheme-less HTTP/HTTPS endpoint keys and adds
-the composite lifecycle lookup index used when scan completion expands exact coverage pairs.
-
-The template-aware finding-lifecycle regression is an explicit real-PostgreSQL integration test;
-regular CI stays free of service containers and skips it. Point local runs only at a disposable
-test database because the test applies migrations before creating and removing uniquely suffixed
-test rows:
+Real-PostgreSQL tests are opt-in so the ordinary suite needs no service container. Point them only at
+a disposable database; each test creates and drops an isolated schema:
 
 ```sh
-NSC_TEST_DATABASE_URL='postgres://nuclei:nuclei@localhost:5432/nuclei?sslmode=disable' \
-  go test ./internal/store -run TestTemplateAwareLifecyclePostgres -count=1 -v
+NSC_TEST_DATABASE_URL='postgres://nuclei:***@localhost:5432/nuclei?sslmode=disable' \
+  go test ./internal/store -count=1 -v
 ```
+
+`TestBaselineMatchesAlphaChainPostgres` applies the preserved historical chain and the beta baseline
+to separate schemas, dumps both with `pg_dump --schema-only`, and requires identical normalized
+DDL. Install `pg_dump`, put it on `PATH`, or set `NSC_TEST_PG_DUMP=/path/to/pg_dump`.
 
 ## Frontend
 
-The SPA lives in `web/` and is embedded into the backend binary via `go:embed`. For hot-reload
-development, run the Vite dev server and the backend in **auth-disabled dev mode** (unset
-`OIDC_ISSUER`, see [Configuration](CONFIGURATION.md#authentication-oidcbff)) so the SPA sees an
-all-roles dev user without the cross-origin login dance; real OIDC is exercised through the
-compose stack.
+The React/TypeScript SPA lives in `web/` and is embedded into the backend. For hot reload, run the
+backend with `OIDC_ISSUER` unset and `AUTH_DISABLED=true`, then:
 
 ```sh
 cd web
 npm install
-npm run dev        # http://localhost:5173, proxies /api → :8080
-npm run build      # type-check (tsc -b) + produce web/dist for embedding
+npm run dev        # http://localhost:5173; proxies /api to :8080
+npm run build      # type-checks and produces web/dist
 ```
 
-The build output `web/dist` is git-ignored except a committed placeholder `index.html`, so
-`go build` can embed something before a real SPA build. The Docker image builds the real SPA in a
-Node stage and copies it in before compiling the backend.
+`web/dist` is ignored except for its committed placeholder, allowing a fresh Go build before the
+real SPA exists. Docker builds the SPA before compiling the backend.
+
+## Full local stack
+
+```sh
+cp .env.example .env
+docker compose up --build
+```
+
+Open <http://localhost:8080>. This exercises real OIDC through seeded Keycloak plus Postgres, MinIO,
+and the scanner. Only claim end-to-end verification when the stack and a scan were actually run.
 
 ## Standalone scanner smoke test
 
-The scanner node needs no database, so it can be run and exercised on its own: build
-`cmd/scanner`, run it with `SCANNER_TOKEN` set and `NUCLEI_PATH` pointing anywhere, and hit the
-API (health → 200, missing token → 401, valid dispatch → 202, unknown id → 404). Installing
-`nuclei` locally (`brew install nuclei`) enables a real end-to-end run of the scanner half.
+The scanner has no database dependency. Build `cmd/scanner`, provide a 32+ character
+`SCANNER_TOKEN`, and point `NUCLEI_PATH`/`NAABU_PATH` at available binaries. Exercise health,
+unauthorized/authorized dispatch, unknown scan, cancellation, and result endpoints. Installing
+Nuclei/Naabu locally enables a real scanner-half run.
 
-## Discovery on Docker Desktop (macOS) reports every host as alive
+## Docker Desktop discovery caveat
 
-**Symptom:** during the `discovering` phase the scan detail shows `N hosts responding`
-where N equals the CIDR size of your target (`256` for a `/24`), and stays there. The
-"Discovered endpoints" list eventually reports the *real* count (e.g. `2 hosts · 15
-ports`) — so the per-host Nuclei line and the endpoints list are correct; only the live
-discovery tally is inflated.
+Docker Desktop on macOS runs Linux behind VM/NAT networking. SYN host discovery against private
+ranges can report every address alive even though the final open-port set is correct. The persisted
+`discovered_targets` is authoritative; the live count is only Naabu's view of the network.
 
-**Cause:** Docker Desktop on macOS does not bridge container networking onto the host's
-L2 segment — it runs Linux in a hidden VM and NATs traffic. naabu's `-with-host-discovery`
-(ICMP echo + TCP SYN/ACK to 80/443) against a non-routable address gets an answer from
-the VM's NAT gateway rather than a real host, so naabu counts the whole `/24` as alive.
-The same scan on a Linux host (`bridge`/`macvlan` networking) or against routable/internet
-targets returns the correct handful. This is a property of the toolchain's view of the
-network, not a scanner defect — the live host count is read from naabu's stderr and is only
-as accurate as naabu's L3 reachability.
+For routine macOS development, use `NAABU_SCAN_TYPE=connect`. Verify SYN/raw-socket behavior on a
+Linux host or routable network. See [Administration troubleshooting](ADMIN_GUIDE.md#9-troubleshooting).
 
-**What to do:**
+## Continuous integration and releases
 
-- Don't chase the tally — the authoritative answer is the persisted `discovered_targets`
-  (the post-scan endpoint list), parsed from naabu's JSON output, not the stderr tally.
-- For day-to-day dev, set `NAABU_SCAN_TYPE=connect` on the scanner service in
-  `docker-compose.yml`. Connect mode defaults to no host discovery, so it can't false-alive;
-  it still narrows Nuclei to the open ports it finds, in seconds. (On sparse *routable* ranges
-  SYN is faster because its default host-discovery pass prunes dead hosts first — see
-  [Architecture §4](ARCHITECTURE.md).)
-- For accurate SYN behavior, run the stack on a Linux host with `bridge` networking, or point
-  it at a routable/internet target. Treat the macOS dev path as a known-false-positive
-  environment, not a representative test of host discovery.
+GitHub Actions runs:
 
-**Verify you're in this case:** in the execution-log archive for the scan (download from the
-scan detail, or `mc cat local/scans/<id>/raw.jsonl` against local MinIO), the count of
-`Found alive host` lines equals the tally; if it equals the CIDR size, it's the NAT case.
+- Go formatting, vet, build, and race-enabled tests;
+- `npm ci` and the production SPA build; and
+- on `v*` tags, tests followed by multi-architecture backend/scanner image publication to GHCR.
 
-## Continuous integration & releases
-
-CI/CD runs on GitHub Actions (`.github/workflows/`):
-
-- **CI** (`ci.yml`) — on every push to `main` and every pull request: a Go job (gofmt check,
-  `go vet`, `go build`, `go test -race`) and an SPA job (`npm ci`, then `npm run build`, which
-  runs `tsc -b`). Superseded runs on the same ref are cancelled.
-- **Release** (`release.yml`) — on a `v*` tag (`git tag v0.4.0 && git push origin v0.4.0`):
-  gated on `go test`, then builds and pushes the **backend** and **scanner** images to private
-  GHCR — `ghcr.io/nikolasel/nuclei-security-center-{backend,scanner}` — tagged with the full
-  semver, `major.minor`, and the commit `sha`, using a GHCR layer cache. Auth is the built-in
-  `GITHUB_TOKEN` (`packages: write`), so no PAT is needed; the packages are private by default.
+Before opening a PR, run the repository-wide Go gates and the SPA production build. Keep generated
+`web/dist` output untracked.
 
 ## Conventions
 
-- Config via environment variables (see [Configuration](CONFIGURATION.md)); required vars fail
-  fast.
-- Errors wrapped with `%w` and context; HTTP handlers return plain-text errors + status.
-- Don't hand-roll solved problems — UUIDs, crypto, auth/token handling, and cron parsing go
-  through mature libraries (`github.com/google/uuid`, `github.com/robfig/cron/v3`,
-  `github.com/minio/minio-go/v7`). The stdlib bias applies only where stdlib is genuinely
-  first-class (HTTP routing via `ServeMux`, `encoding/json`, `log/slog`).
-- At a natural review boundary, scan for hand-rolled code that duplicates a mature library and
-  for unused/heavy deps to drop; introducing a dependency is a deliberate, noted choice.
+- Agent-created feature branches use `feature/<name>`; fixes use `fix/<name>`.
+- Configuration is environment-based; update [ADMIN_GUIDE.md](ADMIN_GUIDE.md) when adding a variable.
+- Preserve the scanner boundary: no database access and no scanner→backend callback path.
+- Use mature libraries for UUIDs, crypto, auth, object storage, and cron parsing rather than
+  hand-rolling solved primitives.

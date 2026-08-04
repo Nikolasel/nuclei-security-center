@@ -22,7 +22,7 @@ func TestSkippedFindingDoesNotMitigatePostgres(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	st := openIsolatedPostgres(t, ctx, dsn, "9999")
+	st := openIsolatedPostgres(t, ctx, dsn)
 
 	target, err := st.CreateTarget(ctx, Target{
 		Name:  "skipped-finding-lifecycle-" + types.NewID(),

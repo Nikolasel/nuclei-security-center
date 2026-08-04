@@ -36,7 +36,7 @@ Both services ship as multi-arch (`linux/amd64` + `linux/arm64`) images on a min
 10 Micro** base; the scanner is fully self-contained, baking in a checksum-verified, pinned `nuclei`
 binary (`NUCLEI_VERSION`) and `naabu`. The backend-owned template catalog is pushed to nodes as a
 verified bundle; the image contains no mutable community template cache. See
-**[docs/CONFIGURATION.md → Container images](docs/CONFIGURATION.md#container-images)**.
+**[Administration guide → Deployment](docs/ADMIN_GUIDE.md#1-deployment)**.
 
 ## Quick start
 
@@ -50,6 +50,9 @@ docker compose up --build
 Open **http://localhost:8080** and log in with a demo user (`admin` / `admin`,
 `operator` / `operator`, or `viewer` / `viewer`). The compose stack runs backend + UI on `:8080`,
 the scanner on `:8081`, plus Postgres, MinIO, and a seeded Keycloak IdP.
+
+> **Beta deployments must start with an empty PostgreSQL database.** Alpha databases are not
+> upgradeable; the backend rejects their migration history instead of attempting a partial upgrade.
 
 ## Repository layout
 
@@ -69,8 +72,7 @@ docker-compose.yml   postgres + minio + keycloak + scanner + backend
 
 - **[Architecture](docs/ARCHITECTURE.md)** — design principles, components, data model, and decisions.
 - **[API reference](docs/API.md)** — REST endpoints for scans, findings, dispositions, exports, and schedules.
-- **[Configuration](docs/CONFIGURATION.md)** — environment variables, OIDC/BFF auth, and object storage.
-- **[Template administration](docs/TEMPLATE_ADMINISTRATION.md)** — PO/operator guide to catalog sync, custom validation, explicit sets, node bundles, and portability.
+- **[Administration guide](docs/ADMIN_GUIDE.md)** — deployment, environment variables, authentication, bootstrap, operations, audit, and troubleshooting.
 - **[Development](docs/DEVELOPMENT.md)** — local dev workflow, auth-disabled mode, tests, and CI/CD.
 
 ## License

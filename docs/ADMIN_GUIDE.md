@@ -30,9 +30,14 @@ intended to scan.
 
 ```sh
 cp .env.example .env
-# Replace both development secrets in .env.
+# Change SCANNER_TOKEN. Keep the seeded OIDC secret unless you update the realm too.
 docker compose up --build
 ```
+
+The seeded Keycloak client secret in `deploy/keycloak/realm-nsc.json` matches `.env.example`.
+For local development, either leave that development-only `OIDC_CLIENT_SECRET` unchanged or,
+before Keycloak first imports the realm, set the same replacement value in both `.env` and the
+realm JSON. Changing only `.env` makes the OIDC callback's token exchange fail.
 
 Open <http://localhost:8080>. The compose stack includes Postgres, MinIO, Keycloak, one scanner,
 and the backend/SPA. Demo users use their username as the password:
@@ -86,6 +91,15 @@ such as `30s`, `15m`, and `6h`.
 | `TEMPLATE_SYNC_REF` | `latest` | Revision to mirror. `latest` resolves to the highest stable semantic-version tag; tags and commit SHAs are reproducible, while branch names advance. |
 | `TEMPLATE_SYNC_DIR` | `/tmp/nsc-template-sync` | Backend clone cache. Mount persistent storage to avoid repeated full clones. |
 | `TEMPLATE_DISTRIBUTE_INTERVAL` | `1h` | How often stale, idle scanner nodes receive the current full catalog bundle. Pre-dispatch top-up still runs. |
+
+`SCAN_ZONES` uses this JSON shape (the three PEM-valued TLS keys are optional):
+
+```sh
+export SCAN_ZONES='[{"name":"dmz","url":"https://scanner-dmz:8081","token":"replace-with-a-strong-token","cidrs":["10.20.0.0/16"],"tls_server_ca":"<PEM CA>","tls_client_cert":"<PEM client certificate>","tls_client_key":"<PEM client key>"}]'
+```
+
+Use escaped `\n` characters inside JSON strings when embedding multiline PEM values. Seed entries
+are insert-only by node name; PostgreSQL and subsequent API/UI edits are authoritative.
 
 ### Authentication and sessions
 
@@ -218,6 +232,15 @@ delete scan history.
 Upgrade Nuclei by rebuilding/deploying the scanner image with the pinned version, then verify node
 capabilities and custom-template validation.
 
+Routine template administration follows this workflow:
+
+1. An **operator** runs upstream sync and reviews the recorded sync result.
+2. An **operator** creates or updates custom YAML; a healthy scanner validates it before commit.
+3. An **operator** creates an `exact`, `all`, or `exclude` set and verifies its effective members.
+4. An **operator** pushes/syncs the current catalog bundle to nodes; viewers may inspect status.
+5. A **viewer** may export templates/sets, while an **operator** may import with `skip`, `overwrite`,
+   or deterministic `rename` conflict handling.
+
 ### Template sets
 
 Choose the mode deliberately:
@@ -284,8 +307,8 @@ Detection state is derived from scan evidence:
 | `previously_mitigated` | Flapped: mitigated, resurfaced, and absent again. |
 
 Closure is evidence-driven; there is no manual “fixed.” Missing/invalid request-trace coverage fails
-closed, and a completed scan that skipped malformed finding records cannot provide negative
-mitigation evidence. Analysts may apply `false_positive` or time-bounded `accepted` dispositions and
+closure, and a completed scan that skipped malformed finding records cannot provide negative
+mitigation evidence. Analysts may apply `false_positive` or optionally time-bounded `accepted` dispositions and
 recast severity.
 
 The lifecycle list exports as JSON, CSV, SARIF, or raw Nuclei JSONL with the same filters used in the

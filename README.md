@@ -43,9 +43,13 @@ verified bundle; the image contains no mutable community template cache. See
 Requires Docker (Go and the SPA both compile inside the build containers).
 
 ```sh
-cp .env.example .env          # set SCANNER_TOKEN + OIDC_CLIENT_SECRET
+cp .env.example .env          # change SCANNER_TOKEN; see the OIDC note below
 docker compose up --build
 ```
+
+The seeded local Keycloak realm and `.env.example` intentionally contain the same development-only
+`OIDC_CLIENT_SECRET`. Either leave that value unchanged locally, or—before the realm is first
+imported—change it in both `.env` and `deploy/keycloak/realm-nsc.json` so they still match.
 
 Open **http://localhost:8080** and log in with a demo user (`admin` / `admin`,
 `operator` / `operator`, or `viewer` / `viewer`). The compose stack runs backend + UI on `:8080`,

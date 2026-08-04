@@ -3,7 +3,7 @@
 The JSON API lives under `/api/*`. Interactive callers authenticate with the session cookie
 (see [Administration → Authentication](ADMIN_GUIDE.md#3-authentication-service-accounts-and-transport-security)); headless
 automation authenticates with a **service-account token** presented as
-`Authorization: Bearer <token>` (see [Service accounts](#service-accounts)). The examples
+`Authorization: Bearer ***` (see [Service accounts](#service-accounts)). The examples
 below assume a cookie jar `jar.txt` populated by a real login, or
 [auth-disabled dev mode](ADMIN_GUIDE.md#authentication-and-sessions) for headless use.
 

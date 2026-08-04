@@ -102,9 +102,10 @@ as accurate as naabu's L3 reachability.
 - Don't chase the tally — the authoritative answer is the persisted `discovered_targets`
   (the post-scan endpoint list), parsed from naabu's JSON output, not the stderr tally.
 - For day-to-day dev, set `NAABU_SCAN_TYPE=connect` on the scanner service in
-  `docker-compose.yml`. Connect mode does no host discovery, so it can't false-alive; it
-  still narrows Nuclei to the open ports it finds, in seconds. (On sparse *routable* ranges
-  SYN is faster because it prunes dead hosts first — see [Architecture §4](ARCHITECTURE.md).)
+  `docker-compose.yml`. Connect mode defaults to no host discovery, so it can't false-alive;
+  it still narrows Nuclei to the open ports it finds, in seconds. (On sparse *routable* ranges
+  SYN is faster because its default host-discovery pass prunes dead hosts first — see
+  [Architecture §4](ARCHITECTURE.md).)
 - For accurate SYN behavior, run the stack on a Linux host with `bridge` networking, or point
   it at a routable/internet target. Treat the macOS dev path as a known-false-positive
   environment, not a representative test of host discovery.

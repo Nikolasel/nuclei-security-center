@@ -191,10 +191,13 @@ export interface ScanPolicy {
   // unavailable. discovery_ports empty = naabu's top-1000 (nmap top-1000);
   // discovery_timeout_sec is discovery's own budget, separate from timeout_sec.
   discovery_enabled?: boolean | null;
-  // Scan mode: "syn" (SYN + host discovery, needs the node's CAP_NET_RAW +
-  // libpcap) or "connect" (unprivileged, no host discovery). Empty = the node's
+  // Scan mode: "syn" (needs the node's CAP_NET_RAW + libpcap) or "connect"
+  // (unprivileged). Empty = the node's
   // NAABU_SCAN_TYPE default; "syn" on a node without raw sockets fails closed.
   discovery_scan_type?: string;
+  // Host discovery is independent from the port-scan mode (#133). Null/omitted
+  // preserves today's default (on for SYN, off for connect); true/false forces it.
+  discovery_host_discovery?: boolean | null;
   discovery_ports?: string;
   discovery_timeout_sec?: number | null;
   // naabu tuning (null = naabu's default): -rate (pkts/s), -timeout (ms/probe),

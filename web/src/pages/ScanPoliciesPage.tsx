@@ -86,6 +86,11 @@ function ScanPolicyModal({
   const [discoveryEnabled, setDiscoveryEnabled] = useState(existing?.discovery_enabled ?? true);
   // "" = the node's NAABU_SCAN_TYPE default; else "syn" / "connect".
   const [discoveryScanType, setDiscoveryScanType] = useState(existing?.discovery_scan_type ?? "");
+  // null = scan-mode default (SYN on / connect off); true/false forces the
+  // independent host-discovery pass on/off.
+  const [discoveryHostDiscovery, setDiscoveryHostDiscovery] = useState<boolean | null>(
+    existing?.discovery_host_discovery ?? null,
+  );
   const [discoveryPorts, setDiscoveryPorts] = useState(existing?.discovery_ports ?? "");
   const [discoveryTimeoutSec, setDiscoveryTimeoutSec] = useState(
     existing?.discovery_timeout_sec != null ? String(existing.discovery_timeout_sec) : "",
@@ -124,6 +129,7 @@ function ScanPolicyModal({
         max_host_error: parseKnob(maxHostError),
         discovery_enabled: discoveryEnabled,
         discovery_scan_type: discoveryEnabled ? discoveryScanType || undefined : undefined,
+        discovery_host_discovery: discoveryEnabled ? discoveryHostDiscovery : null,
         discovery_ports: discoveryEnabled ? discoveryPorts.trim() || undefined : undefined,
         discovery_timeout_sec: discoveryEnabled ? parseKnob(discoveryTimeoutSec) : null,
         discovery_rate: discoveryEnabled ? parseKnob(discoveryRate) : null,
@@ -234,13 +240,31 @@ function ScanPolicyModal({
                   className="max-w-xs"
                 >
                   <option value="">Node default (NAABU_SCAN_TYPE)</option>
-                  <option value="syn">SYN + host discovery (faster; needs raw sockets)</option>
-                  <option value="connect">Connect (unprivileged; no host discovery)</option>
+                  <option value="syn">SYN (needs raw sockets)</option>
+                  <option value="connect">Connect (unprivileged)</option>
                 </Select>
                 <span className="mt-1 block text-xs text-neutral-500">
-                  SYN prunes dead hosts before scanning (the win on sparse ranges) but needs the node's
-                  raw-socket capability + libpcap — it fails closed on a node without them. Connect works
-                  anywhere but scans every host.
+                  SYN needs the node's raw-socket capability + libpcap; connect is unprivileged. Host
+                  discovery is controlled independently below: by default it is on for SYN and off for
+                  connect.
+                </span>
+              </Field>
+              <Field label="Host discovery">
+                <Select
+                  value={discoveryHostDiscovery == null ? "" : discoveryHostDiscovery ? "on" : "off"}
+                  onChange={(e) =>
+                    setDiscoveryHostDiscovery(e.target.value === "" ? null : e.target.value === "on")
+                  }
+                  className="max-w-xs"
+                >
+                  <option value="">Scan-mode default (SYN on · connect off)</option>
+                  <option value="on">Always on (extra discovery pass)</option>
+                  <option value="off">Always off (scan every host)</option>
+                </Select>
+                <span className="mt-1 block text-xs text-neutral-500">
+                  When enabled, naabu first identifies alive hosts and then port-scans only those hosts. Use
+                  this to opt connect scans into host discovery, or to keep SYN scans from pruning hosts that
+                  block the discovery probes. The host-discovery pass uses the node's SYN/raw-socket probes.
                 </span>
               </Field>
               <Field label="Ports (blank = top-1000)">
@@ -331,12 +355,18 @@ function knob(v: number | null | undefined) {
 }
 
 // discoveryCell summarizes a policy's naabu pre-pass: off, or on with its scan
-// mode (node default when unset) and port set (top-1000 when unset).
+// mode, independent host-discovery setting, and port set (top-1000 when unset).
 function discoveryCell(p: ScanPolicy) {
   if (p.discovery_enabled === false) return <span className="text-neutral-400">off</span>;
-  const mode = p.discovery_scan_type?.trim();
+  const mode = p.discovery_scan_type?.trim() || "node default";
+  const hostDiscovery =
+    p.discovery_host_discovery == null
+      ? "mode default"
+      : p.discovery_host_discovery
+        ? "host discovery"
+        : "no host discovery";
   const ports = p.discovery_ports?.trim() || "top-1000";
-  const summary = `${mode ? `${mode} · ` : ""}${ports}`;
+  const summary = `${mode} · ${hostDiscovery} · ${ports}`;
   return (
     <span className="inline-block max-w-80 truncate align-bottom font-mono text-xs" title={summary}>
       {summary}

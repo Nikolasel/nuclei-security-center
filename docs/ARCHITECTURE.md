@@ -244,12 +244,16 @@ so scans survive a busy or briefly-unreachable node.
    ranges. This needs raw sockets (`CAP_NET_RAW`, in Docker's default capability set) and
    **libpcap** (the hardened `ubi10-micro` runtime image copies in libpcap + its shared-lib
    closure, staged from a `ubi10-minimal` builder — see `deploy/Dockerfile.scanner`).
-   A scan policy can pick the mode per-scan (`discovery_scan_type` = `syn`|`connect`);
-   unset, it uses the node's `NAABU_SCAN_TYPE` default. Connect is an unprivileged TCP
-   connect scan with no host discovery — no capabilities or libpcap, but slower (it scans
-   every host) — for deployments that drop `NET_RAW`; requesting `syn` on such a node fails
-   the scan closed. Note connect still narrows Nuclei to the open ports it finds; it only
-   loses the dead-host pruning, so it is faster than disabling discovery outright. Discovery has
+   A scan policy can pick the port-scan mode per-scan (`discovery_scan_type` = `syn`|`connect`);
+   unset, it uses the node's `NAABU_SCAN_TYPE` default. Host discovery is an independent nullable
+   policy setting (`discovery_host_discovery`): unset preserves today's mode default (on for SYN,
+   off for connect), while true runs the two-pass host-discovery flow for either mode and false runs
+   one port-scan pass for either mode. Connect is an unprivileged TCP connect scan and, with its
+   default host-discovery setting, scans every host without the extra pruning pass — no capabilities
+   or libpcap, but slower — for deployments that drop `NET_RAW`; requesting `syn` on such a node fails
+   the scan closed. Note connect still narrows Nuclei to the open ports it finds when discovery is enabled;
+   it only loses the dead-host pruning by default. An explicitly enabled host-discovery pass uses the
+   same SYN/raw-socket probes even when the port-scan mode is connect. Discovery has
    its **own timeout budget**
    (separate from the Nuclei `timeout_sec`) and scans naabu's top-1000 ports by default
    (a policy can set an explicit port spec, including multiple ranges). It **fails

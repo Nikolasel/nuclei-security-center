@@ -413,7 +413,12 @@ func overlayScanPolicy(opts types.ScanOptions, p store.ScanPolicy) types.ScanOpt
 	if p.DiscoveryEnabled != nil {
 		enabled = *p.DiscoveryEnabled
 	}
-	d := types.DiscoveryOptions{Enabled: enabled, ScanType: p.DiscoveryScanType, Ports: p.DiscoveryPorts}
+	d := types.DiscoveryOptions{
+		Enabled:       enabled,
+		HostDiscovery: p.DiscoveryHostDiscovery,
+		ScanType:      p.DiscoveryScanType,
+		Ports:         p.DiscoveryPorts,
+	}
 	if p.DiscoveryTimeoutSec != nil {
 		d.TimeoutSec = *p.DiscoveryTimeoutSec
 	}

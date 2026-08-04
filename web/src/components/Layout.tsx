@@ -318,8 +318,8 @@ export function Layout({
               onClick={() => setMobileOpen(false)}
               className="absolute inset-0 h-full w-full cursor-default bg-black/50"
             />
-            <div className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col overflow-y-auto border-r border-neutral-200 bg-white pt-[env(safe-area-inset-top)] shadow-xl dark:border-neutral-800 dark:bg-neutral-950">
-              <div className="flex items-center justify-between px-4 pt-4">
+            <div className="absolute inset-y-0 left-0 flex w-72 max-w-[85vw] flex-col border-r border-neutral-200 bg-white shadow-xl dark:border-neutral-800 dark:bg-neutral-950">
+              <div className="flex items-center justify-between gap-3 px-3 pb-2 pt-[calc(env(safe-area-inset-top)+1rem)]">
                 <Brand compact />
                 <button
                   type="button"
@@ -330,7 +330,8 @@ export function Layout({
                   <X className="h-5 w-5" aria-hidden />
                 </button>
               </div>
-              <div className="flex-1 px-4 pb-[env(safe-area-inset-bottom)]">
+              <div className="h-px bg-neutral-200 dark:bg-neutral-800" />
+              <div className="flex-1 overflow-y-auto px-0 pb-[env(safe-area-inset-bottom)] pt-3">
                 <NavPane categories={visible} collapsed={false} currentPath={currentPath} onNavigate={() => setMobileOpen(false)} />
               </div>
             </div>

@@ -288,7 +288,7 @@ export function FindingsView() {
           </Card>
 
           {total > PAGE_SIZE && (
-            <div className="flex items-center justify-end gap-3 text-sm">
+            <div className="flex flex-wrap items-center justify-end gap-3 text-sm">
               <span className="text-neutral-500">
                 Page {Math.floor(offset / PAGE_SIZE) + 1} of {Math.ceil(total / PAGE_SIZE)}
               </span>

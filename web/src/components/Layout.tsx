@@ -223,6 +223,21 @@ export function Layout({
     setMobileOpen(false);
   }, [currentPath]);
 
+  // Close the drawer if the viewport crosses into the desktop layout (md+).
+  // Radix has no concept of a breakpoint, so without this the dialog would stay
+  // logically "open" while `md:hidden` visually hid it — leaving the app
+  // pointer-events:none and aria-hidden with no visible dialog to explain it
+  // (the slide-over sidebar takes over at md+). One mechanism (close on
+  // crossing) instead of two (close + visual hide) disagreeing about "open".
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const onChange = (e: MediaQueryListEvent) => {
+      if (e.matches) setMobileOpen(false);
+    };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
       <header className="border-b border-cyan-300/20 bg-slate-950 text-white shadow-[0_1px_28px_rgba(34,211,238,0.12)] dark:bg-slate-950">
@@ -312,15 +327,17 @@ export function Layout({
         </div>
 
         {/* Mobile navigation dialog. Radix Dialog supplies what a modal needs —
-            Escape to close, focus trap, focus restore, aria-modal, and scroll
-            lock — and its overlay is not a button, so the only "Close
-            navigation" accessible name is on the X. */}
+            Escape to close, focus trap, focus restore, scroll lock, and
+            modality (role="dialog" + aria-hidden on background siblings —
+            Radix's mechanism, equivalent to aria-modal) — and its overlay is
+            not a button, so the only "Close navigation" accessible name is
+            on the X. */}
         <Dialog.Root open={mobileOpen} onOpenChange={setMobileOpen}>
           <Dialog.Portal>
-            <Dialog.Overlay className="fixed inset-0 z-40 bg-black/50 md:hidden" />
+            <Dialog.Overlay className="fixed inset-0 z-40 bg-black/50" />
             <Dialog.Content
               aria-label="Navigation menu"
-              className="fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col border-r border-neutral-200 bg-white shadow-xl outline-none dark:border-neutral-800 dark:bg-neutral-950 md:hidden"
+              className="fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col border-r border-neutral-200 bg-white shadow-xl outline-none dark:border-neutral-800 dark:bg-neutral-950"
             >
               <div className="flex items-center justify-between gap-3 px-5 pb-2 pt-[calc(env(safe-area-inset-top)+1rem)]">
                 <Brand compact />

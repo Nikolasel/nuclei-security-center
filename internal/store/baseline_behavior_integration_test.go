@@ -315,6 +315,10 @@ func TestBaselineDeleteScanSerializesWithFindingIngestPostgres(t *testing.T) {
 		 WHERE id = $1`, occurrenceID); err != nil {
 		t.Fatalf("insert concurrent occurrence: %v", err)
 	}
+	var writerXID string
+	if err := writer.QueryRow(ctx, `SELECT pg_current_xact_id()::text`).Scan(&writerXID); err != nil {
+		t.Fatalf("read concurrent ingest transaction id: %v", err)
+	}
 
 	deleteErr := make(chan error, 1)
 	go func() {
@@ -328,12 +332,11 @@ func TestBaselineDeleteScanSerializesWithFindingIngestPostgres(t *testing.T) {
 		if err := st.pool.QueryRow(ctx, `
 			SELECT EXISTS (
 				SELECT 1
-				  FROM pg_stat_activity
-				 WHERE datname = current_database()
-				   AND wait_event_type = 'Lock'
-				   AND ((query LIKE '%raw_object_key%' AND query LIKE '%FOR UPDATE%')
-				        OR query LIKE '%DELETE FROM scans WHERE id%')
-			)`).Scan(&waiting); err != nil {
+				  FROM pg_locks
+				 WHERE locktype = 'transactionid'
+				   AND transactionid::text = $1
+				   AND NOT granted
+			)`, writerXID).Scan(&waiting); err != nil {
 			t.Fatalf("inspect blocked delete: %v", err)
 		}
 		if waiting {

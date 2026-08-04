@@ -24,7 +24,10 @@ After beta, each schema change goes in a new numbered SQL file. The runner seria
 migration work per database/schema, validates the complete recorded history, and applies unseen files
 plus their history records in one transaction. Files run in filename order and use SHA-256 checksums
 in `schema_migrations`. Applied files are immutable: never edit one after a database may have recorded
-it; add a forward/repair migration instead.
+it; add a forward/repair migration instead. Migration SQL must be transaction-compatible:
+`CREATE INDEX CONCURRENTLY` and other statements prohibited inside a transaction cannot run through
+this runner. Introduce a deliberate out-of-transaction migration mechanism before such an operation
+is required; do not silently weaken the atomic migration contract.
 
 Real-PostgreSQL tests are opt-in so the ordinary suite needs no service container. Point them only at
 a disposable database; each test creates and drops an isolated schema:
@@ -84,6 +87,7 @@ Linux host or routable network. See [Administration troubleshooting](ADMIN_GUIDE
 GitHub Actions runs:
 
 - Go formatting, vet, build, and race-enabled tests;
+- the real-PostgreSQL store suite, including baseline/alpha equivalence and lifecycle behavior;
 - `npm ci` and the production SPA build; and
 - on `v*` tags, tests followed by multi-architecture backend/scanner image publication to GHCR.
 

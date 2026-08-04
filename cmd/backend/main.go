@@ -44,6 +44,7 @@ func main() {
 	}
 	defer st.Close()
 
+	log.Info("acquiring migration lock and applying migrations")
 	if err := st.Migrate(ctx); err != nil {
 		log.Error("migrate", "err", err)
 		os.Exit(1)

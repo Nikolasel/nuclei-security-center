@@ -37,7 +37,9 @@ docker compose up --build
 The seeded Keycloak client secret in `deploy/keycloak/realm-nsc.json` matches `.env.example`.
 For local development, either leave that development-only `OIDC_CLIENT_SECRET` unchanged or,
 before Keycloak first imports the realm, set the same replacement value in both `.env` and the
-realm JSON. Changing only `.env` makes the OIDC callback's token exchange fail.
+realm JSON. Changing only `.env` makes the OIDC callback's token exchange fail. If Keycloak already
+imported the realm, recreate its Compose container after synchronizing both values (`docker compose
+down`, then `docker compose up --build`); local Keycloak data lives in the container layer.
 
 Open <http://localhost:8080>. The compose stack includes Postgres, MinIO, Keycloak, one scanner,
 and the backend/SPA. Demo users use their username as the password:
@@ -237,7 +239,7 @@ Routine template administration follows this workflow:
 1. An **operator** runs upstream sync and reviews the recorded sync result.
 2. An **operator** creates or updates custom YAML; a healthy scanner validates it before commit.
 3. An **operator** creates an `exact`, `all`, or `exclude` set and verifies its effective members.
-4. An **operator** pushes/syncs the current catalog bundle to nodes; viewers may inspect status.
+4. An **admin** pushes/syncs the current catalog bundle to nodes; viewers may inspect status.
 5. A **viewer** may export templates/sets, while an **operator** may import with `skip`, `overwrite`,
    or deterministic `rename` conflict handling.
 
@@ -307,7 +309,7 @@ Detection state is derived from scan evidence:
 | `previously_mitigated` | Flapped: mitigated, resurfaced, and absent again. |
 
 Closure is evidence-driven; there is no manual “fixed.” Missing/invalid request-trace coverage fails
-closure, and a completed scan that skipped malformed finding records cannot provide negative
+closed, and a completed scan that skipped malformed finding records cannot provide negative
 mitigation evidence. Analysts may apply `false_positive` or optionally time-bounded `accepted` dispositions and
 recast severity.
 

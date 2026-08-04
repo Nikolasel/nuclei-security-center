@@ -20,9 +20,11 @@ handlers return plain-text errors plus an appropriate status.
 `internal/store/migrations/0001_init.sql` is the beta baseline for fresh deployments. Alpha
 databases are intentionally rejected; do not add compatibility or upgrade logic for them.
 
-After beta, each schema change goes in a new numbered SQL file. The runner applies unseen files in
-filename order and records SHA-256 checksums in `schema_migrations`. Applied files are immutable:
-never edit one after a database may have recorded it; add a forward/repair migration instead.
+After beta, each schema change goes in a new numbered SQL file. The runner serializes startup
+migration work per database/schema, validates the complete recorded history, and applies unseen files
+plus their history records in one transaction. Files run in filename order and use SHA-256 checksums
+in `schema_migrations`. Applied files are immutable: never edit one after a database may have recorded
+it; add a forward/repair migration instead.
 
 Real-PostgreSQL tests are opt-in so the ordinary suite needs no service container. Point them only at
 a disposable database; each test creates and drops an isolated schema:

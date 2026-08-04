@@ -95,6 +95,50 @@ func TestMigrateRejectsMissingChecksumPostgres(t *testing.T) {
 	}
 }
 
+func TestMigrateRejectsLegacyHistoryWithoutChecksumColumnBeforeMutationPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st, _ := openEmptyIsolatedPostgres(t, ctx, dsn)
+	if _, err := st.pool.Exec(ctx, `
+		CREATE TABLE schema_migrations (
+			version TEXT PRIMARY KEY,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		INSERT INTO schema_migrations (version) VALUES ('0001_init.sql');
+	`); err != nil {
+		t.Fatalf("seed legacy migration history: %v", err)
+	}
+
+	err := st.Migrate(ctx)
+	if err == nil {
+		t.Fatal("Migrate accepted legacy history without a checksum column")
+	}
+
+	var checksumColumnAdded bool
+	if err := st.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			  FROM information_schema.columns
+			 WHERE table_schema = current_schema()
+			   AND table_name = 'schema_migrations'
+			   AND column_name = 'checksum_sha256'
+		)`).Scan(&checksumColumnAdded); err != nil {
+		t.Fatalf("inspect rejected legacy migration history: %v", err)
+	}
+	if checksumColumnAdded {
+		t.Fatal("Migrate altered legacy migration history before rejecting it")
+	}
+	if !strings.Contains(err.Error(), "has no checksum column") ||
+		!strings.Contains(err.Error(), "deploy fresh for beta") {
+		t.Fatalf("Migrate error = %q, want missing-column and fresh-deploy guidance", err)
+	}
+}
+
 func TestMigrateRejectsChecksumMismatchPostgres(t *testing.T) {
 	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -172,6 +216,117 @@ func TestBaselineRecordsChecksumAndIsIdempotentPostgres(t *testing.T) {
 	}
 	if afterCount != beforeCount || afterChecksum != beforeChecksum {
 		t.Fatalf("second Migrate changed migration record: before=(%d,%q) after=(%d,%q)", beforeCount, beforeChecksum, afterCount, afterChecksum)
+	}
+}
+
+func TestMigrateRollsBackSQLWhenHistoryRecordFailsPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st, _ := openEmptyIsolatedPostgres(t, ctx, dsn)
+	if _, err := st.pool.Exec(ctx, `
+		CREATE TABLE schema_migrations (
+			version TEXT PRIMARY KEY,
+			checksum_sha256 TEXT,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE FUNCTION reject_migration_record() RETURNS trigger
+		LANGUAGE plpgsql AS $$
+		BEGIN
+			RAISE EXCEPTION 'forced migration history failure';
+		END;
+		$$;
+		CREATE TRIGGER reject_migration_record
+			BEFORE INSERT ON schema_migrations
+			FOR EACH ROW EXECUTE FUNCTION reject_migration_record();
+	`); err != nil {
+		t.Fatalf("install migration history failure trigger: %v", err)
+	}
+
+	err := st.Migrate(ctx)
+	if err == nil || !strings.Contains(err.Error(), "record migration 0001_init.sql") {
+		t.Fatalf("Migrate error = %v, want forced history-record failure", err)
+	}
+	var baselineApplied bool
+	if err := st.pool.QueryRow(ctx, `SELECT to_regclass('app_settings') IS NOT NULL`).Scan(&baselineApplied); err != nil {
+		t.Fatalf("check migration rollback: %v", err)
+	}
+	if baselineApplied {
+		t.Fatal("migration SQL remained applied after its history record failed")
+	}
+
+	if _, err := st.pool.Exec(ctx, `
+		DROP TRIGGER reject_migration_record ON schema_migrations;
+		DROP FUNCTION reject_migration_record();
+	`); err != nil {
+		t.Fatalf("remove migration history failure trigger: %v", err)
+	}
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate retry after rollback: %v", err)
+	}
+	var migrationCount int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
+		t.Fatalf("count migration records after retry: %v", err)
+	}
+	if migrationCount != 1 {
+		t.Fatalf("migration record count after retry = %d, want 1", migrationCount)
+	}
+}
+
+func TestMigrateSerializesConcurrentStartsPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st, _ := openEmptyIsolatedPostgres(t, ctx, dsn)
+	if _, err := st.pool.Exec(ctx, `
+		CREATE TABLE schema_migrations (
+			version TEXT PRIMARY KEY,
+			checksum_sha256 TEXT,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE FUNCTION delay_migration_record() RETURNS trigger
+		LANGUAGE plpgsql AS $$
+		BEGIN
+			PERFORM pg_sleep(0.25);
+			RETURN NEW;
+		END;
+		$$;
+		CREATE TRIGGER delay_migration_record
+			BEFORE INSERT ON schema_migrations
+			FOR EACH ROW EXECUTE FUNCTION delay_migration_record();
+	`); err != nil {
+		t.Fatalf("install migration history delay trigger: %v", err)
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			errs <- st.Migrate(ctx)
+		}()
+	}
+	close(start)
+	for range 2 {
+		if err := <-errs; err != nil {
+			t.Errorf("concurrent Migrate: %v", err)
+		}
+	}
+
+	var migrationCount int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
+		t.Fatalf("count migration records after concurrent starts: %v", err)
+	}
+	if migrationCount != 1 {
+		t.Fatalf("migration record count after concurrent starts = %d, want 1", migrationCount)
 	}
 }
 

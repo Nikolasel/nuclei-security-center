@@ -125,7 +125,18 @@ func (s *Store) Migrate(ctx context.Context) error {
 		known[name] = struct{}{}
 	}
 
-	if _, err := s.pool.Exec(ctx, `
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin migration transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `
+		SELECT pg_advisory_xact_lock(hashtext(current_database()), hashtext(current_schema()))
+	`); err != nil {
+		return fmt.Errorf("lock migrations: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version    TEXT PRIMARY KEY,
 			checksum_sha256 TEXT,
@@ -133,7 +144,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		)`); err != nil {
 		return fmt.Errorf("ensure schema_migrations: %w", err)
 	}
-	rows, err := s.pool.Query(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
+	rows, err := tx.Query(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
 	if err != nil {
 		return fmt.Errorf("list applied migrations: %w", err)
 	}
@@ -159,16 +170,23 @@ func (s *Store) Migrate(ctx context.Context) error {
 		)
 	}
 
-	// Only supported histories may be brought to the checksummed beta format.
-	// In particular, do not mutate an alpha migration table before rejecting it.
-	if _, err := s.pool.Exec(ctx,
-		`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum_sha256 TEXT`,
-	); err != nil {
-		return fmt.Errorf("ensure migration checksums: %w", err)
+	var hasChecksumColumn bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			  FROM information_schema.columns
+			 WHERE table_schema = current_schema()
+			   AND table_name = 'schema_migrations'
+			   AND column_name = 'checksum_sha256'
+		)`).Scan(&hasChecksumColumn); err != nil {
+		return fmt.Errorf("inspect migration checksum column: %w", err)
+	}
+	if !hasChecksumColumn {
+		return fmt.Errorf("migration history has no checksum column: alpha databases are not upgradeable; deploy fresh for beta")
 	}
 
 	applied := make(map[string]*string, len(names))
-	rows, err = s.pool.Query(ctx, `SELECT version, checksum_sha256 FROM schema_migrations ORDER BY version`)
+	rows, err = tx.Query(ctx, `SELECT version, checksum_sha256 FROM schema_migrations ORDER BY version`)
 	if err != nil {
 		return fmt.Errorf("load applied migration checksums: %w", err)
 	}
@@ -210,15 +228,18 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if _, ok := applied[migration.name]; ok {
 			continue
 		}
-		if _, err := s.pool.Exec(ctx, string(migration.sql)); err != nil {
+		if _, err := tx.Exec(ctx, string(migration.sql)); err != nil {
 			return fmt.Errorf("apply migration %s: %w", migration.name, err)
 		}
-		if _, err := s.pool.Exec(ctx,
+		if _, err := tx.Exec(ctx,
 			`INSERT INTO schema_migrations (version, checksum_sha256) VALUES ($1, $2)`,
 			migration.name, migration.checksum,
 		); err != nil {
 			return fmt.Errorf("record migration %s: %w", migration.name, err)
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit migrations: %w", err)
 	}
 	return nil
 }

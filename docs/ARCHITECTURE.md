@@ -91,7 +91,7 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
 - **template_sets** — an explicit `mode`: `exact` uses curated membership in
   `template_set_members`, `all` resolves every active catalog template at scan time, and `exclude`
   resolves every active template except explicit rows in `template_set_exclusions`. The retired POC
-  filter columns and compatibility code are gone (alpha breaking change). Exact sets and selected
+  filter columns and compatibility code are not part of the beta schema. Exact sets and selected
   templates are portable as either a lossless YAML tarball (verbatim files + manifest) or one JSON
   document retaining the verbatim YAML strings; catalog-derived sets export their mode and
   exclusions rather than freezing the current catalog. Import writes custom templates, set
@@ -114,11 +114,6 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   during backend ingest; database, transaction, schema, and unexpected constraint failures remain
   scan-fatal.
 
-Migration 0036 deliberately preserves existing schedules: it copies each schedule's policy-owned
-target into `schedules.target_id` before dropping `scan_policies.target_id`. Historical scans
-already carry their resolved target and require no rewrite. The backfill is total because the old
-policy target and schedule policy references are both non-null, and deleting a policy already
-cascaded its schedules; every surviving schedule therefore joins a surviving policy with a target.
 - **findings** (occurrences) — the immutable per-scan observation log: `id, scan_id,
   target_id, finding_id, dedup_key, result_discriminator, template_id, name, severity,
   host, matched_at, raw_line, raw`.
@@ -266,7 +261,7 @@ so scans survive a busy or briefly-unreachable node.
    it is only as accurate as naabu's view of the network — on Docker Desktop (macOS) the
    NAT layer makes every address in a private range appear alive, so the live tally is
    not a verification of network aliveness in dev (the authoritative narrowed set is the
-   persisted `discovered_targets`; see [Development](DEVELOPMENT.md#discovery-on-docker-desktop-macos-reports-every-host-as-alive)).
+   persisted `discovered_targets`; see [Development](DEVELOPMENT.md#docker-desktop-discovery-caveat)).
 4. **Run (on node)** — `nuclei -l targets.txt -t <paths> -jsonl -o out.jsonl` plus the
    rate-limit / concurrency / timeout flags from the spec. When discovery ran,
    `targets.txt` is the narrowed `host:port` list from step 3a. Nuclei also writes its
@@ -439,9 +434,9 @@ Nothing open.
 
 ## 8. Future directions
 
-The alpha delivers the full scan → lifecycle → triage → export loop with the security
+The beta delivers the full scan → lifecycle → triage → export loop with the security
 guardrails above, plus CI and container-image releases (see
-[Development](DEVELOPMENT.md#continuous-integration--releases)). Earlier we tracked larger
+[Development](DEVELOPMENT.md#continuous-integration-and-releases)). Earlier we tracked larger
 follow-on work as GitHub issues — cloud IaC deploy (#25), an OpenSearch derived index
 (#21), scoped disposition rules (#23), and the regulatory tail of SSO federation, SIEM
 shipping, CMK/KMS, and change-approval (#24) — and have since closed them: the team has

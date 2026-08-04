@@ -82,9 +82,8 @@ func TestBuildFindingWhere(t *testing.T) {
 	}
 }
 
-// TestDedupKey pins the exact global string form of the dedup key. Migration
-// 0030 computes the same key in SQL, so changes must remain in lockstep or
-// re-observed findings would fork into new lifecycle rows.
+// TestDedupKey pins the exact persisted string form of the dedup key. Changes
+// would make re-observed findings fork into new lifecycle rows.
 func TestDedupKey(t *testing.T) {
 	const us = "\x1f"
 	cases := []struct {

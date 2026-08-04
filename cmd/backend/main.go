@@ -44,6 +44,7 @@ func main() {
 	}
 	defer st.Close()
 
+	log.Info("acquiring migration lock and applying migrations")
 	if err := st.Migrate(ctx); err != nil {
 		log.Error("migrate", "err", err)
 		os.Exit(1)
@@ -323,7 +324,7 @@ func retentionSweepInterval() time.Duration {
 }
 
 // defaultTemplateRepo is the community nuclei-templates catalog mirrored when
-// TEMPLATE_SYNC_REPO is unset (zero-config alpha).
+// TEMPLATE_SYNC_REPO is unset (zero-config deployment).
 const defaultTemplateRepo = "https://github.com/projectdiscovery/nuclei-templates.git"
 
 // templateDistributeInterval is how often the backend pushes the template
@@ -341,7 +342,7 @@ func templateDistributeInterval() time.Duration {
 // templateSyncConfig is deliberately backend-only: scanner nodes receive a
 // resolved, immutable bundle in a later #85 slice and never clone upstream
 // repositories themselves. "latest" resolves to the highest stable semver tag.
-// The repo defaults to the community catalog (zero-config alpha), but an
+// The repo defaults to the community catalog (zero-config deployment), but an
 // explicitly empty TEMPLATE_SYNC_REPO disables sync — hence LookupEnv, so an
 // empty value is honored rather than falling back to the default.
 func templateSyncConfig() backend.TemplateSyncerConfig {

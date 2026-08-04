@@ -62,7 +62,7 @@ type TemplateSyncStatus struct {
 
 // NewTemplateSyncer validates and wires a catalog synchronizer. "latest" is a
 // deliberate ref value: it resolves to the highest stable semver Git tag,
-// avoiding a mutable default branch while retaining a zero-config alpha setup.
+// avoiding a mutable default branch while retaining a zero-config setup.
 func NewTemplateSyncer(st *store.Store, cfg TemplateSyncerConfig, log *slog.Logger) (*TemplateSyncer, error) {
 	if cfg.Interval <= 0 {
 		return nil, errors.New("template sync interval must be positive")

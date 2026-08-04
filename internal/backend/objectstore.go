@@ -54,7 +54,7 @@ type minioStore struct {
 
 // NewObjectStore builds an ObjectStore from config and ensures the bucket exists.
 // It returns (nil, nil) when cfg.Endpoint is empty — archiving is simply disabled,
-// mirroring how unset OIDC disables auth for local dev.
+// which is supported for local development independently of authentication.
 func NewObjectStore(ctx context.Context, cfg ObjectStoreConfig) (ObjectStore, error) {
 	if cfg.Endpoint == "" {
 		return nil, nil

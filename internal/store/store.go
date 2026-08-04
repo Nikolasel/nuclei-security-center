@@ -92,20 +92,6 @@ func (s *Store) Close() { s.pool.Close() }
 
 // Migrate applies any embedded migrations not yet recorded, in filename order.
 func (s *Store) Migrate(ctx context.Context) error {
-	if _, err := s.pool.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS schema_migrations (
-			version    TEXT PRIMARY KEY,
-			checksum_sha256 TEXT,
-			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-		)`); err != nil {
-		return fmt.Errorf("ensure schema_migrations: %w", err)
-	}
-	if _, err := s.pool.Exec(ctx,
-		`ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum_sha256 TEXT`,
-	); err != nil {
-		return fmt.Errorf("ensure migration checksums: %w", err)
-	}
-
 	entries, err := migrationsFS.ReadDir("migrations")
 	if err != nil {
 		return fmt.Errorf("read migrations: %w", err)
@@ -118,51 +104,142 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	sort.Strings(names)
 
+	type embeddedMigration struct {
+		name     string
+		sql      []byte
+		checksum string
+	}
+	migrations := make([]embeddedMigration, 0, len(names))
+	known := make(map[string]struct{}, len(names))
 	for _, name := range names {
 		sqlBytes, err := migrationsFS.ReadFile("migrations/" + name)
 		if err != nil {
 			return fmt.Errorf("read migration %s: %w", name, err)
 		}
 		sum := sha256.Sum256(sqlBytes)
-		checksum := fmt.Sprintf("%x", sum)
+		migrations = append(migrations, embeddedMigration{
+			name:     name,
+			sql:      sqlBytes,
+			checksum: fmt.Sprintf("%x", sum),
+		})
+		known[name] = struct{}{}
+	}
 
-		var recordedChecksum *string
-		err = s.pool.QueryRow(ctx,
-			`SELECT checksum_sha256 FROM schema_migrations WHERE version = $1`, name,
-		).Scan(&recordedChecksum)
-		switch {
-		case errors.Is(err, pgx.ErrNoRows):
-			// Apply below.
-		case err != nil:
-			return fmt.Errorf("check migration %s: %w", name, err)
-		case recordedChecksum == nil:
-			// Older installations predate checksums. Establish their current
-			// embedded migrations as the immutable baseline; separately named
-			// repair migrations handle any already-known historical drift.
-			if _, err := s.pool.Exec(ctx,
-				`UPDATE schema_migrations SET checksum_sha256 = $2 WHERE version = $1`,
-				name, checksum,
-			); err != nil {
-				return fmt.Errorf("baseline migration checksum %s: %w", name, err)
-			}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin migration transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `
+		SELECT pg_advisory_xact_lock(hashtext(current_database()), hashtext(current_schema()))
+	`); err != nil {
+		return fmt.Errorf("lock migrations: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    TEXT PRIMARY KEY,
+			checksum_sha256 TEXT,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`); err != nil {
+		return fmt.Errorf("ensure schema_migrations: %w", err)
+	}
+	rows, err := tx.Query(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		return fmt.Errorf("list applied migrations: %w", err)
+	}
+	var unknown []string
+	for rows.Next() {
+		var version string
+		if err := rows.Scan(&version); err != nil {
+			rows.Close()
+			return fmt.Errorf("read applied migration: %w", err)
+		}
+		if _, ok := known[version]; !ok {
+			unknown = append(unknown, version)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list applied migrations: %w", err)
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf(
+			"database contains unsupported migration versions %s: alpha databases are not upgradeable; deploy fresh for beta",
+			strings.Join(unknown, ", "),
+		)
+	}
+
+	var hasChecksumColumn bool
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			  FROM information_schema.columns
+			 WHERE table_schema = current_schema()
+			   AND table_name = 'schema_migrations'
+			   AND column_name = 'checksum_sha256'
+		)`).Scan(&hasChecksumColumn); err != nil {
+		return fmt.Errorf("inspect migration checksum column: %w", err)
+	}
+	if !hasChecksumColumn {
+		return fmt.Errorf("migration history has no checksum column: alpha databases are not upgradeable; deploy fresh for beta")
+	}
+
+	applied := make(map[string]*string, len(names))
+	rows, err = tx.Query(ctx, `SELECT version, checksum_sha256 FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		return fmt.Errorf("load applied migration checksums: %w", err)
+	}
+	for rows.Next() {
+		var version string
+		var checksum *string
+		if err := rows.Scan(&version, &checksum); err != nil {
+			rows.Close()
+			return fmt.Errorf("read applied migration checksum: %w", err)
+		}
+		applied[version] = checksum
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("load applied migration checksums: %w", err)
+	}
+
+	// Validate the complete applied history before executing any unseen SQL.
+	for _, migration := range migrations {
+		recordedChecksum, ok := applied[migration.name]
+		if !ok {
 			continue
-		case *recordedChecksum != checksum:
+		}
+		switch {
+		case recordedChecksum == nil:
+			return fmt.Errorf(
+				"migration %s has no recorded checksum: alpha databases are not upgradeable; deploy fresh for beta",
+				migration.name,
+			)
+		case *recordedChecksum != migration.checksum:
 			return fmt.Errorf(
 				"migration %s checksum mismatch: applied migrations are immutable (recorded %s, embedded %s)",
-				name, *recordedChecksum, checksum,
+				migration.name, *recordedChecksum, migration.checksum,
 			)
-		default:
+		}
+	}
+
+	for _, migration := range migrations {
+		if _, ok := applied[migration.name]; ok {
 			continue
 		}
-		if _, err := s.pool.Exec(ctx, string(sqlBytes)); err != nil {
-			return fmt.Errorf("apply migration %s: %w", name, err)
+		if _, err := tx.Exec(ctx, string(migration.sql)); err != nil {
+			return fmt.Errorf("apply migration %s: %w", migration.name, err)
 		}
-		if _, err := s.pool.Exec(ctx,
+		if _, err := tx.Exec(ctx,
 			`INSERT INTO schema_migrations (version, checksum_sha256) VALUES ($1, $2)`,
-			name, checksum,
+			migration.name, migration.checksum,
 		); err != nil {
-			return fmt.Errorf("record migration %s: %w", name, err)
+			return fmt.Errorf("record migration %s: %w", migration.name, err)
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit migrations: %w", err)
 	}
 	return nil
 }
@@ -629,8 +706,11 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 
 	var rkey, lkey *string
 	var state string
-	err = tx.QueryRow(ctx, `SELECT state, raw_object_key, log_object_key FROM scans WHERE id = $1`, id).
-		Scan(&state, &rkey, &lkey)
+	err = tx.QueryRow(ctx, `
+		SELECT state, raw_object_key, log_object_key
+		  FROM scans
+		 WHERE id = $1
+		 FOR UPDATE`, id).Scan(&state, &rkey, &lkey)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return "", "", ErrNotFound
@@ -697,17 +777,29 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 		return "", "", fmt.Errorf("list affected lifecycle: %w", err)
 	}
 	affectedRows.Close()
+	// Clear pointers to occurrences that the scan cascade is about to delete.
+	// PostgreSQL assigns internal RI-trigger names from creation order, so relying
+	// on ON DELETE SET NULL to run before both scan-to-finding cascade constraints
+	// is not portable across an equivalent schema rebuilt from a compacted dump.
+	if _, err := tx.Exec(ctx, `
+		UPDATE finding_lifecycle
+		   SET latest_occurrence_id = NULL
+		 WHERE latest_occurrence_id IN (
+		       SELECT id FROM findings WHERE scan_id = $1
+		 )`, id); err != nil {
+		return "", "", fmt.Errorf("clear lifecycle occurrence pointers: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM scans WHERE id = $1`, id); err != nil {
 		return "", "", err
 	}
-	// The delete just cascaded this scan's findings occurrences and (via
-	// ON DELETE SET NULL) nulled any first_seen_scan/last_seen_scan/
-	// latest_occurrence_id pointer to it. Left alone, a finding whose
-	// times_mitigated / first_seen_scan survive from history that no longer
-	// exists would show a detection state (e.g. "resurfaced") the remaining
-	// scans can't actually justify. Recompute those fields for the affected
-	// global lifecycle rows from only the scans that still exist, so every
-	// finding's story stays explainable from what's currently visible.
+	// The delete just cascaded this scan's findings occurrences and nulled any
+	// first_seen_scan/last_seen_scan pointer to it; latest_occurrence_id was
+	// cleared explicitly above. Left alone, a finding whose times_mitigated /
+	// first_seen_scan survive from history that no longer exists could show a
+	// detection state (for example, "resurfaced") that the remaining scans
+	// cannot justify. Recompute those fields for the affected global lifecycle
+	// rows from only the scans that still exist, so every finding's story stays
+	// explainable from what's currently visible.
 	if err := repairLifecycleFindings(ctx, tx, affectedLifecycle); err != nil {
 		return "", "", fmt.Errorf("repair lifecycle: %w", err)
 	}

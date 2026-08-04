@@ -10,9 +10,9 @@ Repo: `git@github.com:Nikolasel/nuclei-security-center.git`.
 
 **`docs/ARCHITECTURE.md` is the source of truth for design decisions.** Read it before making
 architectural changes. `README.md` is the visitor-facing overview; the practical guides live
-under `docs/` (`API.md`, `CONFIGURATION.md`, `DEVELOPMENT.md`).
+under `docs/` (`ADMIN_GUIDE.md`, `API.md`, `DEVELOPMENT.md`).
 
-The product is a working alpha: a logged-in user manages targets/template-sets, runs scans
+The product is a working beta: a logged-in user manages targets/template-sets, runs scans
 (on demand or on a cron **schedule**), and triages a **Tenable-style finding lifecycle** (dedup +
 first/last-seen + detection state + dispositions/recast), exporting the lifecycle list as
 JSON/CSV/SARIF/raw. OIDC/BFF auth with IdP-driven roles fronts a React SPA. Cross-cutting: a
@@ -35,11 +35,12 @@ S3-compatible bucket (MinIO locally; any S3 API in the cloud) via `github.com/mi
 behind a small `ObjectStore` interface (`internal/backend/objectstore.go`, Put/Get; a fake
 in tests). The orchestrator **tees** the results stream to a temp file during ingest and
 uploads `scans/<id>/raw.jsonl` afterward — **best-effort**: Postgres stays the system of
-record, so an upload failure logs but never fails the scan. `scans.raw_object_key` (migration
-0009) stores the key; the API exposes only `has_raw`. `GET /api/scans/{id}/raw` (viewer)
+record, so an upload failure logs but never fails the scan. `scans.raw_object_key` stores the
+key; the API exposes only `has_raw`. `GET /api/scans/{id}/raw` (viewer)
 streams the archive back **through the BFF** (same-origin cookie — no presigned URLs). Config
 is `S3_ENDPOINT`/`S3_BUCKET`/`S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`/`S3_USE_SSL`/`S3_REGION`;
-unset `S3_ENDPOINT` ⇒ archiving disabled (dev), like unset `OIDC_ISSUER` disables auth.
+unset `S3_ENDPOINT` ⇒ archiving disabled (dev). Authentication remains fail-closed unless
+`AUTH_DISABLED=true` is explicitly set.
 
 **Audit log:** every mutating API call emits one structured `slog` event
 (`event=audit`) to **stdout** — no DB table, no in-app UI. The trail lives in the platform's
@@ -57,8 +58,7 @@ Successful dispatch actions (`scan.create`, manual `schedule.run`, and cron disp
 carry the resolved `scan_policy_id`, `target_id`, and `scan_id`, keeping the selected scope in the
 off-DB trail; unattended cron dispatches use `actor_type=system`.
 
-**Scan policies (#87 — the central scan config):** `scan_policies`
-(migration 0017, made target-independent by 0036) is the reusable, named **how to scan**
+**Scan policies (#87 — the central scan config):** `scan_policies` is the reusable, named **how to scan**
 configuration and is required for every launch. It bundles `template_set_id` (required, FK
 `ON DELETE RESTRICT`; a set is `exact`, `all`, or `exclude`) and Nuclei's
 execution knobs `rate_limit` / `concurrency` / `timeout_sec` / `max_host_error` (each column
@@ -79,7 +79,7 @@ their not-yet-run executors. CRUD at `GET/POST /api/scan-policies`,
 **Template catalog (#85):** Postgres owns the lossless YAML catalog (`templates`) and template
 sets. Exact sets use `template_set_members`; `all` sets resolve every active catalog template at
 dispatch; `exclude` sets resolve every active catalog template minus explicit exclusions. The retired
-POC filter columns and compatibility code are gone (alpha breaking change). Scans carry concrete
+POC filter columns and compatibility code are not part of the beta schema. Scans carry concrete
 `template_ids` plus the full-catalog `templates_commit`.
 The backend pushes that full catalog to nodes; nodes select IDs from their verified active bundle
 and reject missing IDs or digest drift. Viewer exports and operator imports round-trip selected
@@ -99,13 +99,13 @@ per-template diagnostics, and no store transaction unless the entire selected ba
 **Port discovery (#86 — naabu pre-pass):** a scan policy can drive an optional
 **naabu** port scan on the scanner node *before* Nuclei, so Nuclei only probes live
 `host:port` pairs instead of every address in a CIDR-scoped target (the motivating
-win: a `/24` is 256 hosts Nuclei would otherwise probe for every template). Policy
-columns (migration 0018): `discovery_enabled` (**default TRUE** — on unless disabled),
+win: a `/24` is 256 hosts Nuclei would otherwise probe for every template). Policy columns include
+`discovery_enabled` (**default TRUE** — on unless disabled),
 `discovery_ports` (naabu `-port` spec, NULL = top-1000), `discovery_timeout_sec`
 (discovery's **own** budget, separate from the Nuclei `timeout_sec`), plus naabu
 per-probe tuning `discovery_rate`/`discovery_probe_timeout_ms`/`discovery_retries`
-(migration 0020, each NULL = naabu's default; lower = faster but can miss slow/lossy ports), plus
-`discovery_scan_type` (migration 0021, `syn`|`connect`, CHECK-constrained, NULL = the node's
+(each NULL = naabu's default; lower = faster but can miss slow/lossy ports), plus
+`discovery_scan_type` (`syn`|`connect`, CHECK-constrained, NULL = the node's
 `NAABU_SCAN_TYPE` default). These flow into
 `ScanSpec.Options.Discovery` via `overlayScanPolicy`. The stage lives **entirely on the
 node** (`internal/scanner/discover.go`): `Runner.run` writes `targets.txt`, runs naabu,
@@ -136,19 +136,19 @@ shows an animated bar plus a tally parsed from naabu's own log (`discoveryWriter
 `Found N ports on host` (arrives per-host at the end of the port scan). The narrowed
 host:port list is reported as
 `ScanStatus.DiscoveredTargets`, cached live by the orchestrator during the scanning phase and
-persisted to `scans.discovered_targets` (migration 0019, `TEXT[]`) at completion, so the scan
+persisted to `scans.discovered_targets` (`TEXT[]`) at completion, so the scan
 detail can show which endpoints were actually scanned.
 Nuclei also runs with `-trace-log` into a FIFO and the node reduces error-free request records
 to exact `{template_id, endpoint(host:port)}` pairs (`ScanStatus.CoveredEndpoints`). The backend
-persists that evidence to `scans.covered_endpoints` (migration 0034; NULL = unknown/fail closed,
+persists that evidence to `scans.covered_endpoints` (NULL = unknown/fail closed,
 empty = known zero) plus an optional surfaced `coverage_warning`. Lifecycle mitigation requires
 an exact pair for the finding's `endpoint_key`; another port or a template skipped by
 `max-host-error` proves nothing. Scheme/type defaults normalize HTTP→80, HTTPS/TLS→443, DNS→53,
 and WHOIS→43; non-network findings expose `auto_mitigation_eligible=false` and never auto-close.
-Completion expands the JSON pairs once and uses the migration-0035
-`(template_id, endpoint_key)` index. An exact occurrence remains positive evidence for itself.
+Completion expands the JSON pairs once and uses the `(template_id, endpoint_key)` index. An exact
+occurrence remains positive evidence for itself.
 
-**Scheduling:** `schedules` (migration 0007; reshaped by 0017 and 0036) pairs a
+**Scheduling:** `schedules` pairs a
 `scan_policy_id` (required, FK `ON DELETE CASCADE`) and `target_id` (required, FK
 `ON DELETE CASCADE`) with a `cron` expression — the policy supplies templates/knobs and the
 schedule supplies the approved target plus cadence. A backend
@@ -259,7 +259,7 @@ web/               React + TS + Vite SPA; embedded into the backend via go:embed
 deploy/            Dockerfile.backend (SPA build + distroless), Dockerfile.scanner, keycloak/ (seeded realm)
 docker-compose.yml postgres + minio + keycloak + scanner + backend
 .github/workflows/ CI (build/vet/test + SPA) and release (images → GHCR)
-docs/ARCHITECTURE.md   design decisions (source of truth); API.md, CONFIGURATION.md, DEVELOPMENT.md are the practical guides
+docs/ARCHITECTURE.md   design decisions (source of truth); ADMIN_GUIDE.md, API.md, DEVELOPMENT.md are the practical guides
 ```
 
 The frontend build output `web/dist` is git-ignored except a committed empty `.gitkeep`,
@@ -291,7 +291,7 @@ docker compose up --build
 Then log in at `http://localhost:8080`. The API is under `/api/*` behind the session cookie
 (there is **no** implicit default scan — every scan names a `scan_policy_id` and stored
 `target_id`).
-See `docs/API.md` for the endpoint walkthrough and `docs/CONFIGURATION.md` for auth-disabled
+See `docs/API.md` for the endpoint walkthrough and `docs/ADMIN_GUIDE.md` for auth-disabled
 dev mode used in headless `curl` testing.
 
 ## Environment notes
@@ -311,13 +311,14 @@ dev mode used in headless `curl` testing.
 
 - Structured logging via `log/slog` (JSON handler).
 - Agent-created branches use `feature/<name>` for feature work and `fix/<name>` for bug fixes; do not use the `codex/` prefix in this repository.
-- Config via environment variables (see the table in `docs/CONFIGURATION.md`); required vars fail fast.
+- Config via environment variables (see the table in `docs/ADMIN_GUIDE.md`); required vars fail fast.
 - Errors wrapped with `%w` and context; HTTP handlers return plain-text errors + status.
-- New schema changes go in a new numbered file under `internal/store/migrations/`; the
-  runner applies unseen files in filename order and records them in `schema_migrations`.
-  Applied migration files are immutable: never revise one after any database may have
-  recorded it. Add a separately named repair/forward migration instead. The runner stores
-  SHA-256 checksums and fails fast if a checksummed migration's contents change.
+- `internal/store/migrations/0001_init.sql` is the fresh-deployment beta baseline. Alpha databases
+  are not upgradeable and are rejected at startup. Future schema changes go in new numbered files;
+  the runner applies unseen files in filename order and records them in `schema_migrations`.
+  Applied migration files are immutable: never revise one after a database may have recorded it.
+  Add a separately named repair/forward migration instead. The runner stores SHA-256 checksums and
+  fails fast if a checksummed migration's contents change.
 - Run `gofmt -w`, `go vet`, and `go test` before considering a change done.
 - **Dependency review (recurring):** at a natural review boundary, scan for hand-rolled code
   that duplicates a mature library (per invariant #5) and for unused/heavy deps to drop.

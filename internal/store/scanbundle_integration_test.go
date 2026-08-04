@@ -27,8 +27,8 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	origin := openIsolatedPostgres(t, ctx, dsn, "0040_scan_policy_host_discovery.sql")
-	dest := openIsolatedPostgres(t, ctx, dsn, "0040_scan_policy_host_discovery.sql")
+	origin := openIsolatedPostgres(t, ctx, dsn)
+	dest := openIsolatedPostgres(t, ctx, dsn)
 
 	suffix := types.NewID()
 	target, err := origin.CreateTarget(ctx, Target{Name: "bundle-roundtrip-" + suffix, Hosts: []string{"roundtrip.invalid"}})
@@ -303,7 +303,7 @@ func TestScanBundleImportFallbackPostgres(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	dest := openIsolatedPostgres(t, ctx, dsn, "0040_scan_policy_host_discovery.sql")
+	dest := openIsolatedPostgres(t, ctx, dsn)
 
 	suffix := types.NewID()
 	target, err := dest.CreateTarget(ctx, Target{Name: "bundle-fallback-" + suffix, Hosts: []string{"fallback.invalid"}})
@@ -456,7 +456,7 @@ func TestScanBundleImportCannotCloseUnobservedPostgres(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	dest := openIsolatedPostgres(t, ctx, dsn, "0040_scan_policy_host_discovery.sql")
+	dest := openIsolatedPostgres(t, ctx, dsn)
 
 	suffix := types.NewID()
 	target, err := dest.CreateTarget(ctx, Target{Name: "coverage-import-" + suffix, Hosts: []string{"coverage.invalid"}})

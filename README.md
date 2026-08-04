@@ -7,7 +7,8 @@ A logged-in user defines **targets** and **template sets**, runs scans (on deman
 **cron schedule**), and triages the results through a **Tenable-style finding lifecycle** —
 dedup, evidence-driven detection state (new / active / resurfaced / mitigated), and analyst
 dispositions (accept-risk / false-positive / recast). Findings export as JSON / CSV / SARIF /
-raw JSONL. A **scope guardrail** keeps every scan inside approved targets, every mutating call
+raw JSONL. Complete scans export/import as versioned scan bundles (JSON or zip). A **scope
+guardrail** keeps every scan inside approved targets, every mutating call
 is written to a structured **audit log**, and raw scanner output is archived to object storage.
 
 ## Architecture

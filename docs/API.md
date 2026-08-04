@@ -78,6 +78,47 @@ curl -sb jar.txt -X DELETE localhost:8080/api/scans/<scan_id>        # => 204
 To tune how a scan runs, edit or create a [scan policy](#config-scan-policies). Select the target
 separately at launch, so the same policy can be reused across approved scopes.
 
+**Scan bundles — export / import (#136).** `GET /api/scans/{id}/export?format=json|zip` (viewer)
+downloads a complete, self-contained, versioned manifest of one scan **result**: the scan record
+(`state`, timestamps, `source`, `discovered_targets`, `covered_endpoints`, resolved
+`template_ids` + `templates_commit`, and the verbatim dispatch `spec`), the resolved config that
+produced it (target / template-set / scan-policy snapshots plus the reference ids on the
+exporting instance), and every immutable **occurrence** with its preserved Nuclei raw JSON.
+Like a scan-results file (a Nessus `.ness` import), the bundle carries **the scan's data, not
+the exporter's globally deduplicated finding lifecycle** — analyst dispositions/recasts,
+first/last-seen, and mitigation counters are never exported. `format=zip` wraps the same
+document as `manifest.json` inside a zip archive.
+
+`POST /api/scans/import?conflict=error|duplicate` (operator, audited `scan_imported`) recreates
+the scan on this instance and ingests its findings through the normal lifecycle path, so the
+destination **re-derives its own lifecycle** (dedup identity, first/last-seen, mitigation
+state) from the results exactly as if it had scanned the target itself. The dedup identity is
+**recomputed from the verbatim raw payload** — never trusted from the manifest — and occurrence
+scope follows the resolved destination target. References (target / template set / scan policy /
+node / schedule) that don't exist here **fall back to NULL** and are listed in the response's
+`fallbacks`; a missing entity never fails the import (fail-soft on references, fail-hard on the
+bundle itself). An in-flight (queued/running) export imports as `failed`. A destination
+analyst's overlays are never touched (they were never exported). Coverage evidence is applied
+only to lifecycle findings the bundle actually carries observations for, and only when the
+imported scan completed — a manifest that merely claims coverage can never close a finding it
+did not observe. The default conflict policy
+`error` returns **409** when the exported scan id already exists locally; `conflict=duplicate`
+imports under a fresh id instead. A bundle must be a format/version this backend understands
+and must validate (`400` otherwise) — including a `scan.source` and no future-dated
+timestamps. Zip bundles are sniffed by the `PK` magic, must contain exactly one
+`manifest.json`, and are extracted with a 512 MiB upload ceiling (decompressed manifest
+capped at 128 MiB).
+
+```sh
+# download the manifest for one scan (viewer)
+curl -sb jar.txt "localhost:8080/api/scans/<scan_id>/export" -o bundle.nsc-bundle.json
+# the same document zipped
+curl -sb jar.txt "localhost:8080/api/scans/<scan_id>/export?format=zip" -o bundle.nsc-bundle.zip
+# recreate the scan + results here (operator); 409 if the id already exists
+curl -sb jar.txt -X POST -H 'content-type: application/octet-stream' \
+  --data-binary @bundle.nsc-bundle.zip "localhost:8080/api/scans/import" | jq
+```
+
 ## Findings lifecycle
 
 Findings are **deduplicated** across scans and tracked over time with a **Tenable Security

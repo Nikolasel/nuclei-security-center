@@ -113,21 +113,12 @@ func (e *FindingRecordError) Stage() string { return e.stage }
 // detection states. Analyst dispositions are left untouched (an accepted risk stays
 // accepted until it expires). All writes run in one transaction.
 func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f types.NucleiFinding, raw []byte) error {
-	// DedupKey intentionally sees the parsed source fields before their database
-	// projection: it drops C0 controls (including NUL) to retain the established
-	// key semantics, while display columns render NUL visibly as "\0".
-	rawProjection, err := findingJSONBProjection(raw)
+	// The record-local projection runs before any database work, so a malformed
+	// record fails cleanly without touching the pool.
+	prep, err := prepareOccurrence(f, raw)
 	if err != nil {
-		return NewFindingRecordError("project raw finding JSON", err)
+		return err
 	}
-	discriminator, err := resultDiscriminator(rawProjection)
-	if err != nil {
-		return NewFindingRecordError("derive finding result identity", err)
-	}
-	key := DedupKey(f.TemplateID, f.MatchedAt, discriminator)
-	rawLine := findingRawLine(raw)
-	f = findingTextProjection(f)
-	endpointKey := postgresText(types.EndpointKey(f.MatchedAt, f.Type))
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -139,36 +130,85 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 		return fmt.Errorf("read occurrence scan order: %w", err)
 	}
 
+	// The scan result is observed at ingest time; the scan-bundle import path
+	// (internal/store/scanbundle.go) calls the same helper with the occurrence's
+	// own timestamp instead, so reconstructed history keeps its original dates.
+	if _, err := ingestFindingOccurrence(ctx, tx, scanID, targetID, scanCreatedAt, prep, time.Now()); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// preparedOccurrence is the record-local projection of one occurrence, computed
+// before any database work so malformed records fail cleanly (FindingRecordError).
+type preparedOccurrence struct {
+	key           string
+	discriminator string
+	rawProjection []byte
+	rawLine       string
+	f             types.NucleiFinding
+	endpointKey   string
+}
+
+func prepareOccurrence(f types.NucleiFinding, raw []byte) (preparedOccurrence, error) {
+	// DedupKey intentionally sees the parsed source fields before their database
+	// projection: it drops C0 controls (including NUL) to retain the established
+	// key semantics, while display columns render NUL visibly as "\0".
+	rawProjection, err := findingJSONBProjection(raw)
+	if err != nil {
+		return preparedOccurrence{}, NewFindingRecordError("project raw finding JSON", err)
+	}
+	discriminator, err := resultDiscriminator(rawProjection)
+	if err != nil {
+		return preparedOccurrence{}, NewFindingRecordError("derive finding result identity", err)
+	}
+	return preparedOccurrence{
+		key:           DedupKey(f.TemplateID, f.MatchedAt, discriminator),
+		discriminator: discriminator,
+		rawProjection: rawProjection,
+		rawLine:       findingRawLine(raw),
+		f:             findingTextProjection(f),
+		endpointKey:   postgresText(types.EndpointKey(f.MatchedAt, f.Type)),
+	}, nil
+}
+
+// ingestFindingOccurrence inserts one occurrence and upserts its lifecycle row
+// inside the caller's transaction, using occurredAt as the observation time
+// (what a normal ingest calls now()). It reports whether the lifecycle row was
+// created by this occurrence.
+func ingestFindingOccurrence(ctx context.Context, tx pgx.Tx, scanID, targetID string, scanCreatedAt time.Time,
+	prep preparedOccurrence, occurredAt time.Time) (bool, error) {
 	var occID int64
 	if err := tx.QueryRow(ctx,
 		`INSERT INTO findings
 		   (scan_id, target_id, dedup_key, result_discriminator, template_id, name, severity,
-		    host, matched_at, type, cve, tags, raw, raw_line)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		    host, matched_at, type, cve, tags, raw, raw_line, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		 RETURNING id`,
-		scanID, nullStr(targetID), key, discriminator, f.TemplateID, f.Info.Name, f.Info.Severity,
-		f.Host, f.MatchedAt, f.Type, orEmpty(f.CVEs()), orEmpty(f.Info.Tags), rawProjection, rawLine,
+		scanID, nullStr(targetID), prep.key, prep.discriminator, prep.f.TemplateID, prep.f.Info.Name, prep.f.Info.Severity,
+		prep.f.Host, prep.f.MatchedAt, prep.f.Type, orEmpty(prep.f.CVEs()), orEmpty(prep.f.Info.Tags), prep.rawProjection, prep.rawLine, occurredAt,
 	).Scan(&occID); err != nil {
-		return fmt.Errorf("insert occurrence: %w", err)
+		return false, fmt.Errorf("insert occurrence: %w", err)
 	}
 
 	var lcID int64
+	var lcCreated bool
 	// Scans can finish out of creation order. Lifecycle chronology follows the
 	// stable (scan.created_at, scan.id) order, never ingest/finish order, so a
 	// slower older scan cannot move last_seen backwards and manufacture a
 	// mitigation cycle after a newer scan has already completed.
 	const incomingNewer = `(finding_lifecycle.last_seen_scan IS NULL OR COALESCE((
-		SELECT (current_scan.created_at, current_scan.id) < ($14::timestamptz, $12::uuid)
+		SELECT (current_scan.created_at, current_scan.id) < ($14::timestamptz, $16::uuid)
 		  FROM scans current_scan
 		 WHERE current_scan.id = finding_lifecycle.last_seen_scan
 	), true))`
 	const incomingOlder = `(finding_lifecycle.first_seen_scan IS NULL OR COALESCE((
-		SELECT ($14::timestamptz, $12::uuid) < (current_scan.created_at, current_scan.id)
+		SELECT ($14::timestamptz, $16::uuid) < (current_scan.created_at, current_scan.id)
 		  FROM scans current_scan
 		 WHERE current_scan.id = finding_lifecycle.first_seen_scan
 	), true))`
 	const incomingAfterCovering = `COALESCE((
-		SELECT (current_scan.created_at, current_scan.id) < ($14::timestamptz, $12::uuid)
+		SELECT (current_scan.created_at, current_scan.id) < ($14::timestamptz, $16::uuid)
 		  FROM scans current_scan
 		 WHERE current_scan.id = finding_lifecycle.last_covering_scan
 	), true)`
@@ -177,12 +217,12 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 		   (dedup_key, result_discriminator, template_id, name, severity, host,
 		    matched_at, endpoint_key, type, cve, tags, first_seen_scan, first_seen_at, last_seen_scan,
 		    last_seen_at, latest_occurrence_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now(), $12, now(), $13)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $15, $12, $15, $13)
 		 ON CONFLICT (dedup_key) DO UPDATE SET
 		    first_seen_scan      = CASE WHEN %[2]s THEN excluded.first_seen_scan ELSE finding_lifecycle.first_seen_scan END,
 		    first_seen_at        = least(finding_lifecycle.first_seen_at, excluded.first_seen_at),
 		    last_seen_scan       = CASE WHEN %[1]s THEN excluded.last_seen_scan ELSE finding_lifecycle.last_seen_scan END,
-		    last_seen_at         = CASE WHEN %[1]s THEN now() ELSE finding_lifecycle.last_seen_at END,
+		    last_seen_at         = CASE WHEN %[1]s THEN $15 ELSE finding_lifecycle.last_seen_at END,
 		    name                 = CASE WHEN %[1]s THEN excluded.name ELSE finding_lifecycle.name END,
 		    severity             = CASE WHEN %[1]s THEN excluded.severity ELSE finding_lifecycle.severity END,
 		    host                 = CASE WHEN %[1]s THEN excluded.host ELSE finding_lifecycle.host END,
@@ -199,19 +239,20 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 		         AND finding_lifecycle.last_seen_scan IS DISTINCT FROM finding_lifecycle.last_covering_scan
 		         AND finding_lifecycle.last_seen_scan IS DISTINCT FROM excluded.last_seen_scan
 		        THEN 1 ELSE 0 END
-		 RETURNING id`,
+		 RETURNING id, (xmax = 0) AS created`,
 		incomingNewer, incomingOlder, incomingAfterCovering)
 	if err := tx.QueryRow(ctx, upsertLifecycle,
-		key, discriminator, f.TemplateID, f.Info.Name, f.Info.Severity, f.Host, f.MatchedAt,
-		endpointKey, f.Type, orEmpty(f.CVEs()), orEmpty(f.Info.Tags), scanID, occID, scanCreatedAt,
-	).Scan(&lcID); err != nil {
-		return fmt.Errorf("upsert lifecycle: %w", err)
+		prep.key, prep.discriminator, prep.f.TemplateID, prep.f.Info.Name, prep.f.Info.Severity, prep.f.Host, prep.f.MatchedAt,
+		prep.endpointKey, prep.f.Type, orEmpty(prep.f.CVEs()), orEmpty(prep.f.Info.Tags), scanID, occID, scanCreatedAt,
+		occurredAt, scanID,
+	).Scan(&lcID, &lcCreated); err != nil {
+		return false, fmt.Errorf("upsert lifecycle: %w", err)
 	}
 
 	if _, err := tx.Exec(ctx, `UPDATE findings SET finding_id = $1 WHERE id = $2`, lcID, occID); err != nil {
-		return fmt.Errorf("link occurrence: %w", err)
+		return false, fmt.Errorf("link occurrence: %w", err)
 	}
-	return tx.Commit(ctx)
+	return lcCreated, nil
 }
 
 // findingJSONBProjection makes a Nuclei result safe for PostgreSQL JSONB.

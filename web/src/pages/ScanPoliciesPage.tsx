@@ -129,6 +129,8 @@ function ScanPolicyModal({
         max_host_error: parseKnob(maxHostError),
         discovery_enabled: discoveryEnabled,
         discovery_scan_type: discoveryEnabled ? discoveryScanType || undefined : undefined,
+        // Explicit null clears a persisted override when the tri-state is back
+        // at the scan-mode default; the other discovery knobs are plain tunings.
         discovery_host_discovery: discoveryEnabled ? discoveryHostDiscovery : null,
         discovery_ports: discoveryEnabled ? discoveryPorts.trim() || undefined : undefined,
         discovery_timeout_sec: discoveryEnabled ? parseKnob(discoveryTimeoutSec) : null,

@@ -17,8 +17,8 @@ import (
 //
 // The canonical byte string is length-prefixed and its extracted results are
 // sorted (duplicates retained), making source-array ordering irrelevant without
-// introducing delimiter ambiguity. The database digest function implements the
-// same format so SQL and Go never fork future observations.
+// introducing delimiter ambiguity. Unit tests pin the format so future runtime
+// changes cannot silently fork persisted identities.
 func resultDiscriminator(raw []byte) (string, error) {
 	var source map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &source); err != nil {

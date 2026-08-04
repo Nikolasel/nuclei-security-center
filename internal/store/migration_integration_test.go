@@ -17,6 +17,35 @@ import (
 //go:embed testdata/alpha_migrations/*.sql
 var alphaMigrationsFS embed.FS
 
+func TestAlphaMigrationFixtureIntegrity(t *testing.T) {
+	names, err := fs.Glob(alphaMigrationsFS, "testdata/alpha_migrations/*.sql")
+	if err != nil {
+		t.Fatalf("list alpha migration fixtures: %v", err)
+	}
+	sort.Strings(names)
+	if len(names) != 41 {
+		t.Fatalf("alpha migration fixture count = %d, want 41", len(names))
+	}
+
+	digest := sha256.New()
+	for _, fullName := range names {
+		name := strings.TrimPrefix(fullName, "testdata/alpha_migrations/")
+		body, err := alphaMigrationsFS.ReadFile(fullName)
+		if err != nil {
+			t.Fatalf("read alpha migration fixture %s: %v", name, err)
+		}
+		_, _ = digest.Write([]byte(name))
+		_, _ = digest.Write([]byte{0})
+		_, _ = digest.Write(body)
+		_, _ = digest.Write([]byte{0})
+	}
+
+	const want = "750ca67f0d6bc16c06e4e37bdc221d1e92d664708332181f0324dc55db679633"
+	if got := fmt.Sprintf("%x", digest.Sum(nil)); got != want {
+		t.Fatalf("alpha migration fixture digest = %s, want %s; fixtures are immutable history", got, want)
+	}
+}
+
 func TestMigrateRejectsUnknownAppliedVersionPostgres(t *testing.T) {
 	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -356,6 +385,43 @@ func TestBaselineMatchesAlphaChainPostgres(t *testing.T) {
 	if alphaDump != baselineDump {
 		t.Fatalf("beta baseline differs from the alpha migration chain: %s", firstSchemaDifference(alphaDump, baselineDump))
 	}
+	alphaState := readInitialApplicationState(t, ctx, alpha)
+	baselineState := readInitialApplicationState(t, ctx, baseline)
+	if fmt.Sprint(alphaState) != fmt.Sprint(baselineState) {
+		t.Fatalf("beta baseline initial state = %#v, want alpha-chain state %#v", baselineState, alphaState)
+	}
+}
+
+type initialApplicationState struct {
+	appSettingsRows         int
+	templateSets            []string
+	findingsSequence        int64
+	findingsSequenceCalled  bool
+	lifecycleSequence       int64
+	lifecycleSequenceCalled bool
+}
+
+func readInitialApplicationState(t *testing.T, ctx context.Context, st *Store) initialApplicationState {
+	t.Helper()
+	var state initialApplicationState
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM app_settings`).Scan(&state.appSettingsRows); err != nil {
+		t.Fatalf("count initial app settings: %v", err)
+	}
+	if err := st.pool.QueryRow(ctx, `
+		SELECT coalesce(array_agg(name || ':' || mode ORDER BY name), ARRAY[]::text[])
+		  FROM template_sets
+	`).Scan(&state.templateSets); err != nil {
+		t.Fatalf("read initial template sets: %v", err)
+	}
+	if err := st.pool.QueryRow(ctx, `SELECT last_value, is_called FROM findings_id_seq`).
+		Scan(&state.findingsSequence, &state.findingsSequenceCalled); err != nil {
+		t.Fatalf("read initial findings sequence: %v", err)
+	}
+	if err := st.pool.QueryRow(ctx, `SELECT last_value, is_called FROM finding_lifecycle_id_seq`).
+		Scan(&state.lifecycleSequence, &state.lifecycleSequenceCalled); err != nil {
+		t.Fatalf("read initial lifecycle sequence: %v", err)
+	}
+	return state
 }
 
 func applySQLFiles(t *testing.T, ctx context.Context, st *Store, source fs.FS, dir string) {

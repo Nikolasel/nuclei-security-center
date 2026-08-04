@@ -291,6 +291,7 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 	cmd.Stderr = sw
 	cmd.Stdout = io.Discard
 
+	writeCommandLog(logw, "nuclei", r.nucleiPath, args)
 	err = cmd.Run()
 	sw.flush()
 	// Release the handshake anchor after Nuclei exits. This is the last writer

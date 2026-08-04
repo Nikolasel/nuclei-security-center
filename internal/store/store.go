@@ -774,17 +774,29 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 		return "", "", fmt.Errorf("list affected lifecycle: %w", err)
 	}
 	affectedRows.Close()
+	// Clear pointers to occurrences that the scan cascade is about to delete.
+	// PostgreSQL assigns internal RI-trigger names from creation order, so relying
+	// on ON DELETE SET NULL to run before both scan-to-finding cascade constraints
+	// is not portable across an equivalent schema rebuilt from a compacted dump.
+	if _, err := tx.Exec(ctx, `
+		UPDATE finding_lifecycle
+		   SET latest_occurrence_id = NULL
+		 WHERE latest_occurrence_id IN (
+		       SELECT id FROM findings WHERE scan_id = $1
+		 )`, id); err != nil {
+		return "", "", fmt.Errorf("clear lifecycle occurrence pointers: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM scans WHERE id = $1`, id); err != nil {
 		return "", "", err
 	}
-	// The delete just cascaded this scan's findings occurrences and (via
-	// ON DELETE SET NULL) nulled any first_seen_scan/last_seen_scan/
-	// latest_occurrence_id pointer to it. Left alone, a finding whose
-	// times_mitigated / first_seen_scan survive from history that no longer
-	// exists would show a detection state (e.g. "resurfaced") the remaining
-	// scans can't actually justify. Recompute those fields for the affected
-	// global lifecycle rows from only the scans that still exist, so every
-	// finding's story stays explainable from what's currently visible.
+	// The delete just cascaded this scan's findings occurrences and nulled any
+	// first_seen_scan/last_seen_scan pointer to it; latest_occurrence_id was
+	// cleared explicitly above. Left alone, a finding whose times_mitigated /
+	// first_seen_scan survive from history that no longer exists could show a
+	// detection state (for example, "resurfaced") that the remaining scans
+	// cannot justify. Recompute those fields for the affected global lifecycle
+	// rows from only the scans that still exist, so every finding's story stays
+	// explainable from what's currently visible.
 	if err := repairLifecycleFindings(ctx, tx, affectedLifecycle); err != nil {
 		return "", "", fmt.Errorf("repair lifecycle: %w", err)
 	}

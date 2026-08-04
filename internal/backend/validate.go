@@ -106,7 +106,8 @@ func validateScanPolicy(p *store.ScanPolicy) error {
 	}
 	// Discovery scan type (#86) — "syn" or "connect", or empty for the node's
 	// NAABU_SCAN_TYPE default. Lower-cased so the UI/API can be lenient; the DB
-	// CHECK constraint is the backstop.
+	// CHECK constraint is the backstop. Host discovery is validated separately as
+	// a nullable boolean so nil can preserve the mode-dependent default (#133).
 	p.DiscoveryScanType = strings.ToLower(strings.TrimSpace(p.DiscoveryScanType))
 	switch p.DiscoveryScanType {
 	case "", "syn", "connect":

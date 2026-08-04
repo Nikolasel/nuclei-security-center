@@ -31,12 +31,13 @@ func TestOverlayScanPolicy(t *testing.T) {
 	full := overlayScanPolicy(base, store.ScanPolicy{
 		RateLimit: ptr(20), Concurrency: ptr(5), TimeoutSec: ptr(1200), MaxHostError: ptr(50),
 		DiscoveryEnabled: ptr(true), DiscoveryScanType: "connect", DiscoveryPorts: "80,443,8000-9000",
-		DiscoveryTimeoutSec: ptr(120),
+		DiscoveryHostDiscovery: ptr(true), DiscoveryTimeoutSec: ptr(120),
 	})
 	if knobsOf(full) != (types.ScanOptions{RateLimit: 20, Concurrency: 5, TimeoutSec: 1200, MaxHostError: 50}) {
 		t.Errorf("full overlay = %+v", knobsOf(full))
 	}
-	if full.Discovery == nil || !full.Discovery.Enabled || full.Discovery.ScanType != "connect" ||
+	if full.Discovery == nil || !full.Discovery.Enabled || full.Discovery.HostDiscovery == nil ||
+		!*full.Discovery.HostDiscovery || full.Discovery.ScanType != "connect" ||
 		full.Discovery.Ports != "80,443,8000-9000" || full.Discovery.TimeoutSec != 120 {
 		t.Errorf("discovery overlay = %+v", full.Discovery)
 	}
@@ -48,6 +49,9 @@ func TestOverlayScanPolicy(t *testing.T) {
 	}
 	if noop.Discovery == nil || !noop.Discovery.Enabled {
 		t.Errorf("empty-policy discovery should default ON, got %+v", noop.Discovery)
+	}
+	if noop.Discovery.HostDiscovery != nil {
+		t.Errorf("empty-policy host discovery should preserve mode default, got %+v", noop.Discovery.HostDiscovery)
 	}
 
 	// An explicit opt-out disables discovery.

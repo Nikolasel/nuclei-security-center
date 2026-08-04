@@ -31,8 +31,12 @@ type ScanPolicy struct {
 	// DiscoveryPorts empty = naabu's top-1000; DiscoveryTimeoutSec nil = the node's
 	// built-in discovery default (separate from the Nuclei TimeoutSec above).
 	DiscoveryEnabled *bool `json:"discovery_enabled,omitempty"`
-	// DiscoveryScanType picks naabu's mode ("syn"/"connect"); empty = the node's
-	// NAABU_SCAN_TYPE default (#86).
+	// DiscoveryHostDiscovery controls naabu's host-discovery pass independently of
+	// its port-scan mode. nil preserves the existing SYN-on/connect-off behavior;
+	// true or false applies explicitly to either mode (#133).
+	DiscoveryHostDiscovery *bool `json:"discovery_host_discovery,omitempty"`
+	// DiscoveryScanType picks naabu's port-scan mode ("syn"/"connect"); empty =
+	// the node's NAABU_SCAN_TYPE default (#86).
 	DiscoveryScanType   string `json:"discovery_scan_type,omitempty"`
 	DiscoveryPorts      string `json:"discovery_ports,omitempty"`
 	DiscoveryTimeoutSec *int   `json:"discovery_timeout_sec,omitempty"`
@@ -46,7 +50,7 @@ type ScanPolicy struct {
 }
 
 const scanPolicyCols = `id, name, template_set_id, rate_limit, concurrency, timeout_sec, max_host_error,
-	discovery_enabled, discovery_scan_type, discovery_ports, discovery_timeout_sec, discovery_rate,
+	discovery_enabled, discovery_host_discovery, discovery_scan_type, discovery_ports, discovery_timeout_sec, discovery_rate,
 	discovery_probe_timeout_ms, discovery_retries, created_by, created_at, updated_at`
 
 // scanScanPolicy reads one row (column order must match scanPolicyCols).
@@ -54,7 +58,7 @@ func scanScanPolicy(row pgx.Row) (ScanPolicy, error) {
 	var p ScanPolicy
 	var discoveryScanType, discoveryPorts, createdBy *string
 	err := row.Scan(&p.ID, &p.Name, &p.TemplateSetID, &p.RateLimit, &p.Concurrency, &p.TimeoutSec,
-		&p.MaxHostError, &p.DiscoveryEnabled, &discoveryScanType, &discoveryPorts, &p.DiscoveryTimeoutSec, &p.DiscoveryRate,
+		&p.MaxHostError, &p.DiscoveryEnabled, &p.DiscoveryHostDiscovery, &discoveryScanType, &discoveryPorts, &p.DiscoveryTimeoutSec, &p.DiscoveryRate,
 		&p.DiscoveryProbeTimeoutMs, &p.DiscoveryRetries, &createdBy, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -74,12 +78,12 @@ func (s *Store) CreateScanPolicy(ctx context.Context, in ScanPolicy) (ScanPolicy
 	in.ID = types.NewID()
 	out, err := scanScanPolicy(s.pool.QueryRow(ctx,
 		`INSERT INTO scan_policies (id, name, template_set_id, rate_limit, concurrency, timeout_sec, max_host_error,
-		     discovery_enabled, discovery_scan_type, discovery_ports, discovery_timeout_sec, discovery_rate,
+		     discovery_enabled, discovery_host_discovery, discovery_scan_type, discovery_ports, discovery_timeout_sec, discovery_rate,
 		     discovery_probe_timeout_ms, discovery_retries, created_by)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, TRUE), $9, $10, $11, $12, $13, $14, $15)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, TRUE), $9, $10, $11, $12, $13, $14, $15, $16)
 		 RETURNING `+scanPolicyCols,
 		in.ID, in.Name, in.TemplateSetID, in.RateLimit, in.Concurrency, in.TimeoutSec, in.MaxHostError,
-		in.DiscoveryEnabled, nullStr(in.DiscoveryScanType), nullStr(in.DiscoveryPorts), in.DiscoveryTimeoutSec, in.DiscoveryRate,
+		in.DiscoveryEnabled, in.DiscoveryHostDiscovery, nullStr(in.DiscoveryScanType), nullStr(in.DiscoveryPorts), in.DiscoveryTimeoutSec, in.DiscoveryRate,
 		in.DiscoveryProbeTimeoutMs, in.DiscoveryRetries, nullStr(in.CreatedBy)))
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -124,12 +128,12 @@ func (s *Store) UpdateScanPolicy(ctx context.Context, id string, in ScanPolicy) 
 		`UPDATE scan_policies
 		 SET name = $2, template_set_id = $3, rate_limit = $4, concurrency = $5,
 		     timeout_sec = $6, max_host_error = $7, discovery_enabled = COALESCE($8, TRUE),
-		     discovery_scan_type = $9, discovery_ports = $10, discovery_timeout_sec = $11, discovery_rate = $12,
-		     discovery_probe_timeout_ms = $13, discovery_retries = $14, updated_at = now()
+		     discovery_host_discovery = $9, discovery_scan_type = $10, discovery_ports = $11, discovery_timeout_sec = $12, discovery_rate = $13,
+		     discovery_probe_timeout_ms = $14, discovery_retries = $15, updated_at = now()
 		 WHERE id = $1
 		 RETURNING `+scanPolicyCols,
 		id, in.Name, in.TemplateSetID, in.RateLimit, in.Concurrency, in.TimeoutSec, in.MaxHostError,
-		in.DiscoveryEnabled, nullStr(in.DiscoveryScanType), nullStr(in.DiscoveryPorts), in.DiscoveryTimeoutSec, in.DiscoveryRate,
+		in.DiscoveryEnabled, in.DiscoveryHostDiscovery, nullStr(in.DiscoveryScanType), nullStr(in.DiscoveryPorts), in.DiscoveryTimeoutSec, in.DiscoveryRate,
 		in.DiscoveryProbeTimeoutMs, in.DiscoveryRetries))
 	if err != nil {
 		if isUniqueViolation(err) {

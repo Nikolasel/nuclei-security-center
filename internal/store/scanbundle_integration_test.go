@@ -27,8 +27,8 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	origin := openIsolatedPostgres(t, ctx, dsn, "0039_schedule_name_uniqueness.sql")
-	dest := openIsolatedPostgres(t, ctx, dsn, "0039_schedule_name_uniqueness.sql")
+	origin := openIsolatedPostgres(t, ctx, dsn, "0040_scan_policy_host_discovery.sql")
+	dest := openIsolatedPostgres(t, ctx, dsn, "0040_scan_policy_host_discovery.sql")
 
 	suffix := types.NewID()
 	target, err := origin.CreateTarget(ctx, Target{Name: "bundle-roundtrip-" + suffix, Hosts: []string{"roundtrip.invalid"}})
@@ -40,10 +40,12 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 		t.Fatalf("create template set: %v", err)
 	}
 	rateLimit := 25
+	hostDiscovery := true
 	policy, err := origin.CreateScanPolicy(ctx, ScanPolicy{
-		Name:          "bundle-policy-" + suffix,
-		TemplateSetID: templateSet.ID,
-		RateLimit:     &rateLimit,
+		Name:                   "bundle-policy-" + suffix,
+		TemplateSetID:          templateSet.ID,
+		RateLimit:              &rateLimit,
+		DiscoveryHostDiscovery: &hostDiscovery,
 	})
 	if err != nil {
 		t.Fatalf("create scan policy: %v", err)
@@ -129,8 +131,9 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 		t.Fatalf("mirror template set on destination: %v", err)
 	}
 	if _, err := dest.pool.Exec(ctx,
-		`INSERT INTO scan_policies (id, name, template_set_id, rate_limit, discovery_enabled) VALUES ($1, $2, $3, $4, COALESCE($5, TRUE))`,
-		policy.ID, policy.Name, policy.TemplateSetID, policy.RateLimit, policy.DiscoveryEnabled); err != nil {
+		`INSERT INTO scan_policies (id, name, template_set_id, rate_limit, discovery_enabled, discovery_host_discovery)
+		 VALUES ($1, $2, $3, $4, COALESCE($5, TRUE), $6)`,
+		policy.ID, policy.Name, policy.TemplateSetID, policy.RateLimit, policy.DiscoveryEnabled, policy.DiscoveryHostDiscovery); err != nil {
 		t.Fatalf("mirror scan policy on destination: %v", err)
 	}
 
@@ -173,6 +176,9 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 	}
 	if bundle.Config.Target == nil || bundle.Config.TemplateSet == nil || bundle.Config.ScanPolicy == nil {
 		t.Fatalf("bundle config snapshots missing")
+	}
+	if bundle.Config.ScanPolicy.DiscoveryHostDiscovery == nil || !*bundle.Config.ScanPolicy.DiscoveryHostDiscovery {
+		t.Fatalf("bundle omitted forced host-discovery setting: %+v", bundle.Config.ScanPolicy)
 	}
 
 	// Import into the empty destination instance.
@@ -297,7 +303,7 @@ func TestScanBundleImportFallbackPostgres(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	dest := openIsolatedPostgres(t, ctx, dsn, "0039_schedule_name_uniqueness.sql")
+	dest := openIsolatedPostgres(t, ctx, dsn, "0040_scan_policy_host_discovery.sql")
 
 	suffix := types.NewID()
 	target, err := dest.CreateTarget(ctx, Target{Name: "bundle-fallback-" + suffix, Hosts: []string{"fallback.invalid"}})
@@ -450,7 +456,7 @@ func TestScanBundleImportCannotCloseUnobservedPostgres(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	dest := openIsolatedPostgres(t, ctx, dsn, "0039_schedule_name_uniqueness.sql")
+	dest := openIsolatedPostgres(t, ctx, dsn, "0040_scan_policy_host_discovery.sql")
 
 	suffix := types.NewID()
 	target, err := dest.CreateTarget(ctx, Target{Name: "coverage-import-" + suffix, Hosts: []string{"coverage.invalid"}})

@@ -553,6 +553,14 @@ Because the policy is reusable, its discovery mode, rate, timeouts, and host-err
 applied unchanged to whichever target is selected. Operators should confirm those settings suit
 the chosen scope, especially before pointing a high-rate policy at a fragile device.
 
+The optional naabu host-discovery setting is independent from `discovery_scan_type`. Leave
+`discovery_host_discovery` unset (or `null`) to preserve the mode default — host discovery for SYN and
+no host discovery for connect. Set it to `true` to run the host-discovery pass before either port-scan
+mode, or `false` to scan every target host directly with either mode. Host discovery still fails closed
+on any naabu error. The host-discovery pass uses SYN/raw-socket probes even when the port-scan mode is
+`connect`, so that combination requires the node capabilities normally needed for SYN; it is still
+useful on a privileged node when connect is preferred for the port scan.
+
 `max_host_error` is Nuclei's `-max-host-error`: how many errors a single host may accumulate
 (across every protocol, not per port) before Nuclei abandons it for the rest of the run —
 silently skipping executors that hadn't run yet (e.g. the SSL/TLS pass). Raising it, and/or
@@ -566,7 +574,9 @@ curl -sb jar.txt -X POST localhost:8080/api/scan-policies -H 'content-type: appl
   "template_set_id": "<template_set_id>",
   "rate_limit": 20,
   "concurrency": 5,
-  "max_host_error": 100
+  "max_host_error": 100,
+  "discovery_scan_type": "syn",
+  "discovery_host_discovery": false
 }'
 # launch it against an approved target
 curl -sb jar.txt -X POST localhost:8080/api/scans \

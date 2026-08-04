@@ -47,18 +47,23 @@ type naabuResult struct {
 // the scan — it never falls back to scanning every host unfiltered. An empty
 // (non-error) return means naabu ran fine and found no live host:port.
 //
-// In SYN mode it runs TWO naabu passes: a host-discovery pass (`-sn`) then a
-// port-scan of just the live hosts. The split is deliberate — naabu only streams
-// its "Found alive host" lines in `-sn` mode, so the first pass gives a LIVE host
-// count for the UI (a full combined scan reports nothing until it finishes). The
-// total work is the same: the port-scan pass skips host discovery since the first
-// pass already did it. In connect mode (unprivileged, no host discovery) it is a
-// single port-scan pass over every host.
+// When host discovery is enabled it runs TWO naabu passes: a host-discovery pass
+// (`-sn`) then a port-scan of just the live hosts. The split is deliberate — naabu
+// only streams its "Found alive host" lines in `-sn` mode, so the first pass gives
+// a LIVE host count for the UI (a full combined scan reports nothing until it
+// finishes). The total work is the same for SYN and connect; the second pass uses
+// the selected port-scan mode and skips host discovery because pass one already
+// did it. When host discovery is disabled it is a single port-scan pass over every
+// host, regardless of the selected mode.
 //
 // naabu's stderr (banner + diagnostics) is mirrored to logw, the same execution-
 // log archive Nuclei's stderr lands in (#94); the same stream is parsed for the
 // live discovery tally.
 func (r *Runner) discover(ctx context.Context, spec types.ScanSpec, targetsFile, dir string, logw io.Writer, onProgress func(hosts, ports int)) ([]string, error) {
+	d := spec.Options.Discovery
+	if d == nil {
+		return nil, fmt.Errorf("discovery options missing")
+	}
 	tally := &discoveryTally{report: onProgress}
 	scanInput := targetsFile
 
@@ -66,19 +71,21 @@ func (r *Runner) discover(ctx context.Context, spec types.ScanSpec, targetsFile,
 	// the node's own NAABU_SCAN_TYPE default. Requesting "syn" on a node without raw
 	// sockets simply fails closed below.
 	scanType := r.scanType
-	if st := spec.Options.Discovery.ScanType; st != "" {
+	if st := d.ScanType; st != "" {
 		scanType = normalizeScanType(st)
 	}
 
-	if scanType == scanTypeSYN {
+	if shouldRunHostDiscovery(scanType, d) {
 		// Pass 1: host discovery only — streams "Found alive host" ⇒ live host count,
-		// and lists the alive host IPs on stdout, which we capture to aliveFile.
+		// and lists the alive host IPs on stdout, which we capture to aliveFile. The
+		// pass always uses SYN probes, even when the selected port scan is connect;
+		// this is naabu's host-discovery mechanism, not the port-scan mode.
 		aliveFile := filepath.Join(dir, "alive.txt")
 		f, err := os.OpenFile(aliveFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
 		if err != nil {
 			return nil, fmt.Errorf("create alive-hosts file: %w", err)
 		}
-		runErr := r.runNaabu(ctx, buildNaabuHostDiscoveryArgs(targetsFile, spec.Options.Discovery), f, logw, tally)
+		runErr := r.runNaabu(ctx, buildNaabuHostDiscoveryArgs(targetsFile, d), f, logw, tally)
 		f.Close()
 		if runErr != nil {
 			return nil, fmt.Errorf("host discovery: %w", runErr)
@@ -100,11 +107,11 @@ func (r *Runner) discover(ctx context.Context, spec types.ScanSpec, targetsFile,
 		scanInput = aliveFile
 	}
 
-	// Port-scan pass. Host discovery is skipped either way here: in SYN mode pass 1
-	// already did it (scanInput is the alive list); in connect mode it needs raw
-	// sockets we don't have. Results go to the -output file (stdout discarded).
+	// Port-scan pass. Host discovery is skipped here either because pass 1 already
+	// did it or because the policy explicitly disabled it. Results go to the
+	// -output file (stdout discarded).
 	outFile := filepath.Join(dir, "discovery.jsonl")
-	if err := r.runNaabu(ctx, buildNaabuPortScanArgs(scanInput, outFile, scanType, spec.Options.Discovery), io.Discard, logw, tally); err != nil {
+	if err := r.runNaabu(ctx, buildNaabuPortScanArgs(scanInput, outFile, scanType, d), io.Discard, logw, tally); err != nil {
 		return nil, err
 	}
 	return parseNaabuResults(outFile)
@@ -171,17 +178,16 @@ func readNonEmptyLines(path string) ([]string, error) {
 	return out, sc.Err()
 }
 
-// Scan-type modes for the naabu pre-pass, selected by the node's NAABU_SCAN_TYPE.
+// Scan-type modes for the naabu port scan, selected by the node's NAABU_SCAN_TYPE.
 const (
-	// scanTypeSYN is the default: a SYN scan preceded by host discovery, so naabu
-	// prunes dead hosts before port-scanning — the big win on sparse ranges. It
-	// needs raw sockets (CAP_NET_RAW, present in Docker's default caps) + libpcap
-	// (bundled in the image).
+	// scanTypeSYN is the default port-scan mode. Host discovery is selected
+	// independently by shouldRunHostDiscovery. SYN needs raw sockets (CAP_NET_RAW,
+	// present in Docker's default caps) + libpcap (bundled in the image).
 	scanTypeSYN = "syn"
-	// scanTypeConnect is the unprivileged fallback: a TCP connect scan with no host
-	// discovery (its probes need raw sockets). Needs no capabilities or libpcap, but
-	// scans every host's ports, so it's slower on sparse ranges. For locked-down
-	// deployments that drop NET_RAW.
+	// scanTypeConnect is the unprivileged fallback: a TCP connect port scan that
+	// needs no capabilities or libpcap. It defaults to scanning every host's ports,
+	// so it is slower on sparse ranges. An explicitly enabled host-discovery pass
+	// still uses the separate SYN/raw-socket probes above.
 	scanTypeConnect = "connect"
 )
 
@@ -192,6 +198,16 @@ func normalizeScanType(s string) string {
 		return scanTypeConnect
 	}
 	return scanTypeSYN
+}
+
+// shouldRunHostDiscovery applies the policy's independent host-discovery
+// setting. An unset value preserves the original behavior: SYN discovers alive
+// hosts first, while connect scans every host directly.
+func shouldRunHostDiscovery(scanType string, d *types.DiscoveryOptions) bool {
+	if d != nil && d.HostDiscovery != nil {
+		return *d.HostDiscovery
+	}
+	return normalizeScanType(scanType) == scanTypeSYN
 }
 
 // naabuBaseArgs are the flags common to every naabu invocation: no 2s inter-phase
@@ -223,12 +239,13 @@ func appendTuning(args []string, d *types.DiscoveryOptions) []string {
 	return args
 }
 
-// buildNaabuHostDiscoveryArgs assembles the SYN-mode host-discovery pass (`-sn`),
+// buildNaabuHostDiscoveryArgs assembles the host-discovery pass (`-sn`),
 // which prints "Found alive host" as each host answers (the live signal) and lists
 // the alive host IPs on STDOUT (naabu writes -sn results to stdout, not -output —
 // the caller captures stdout). It probes ICMP echo AND a TCP SYN/ACK ping to the
 // common web ports, so a host that blocks ICMP but serves 80/443 (typical on the
-// internet) is still detected as alive rather than skipped.
+// internet) is still detected as alive rather than skipped. Host discovery uses
+// SYN probes even when the subsequent port scan uses connect mode.
 func buildNaabuHostDiscoveryArgs(targetsFile string, d *types.DiscoveryOptions) []string {
 	args := append(naabuBaseArgs(targetsFile),
 		"-sn",
@@ -242,9 +259,9 @@ func buildNaabuHostDiscoveryArgs(targetsFile string, d *types.DiscoveryOptions) 
 }
 
 // buildNaabuPortScanArgs assembles the port-scan pass, writing JSON results to out.
-// Host discovery is always skipped here: in SYN mode the host-discovery pass already
-// ran (input is the alive list); in connect mode (unprivileged) its raw-socket
-// probes aren't available.
+// Host discovery is always skipped here: when enabled, the separate host-discovery
+// pass already ran (input is the alive list); when disabled, this is the deliberate
+// single-pass behavior.
 func buildNaabuPortScanArgs(targetsFile, out, scanType string, d *types.DiscoveryOptions) []string {
 	args := append(naabuBaseArgs(targetsFile), "-json", "-output", out, "-skip-host-discovery")
 	if scanType == scanTypeConnect {

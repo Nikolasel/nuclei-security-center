@@ -130,7 +130,10 @@ type ScanPolicyBundleSnapshot struct {
 	MaxHostError  *int   `json:"max_host_error,omitempty"`
 	// Discovery settings (#86). DiscoveryEnabled nil means "the built-in default
 	// (ON)" — mirrored from the store record.
-	DiscoveryEnabled        *bool  `json:"discovery_enabled,omitempty"`
+	DiscoveryEnabled *bool `json:"discovery_enabled,omitempty"`
+	// DiscoveryHostDiscovery nil preserves the selected scan mode's default;
+	// true/false records an explicit host-discovery override (#133).
+	DiscoveryHostDiscovery  *bool  `json:"discovery_host_discovery,omitempty"`
 	DiscoveryScanType       string `json:"discovery_scan_type,omitempty"`
 	DiscoveryPorts          string `json:"discovery_ports,omitempty"`
 	DiscoveryTimeoutSec     *int   `json:"discovery_timeout_sec,omitempty"`

@@ -45,8 +45,8 @@ func TestBuildNaabuHostDiscoveryArgs(t *testing.T) {
 }
 
 func TestBuildNaabuPortScanArgs(t *testing.T) {
-	// Port-scan pass always skips host discovery (SYN: pass 1 did it; connect: no
-	// raw sockets). SYN vs connect only changes the scan type.
+	// Port-scan pass always skips host discovery because the separate pass either
+	// already ran or was explicitly disabled. SYN vs connect only changes the mode.
 	syn := buildNaabuPortScanArgs("/t/alive.txt", "/t/o.jsonl", scanTypeSYN, &types.DiscoveryOptions{Enabled: true})
 	mustPair(t, syn, "-scan-type", "syn")
 	mustPair(t, syn, "-top-ports", defaultTopPorts)
@@ -104,6 +104,30 @@ func TestNormalizeScanType(t *testing.T) {
 		if got := normalizeScanType(in); got != want {
 			t.Errorf("normalizeScanType(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestShouldRunHostDiscovery(t *testing.T) {
+	on, off := true, false
+	for _, tc := range []struct {
+		name     string
+		scanType string
+		setting  *bool
+		want     bool
+	}{
+		{name: "syn default", scanType: scanTypeSYN, want: true},
+		{name: "connect default", scanType: scanTypeConnect, want: false},
+		{name: "syn forced on", scanType: scanTypeSYN, setting: &on, want: true},
+		{name: "syn forced off", scanType: scanTypeSYN, setting: &off, want: false},
+		{name: "connect forced on", scanType: scanTypeConnect, setting: &on, want: true},
+		{name: "connect forced off", scanType: scanTypeConnect, setting: &off, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldRunHostDiscovery(tc.scanType, &types.DiscoveryOptions{HostDiscovery: tc.setting})
+			if got != tc.want {
+				t.Fatalf("shouldRunHostDiscovery(%q, %v) = %v, want %v", tc.scanType, tc.setting, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -250,6 +274,57 @@ fi
 	want := "scanme.sh\n192.168.65.7\n"
 	if string(got) != want {
 		t.Errorf("port-scan input = %q, want %q", got, want)
+	}
+}
+
+func TestDiscoverConnectWithHostDiscovery(t *testing.T) {
+	dir := t.TempDir()
+	fakeNaabu := filepath.Join(dir, "fake-naabu")
+	capture := filepath.Join(dir, "connect-port-scan-input.txt")
+	if err := os.WriteFile(fakeNaabu, []byte(`#!/bin/sh
+set -eu
+list=
+output=
+host_discovery=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -list) list="$2"; shift 2 ;;
+    -output) output="$2"; shift 2 ;;
+    -sn) host_discovery=1; shift ;;
+    *) shift ;;
+  esac
+done
+if [ "$host_discovery" -eq 1 ]; then
+  printf 'scanme.sh\n192.168.65.7\n'
+else
+  cat "$list" > "$CAPTURE_FILE"
+  : > "$output"
+fi
+`), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CAPTURE_FILE", capture)
+	targetsFile := filepath.Join(dir, "targets.txt")
+	if err := os.WriteFile(targetsFile, []byte("scanme.sh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	on := true
+	r := &Runner{naabuPath: fakeNaabu, scanType: scanTypeConnect}
+	_, err := r.discover(context.Background(), types.ScanSpec{
+		Options: types.ScanOptions{Discovery: &types.DiscoveryOptions{
+			Enabled: true, ScanType: scanTypeConnect, HostDiscovery: &on,
+		}},
+	}, targetsFile, dir, io.Discard, nil)
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+
+	got, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatalf("read captured port-scan input: %v", err)
+	}
+	if string(got) != "scanme.sh\n192.168.65.7\n" {
+		t.Errorf("connect port-scan input = %q, want alive hosts", got)
 	}
 }
 

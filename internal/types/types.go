@@ -64,11 +64,17 @@ type ScanOptions struct {
 // the policy, never silently ignored.
 type DiscoveryOptions struct {
 	Enabled bool `json:"enabled"`
-	// ScanType picks naabu's scan mode: "syn" (SYN + host discovery, needs the
-	// node's CAP_NET_RAW + libpcap) or "connect" (unprivileged, no host discovery).
-	// Empty ⇒ the node's own NAABU_SCAN_TYPE default. Requesting "syn" on a node
-	// without raw-socket capability fails the scan closed (#86).
+	// ScanType picks naabu's port-scan mode: "syn" (needs the node's CAP_NET_RAW
+	// + libpcap) or "connect" (unprivileged). Empty ⇒ the node's own
+	// NAABU_SCAN_TYPE default. Requesting "syn" on a node without raw-socket
+	// capability fails the scan closed (#86). Host discovery is controlled
+	// independently by HostDiscovery below.
 	ScanType string `json:"scan_type,omitempty"`
+	// HostDiscovery controls whether naabu runs its separate host-discovery pass
+	// before the port scan. nil preserves the existing mode-dependent default:
+	// enabled for SYN and disabled for connect. A non-nil value applies to either
+	// scan type, so connect can opt into host discovery and SYN can skip it (#133).
+	HostDiscovery *bool `json:"host_discovery,omitempty"`
 	// Ports is naabu's -port spec (e.g. "80,443,8000-9000", multiple ranges
 	// allowed). Empty ⇒ naabu's top-1000 ports (the nmap top-1000 set).
 	Ports string `json:"ports,omitempty"`

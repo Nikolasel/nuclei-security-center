@@ -170,7 +170,7 @@ export function SchedulesPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Schedules</h1>
           <p className="text-sm text-neutral-500">Cron-driven scans dispatched automatically by the backend.</p>

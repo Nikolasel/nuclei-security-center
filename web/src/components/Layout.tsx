@@ -1,3 +1,4 @@
+import * as Dialog from "@radix-ui/react-dialog";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
@@ -8,14 +9,16 @@ import {
   Layers,
   Library,
   type LucideIcon,
+  Menu,
   PanelLeftClose,
   PanelLeftOpen,
   Radar,
   Server,
   SlidersHorizontal,
   Target,
+  X,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import type { Identity } from "../api";
 import { hasRole } from "../auth";
@@ -107,6 +110,83 @@ async function logout() {
   window.location.assign("/");
 }
 
+/** NavPane renders the section navigation: as an icon rail when `collapsed` is
+ *  true (labels dropped onto hover tooltips), or full labelled links otherwise. */
+function NavPane({
+  categories,
+  collapsed,
+  currentPath,
+}: {
+  categories: Category[];
+  collapsed: boolean;
+  currentPath: string;
+}) {
+  return (
+    <Tooltip.Provider delayDuration={0}>
+      <nav aria-label="Sections" className="space-y-6">
+        {categories.map((c, ci) => (
+          <div key={c.id}>
+            {collapsed ? (
+              // Icon rail: replace the category heading with a hairline
+              // separator between groups (skip it before the first group).
+              ci > 0 && <div className="mx-auto mb-2 h-px w-6 bg-neutral-200 dark:bg-neutral-800" />
+            ) : (
+              <div
+                className={cn(
+                  "px-2 pb-1 text-xs font-semibold uppercase tracking-wide",
+                  isCategoryActive(c, currentPath)
+                    ? "text-indigo-700 dark:text-indigo-300"
+                    : "text-neutral-500 dark:text-neutral-400",
+                )}
+              >
+                {c.label}
+              </div>
+            )}
+            <ul className="space-y-0.5">
+              {c.panes.map((p) => {
+                const Icon = p.icon;
+                const link = (
+                  <NavLink
+                    to={p.to}
+                    aria-label={p.label}
+                    className={paneLinkClass(isPaneActive(p, currentPath), collapsed)}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" aria-hidden />
+                    {!collapsed && <span>{p.label}</span>}
+                  </NavLink>
+                );
+                return (
+                  <li key={p.to}>
+                    {collapsed ? (
+                      // Icon-only rail: surface the pane name as a hover
+                      // tooltip since the label is hidden.
+                      <Tooltip.Root>
+                        <Tooltip.Trigger asChild>{link}</Tooltip.Trigger>
+                        <Tooltip.Portal>
+                          <Tooltip.Content
+                            side="right"
+                            sideOffset={8}
+                            className="z-50 rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white shadow-md dark:bg-neutral-100 dark:text-neutral-900"
+                          >
+                            {p.label}
+                            <Tooltip.Arrow className="fill-neutral-900 dark:fill-neutral-100" />
+                          </Tooltip.Content>
+                        </Tooltip.Portal>
+                      </Tooltip.Root>
+                    ) : (
+                      link
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </nav>
+    </Tooltip.Provider>
+  );
+}
+
 export function Layout({
   identity,
   children,
@@ -129,16 +209,49 @@ export function Layout({
   const location = useLocation();
   const currentPath = currentPathOverride ?? location.pathname;
   const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const toggleCollapsed = () =>
     setCollapsed((c) => {
       writeCollapsed(!c);
       return !c;
     });
 
+  // Close the mobile drawer on any route change — a nav link click and a
+  // hardware/gesture back both move `currentPath`, so the drawer can't stay
+  // open over the new page (the old onNavigate hook was link-click-only).
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [currentPath]);
+
+  // Close the drawer if the viewport crosses into the desktop layout (md+).
+  // Radix has no concept of a breakpoint, so without this the dialog would stay
+  // logically "open" while `md:hidden` visually hid it — leaving the app
+  // pointer-events:none and aria-hidden with no visible dialog to explain it
+  // (the slide-over sidebar takes over at md+). One mechanism (close on
+  // crossing) instead of two (close + visual hide) disagreeing about "open".
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const onChange = (e: MediaQueryListEvent) => {
+      if (e.matches) setMobileOpen(false);
+    };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
       <header className="border-b border-cyan-300/20 bg-slate-950 text-white shadow-[0_1px_28px_rgba(34,211,238,0.12)] dark:bg-slate-950">
-        <div className="mx-auto flex max-w-[96rem] items-center gap-6 px-4">
+        <div className="mx-auto flex max-w-[96rem] items-center gap-3 px-4 pt-[env(safe-area-inset-top)]">
+          {/* Mobile-only hamburger; the sidebar is a dialog on small viewports. */}
+          <button
+            type="button"
+            onClick={() => setMobileOpen(true)}
+            aria-label="Open navigation"
+            aria-haspopup="dialog"
+            className="rounded-md p-2 text-slate-100 hover:bg-white/10 md:hidden"
+          >
+            <Menu className="h-5 w-5" aria-hidden />
+          </button>
           <Brand className="py-2" />
           <div className="ml-auto">
             <DropdownMenu.Root>
@@ -184,14 +297,16 @@ export function Layout({
           </div>
         </div>
       </header>
-      <main className="mx-auto max-w-[96rem] px-4 py-6">
+      <main className="mx-auto max-w-[96rem] px-4 py-6 pb-[calc(env(safe-area-inset-bottom)+1.5rem)]">
+        {/* The sidebar is a fixed grid column on md+; on smaller viewports it
+            collapses into the mobile dialog below and content takes full width. */}
         <div
           className={cn(
             "grid gap-8",
-            collapsed ? "grid-cols-[3.25rem_minmax(0,1fr)]" : "grid-cols-[12rem_minmax(0,1fr)]",
+            collapsed ? "md:grid-cols-[3.25rem_minmax(0,1fr)]" : "md:grid-cols-[12rem_minmax(0,1fr)]",
           )}
         >
-          <aside className="sticky top-6 self-start">
+          <aside className="sticky top-6 hidden self-start md:block">
             <div className="max-h-[calc(100dvh-3rem)] overflow-y-auto pr-1">
               <div className={cn("mb-4 flex", collapsed ? "justify-center" : "justify-end")}>
                 <button
@@ -205,72 +320,44 @@ export function Layout({
                   {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
                 </button>
               </div>
-              <Tooltip.Provider delayDuration={0}>
-                <nav aria-label="Sections" className="space-y-6">
-                  {visible.map((c, ci) => (
-                    <div key={c.id}>
-                      {collapsed ? (
-                        // Icon rail: replace the category heading with a hairline
-                        // separator between groups (skip it before the first group).
-                        ci > 0 && <div className="mx-auto mb-2 h-px w-6 bg-neutral-200 dark:bg-neutral-800" />
-                      ) : (
-                        <div
-                          className={cn(
-                            "px-2 pb-1 text-xs font-semibold uppercase tracking-wide",
-                            isCategoryActive(c, currentPath)
-                              ? "text-indigo-700 dark:text-indigo-300"
-                              : "text-neutral-500 dark:text-neutral-400",
-                          )}
-                        >
-                          {c.label}
-                        </div>
-                      )}
-                      <ul className="space-y-0.5">
-                        {c.panes.map((p) => {
-                          const Icon = p.icon;
-                          const link = (
-                            <NavLink
-                              to={p.to}
-                              aria-label={p.label}
-                              className={paneLinkClass(isPaneActive(p, currentPath), collapsed)}
-                            >
-                              <Icon className="h-4 w-4 shrink-0" aria-hidden />
-                              {!collapsed && <span>{p.label}</span>}
-                            </NavLink>
-                          );
-                          return (
-                            <li key={p.to}>
-                              {collapsed ? (
-                                // Icon-only rail: surface the pane name as a hover
-                                // tooltip since the label is hidden.
-                                <Tooltip.Root>
-                                  <Tooltip.Trigger asChild>{link}</Tooltip.Trigger>
-                                  <Tooltip.Portal>
-                                    <Tooltip.Content
-                                      side="right"
-                                      sideOffset={8}
-                                      className="z-50 rounded-md bg-neutral-900 px-2 py-1 text-xs font-medium text-white shadow-md dark:bg-neutral-100 dark:text-neutral-900"
-                                    >
-                                      {p.label}
-                                      <Tooltip.Arrow className="fill-neutral-900 dark:fill-neutral-100" />
-                                    </Tooltip.Content>
-                                  </Tooltip.Portal>
-                                </Tooltip.Root>
-                              ) : (
-                                link
-                              )}
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </div>
-                  ))}
-                </nav>
-              </Tooltip.Provider>
+              <NavPane categories={visible} collapsed={collapsed} currentPath={currentPath} />
             </div>
           </aside>
           <div className="min-w-0">{children}</div>
         </div>
+
+        {/* Mobile navigation dialog. Radix Dialog supplies what a modal needs —
+            Escape to close, focus trap, focus restore, scroll lock, and
+            modality (role="dialog" + aria-hidden on background siblings —
+            Radix's mechanism, equivalent to aria-modal) — and its overlay is
+            not a button, so the only "Close navigation" accessible name is
+            on the X. */}
+        <Dialog.Root open={mobileOpen} onOpenChange={setMobileOpen}>
+          <Dialog.Portal>
+            <Dialog.Overlay className="fixed inset-0 z-40 bg-black/50" />
+            <Dialog.Content
+              aria-label="Navigation menu"
+              className="fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-col border-r border-neutral-200 bg-white shadow-xl outline-none dark:border-neutral-800 dark:bg-neutral-950"
+            >
+              <div className="flex items-center justify-between gap-3 px-5 pb-2 pt-[calc(env(safe-area-inset-top)+1rem)]">
+                <Brand compact />
+                <Dialog.Close asChild>
+                  <button
+                    type="button"
+                    aria-label="Close navigation"
+                    className="rounded-md p-2 text-neutral-500 hover:bg-neutral-100 hover:text-neutral-700 dark:hover:bg-neutral-800 dark:hover:text-neutral-300"
+                  >
+                    <X className="h-5 w-5" aria-hidden />
+                  </button>
+                </Dialog.Close>
+              </div>
+              <div className="h-px bg-neutral-200 dark:bg-neutral-800" />
+              <div className="flex-1 overflow-y-auto px-2 pb-[env(safe-area-inset-bottom)] pt-3">
+                <NavPane categories={visible} collapsed={false} currentPath={currentPath} />
+              </div>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
       </main>
     </div>
   );

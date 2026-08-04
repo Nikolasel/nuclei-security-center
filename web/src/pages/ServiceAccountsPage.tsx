@@ -204,7 +204,7 @@ export function ServiceAccountsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Service Accounts</h1>
           <p className="mt-1 text-sm text-neutral-500">

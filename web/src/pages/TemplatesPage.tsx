@@ -554,7 +554,7 @@ function CustomTab({ canWrite, canDelete }: { canWrite: boolean; canDelete: bool
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-neutral-500">Organization-specific YAML, validated by Nuclei and stored losslessly alongside the upstream catalog.</p>
         {canWrite && <Button variant="primary" onClick={() => setEditing("new")}>New custom template</Button>}
       </div>
@@ -759,7 +759,7 @@ export function TemplatesPage() {
         {canWrite && <Button variant="primary" onClick={() => setImporting(true)}>Import templates</Button>}
       </div>
       {importNotice && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">{importNotice}</div>}
-      <div className="flex gap-1 border-b border-neutral-200 dark:border-neutral-800">
+      <div className="flex flex-wrap gap-1 border-b border-neutral-200 dark:border-neutral-800">
         {(["catalog", "custom", "sync"] as const).map((value) => (
           <button
             key={value}

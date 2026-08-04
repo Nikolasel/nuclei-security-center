@@ -10,6 +10,16 @@ body {
     Helvetica, Arial, sans-serif;
 }
 
+/* Mobile-first guards: no page-level horizontal scroll (wide content scrolls
+   inside its own overflow-x-auto container instead) and no iOS text-size
+   inflation on orientation change. `clip` (not `hidden`) keeps sticky
+   positioning working. */
+html,
+body {
+  overflow-x: clip;
+  text-size-adjust: 100%;
+}
+
 /* Sliding bar for the indeterminate ProgressBar (naabu discovery phase, #86). */
 @keyframes indeterminate {
   0% {

@@ -114,6 +114,22 @@ func TestWriteCommandLogCompactsLargeTemplateArgv(t *testing.T) {
 	}
 }
 
+func TestTemplatePathSummaryClampsSampleWindow(t *testing.T) {
+	got := appendTemplatePathSummary(nil, "-templates", []string{
+		"/bundle/template-a.yaml",
+		"/bundle/template-b.yaml",
+		"/bundle/template-c.yaml",
+	})
+	want := []string{
+		"-templates", "/bundle/template-a.yaml",
+		"-templates", "[1 template paths omitted]",
+		"-templates", "/bundle/template-c.yaml",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("summary args = %#v, want %#v", got, want)
+	}
+}
+
 func TestWriteCommandLogRedactsSensitiveArguments(t *testing.T) {
 	var log bytes.Buffer
 	writeCommandLog(&log, "nuclei", "/opt/tools/nuclei", []string{

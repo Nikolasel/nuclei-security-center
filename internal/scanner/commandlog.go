@@ -117,14 +117,7 @@ func compactCommandArgs(args []string) []string {
 				i += 2
 			}
 			if len(paths) > maxLoggedTemplatePaths {
-				for _, path := range paths[:templatePathSampleEachSide] {
-					compacted = append(compacted, flag, path)
-				}
-				omitted := len(paths) - 2*templatePathSampleEachSide
-				compacted = append(compacted, flag, fmt.Sprintf(templatePathSummaryFormat, omitted))
-				for _, path := range paths[len(paths)-templatePathSampleEachSide:] {
-					compacted = append(compacted, flag, path)
-				}
+				compacted = appendTemplatePathSummary(compacted, flag, paths)
 			} else {
 				for _, path := range paths {
 					compacted = append(compacted, flag, path)
@@ -136,6 +129,25 @@ func compactCommandArgs(args []string) []string {
 		i++
 	}
 	return compacted
+}
+
+// appendTemplatePathSummary keeps the sampling safe independently of the
+// threshold constant: a future lower threshold cannot make the slices below
+// exceed the available path list and panic the scan's logging path.
+func appendTemplatePathSummary(args []string, flag string, paths []string) []string {
+	sampleEachSide := templatePathSampleEachSide
+	if maxSample := len(paths) / 2; sampleEachSide > maxSample {
+		sampleEachSide = maxSample
+	}
+	for _, path := range paths[:sampleEachSide] {
+		args = append(args, flag, path)
+	}
+	omitted := len(paths) - 2*sampleEachSide
+	args = append(args, flag, fmt.Sprintf(templatePathSummaryFormat, omitted))
+	for _, path := range paths[len(paths)-sampleEachSide:] {
+		args = append(args, flag, path)
+	}
+	return args
 }
 
 func isTemplateFlag(arg string) bool {

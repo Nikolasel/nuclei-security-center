@@ -316,8 +316,14 @@ func TestBaselineDeleteScanSerializesWithFindingIngestPostgres(t *testing.T) {
 		t.Fatalf("insert concurrent occurrence: %v", err)
 	}
 	var writerXID string
-	if err := writer.QueryRow(ctx, `SELECT pg_current_xact_id()::text`).Scan(&writerXID); err != nil {
-		t.Fatalf("read concurrent ingest transaction id: %v", err)
+	if err := writer.QueryRow(ctx, `
+		SELECT transactionid::text
+		  FROM pg_locks
+		 WHERE pid = pg_backend_pid()
+		   AND locktype = 'transactionid'
+		   AND mode = 'ExclusiveLock'
+		   AND granted`).Scan(&writerXID); err != nil {
+		t.Fatalf("read concurrent ingest transaction id lock: %v", err)
 	}
 
 	deleteErr := make(chan error, 1)

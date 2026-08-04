@@ -87,7 +87,8 @@ Linux host or routable network. See [Administration troubleshooting](ADMIN_GUIDE
 GitHub Actions runs:
 
 - Go formatting, vet, build, and race-enabled tests;
-- the real-PostgreSQL store suite, including baseline/alpha equivalence and lifecycle behavior;
+- real-PostgreSQL store and backend integration tests, including baseline/alpha equivalence,
+  lifecycle behavior, scope enforcement, and scan-bundle round trips;
 - `npm ci` and the production SPA build; and
 - on `v*` tags, tests followed by multi-architecture backend/scanner image publication to GHCR.
 

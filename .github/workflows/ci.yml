@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
+        # Keep this server major compatible with the runner's pg_dump client:
+        # pg_dump may be newer than the server, but it cannot be older.
         image: postgres:16
         env:
           POSTGRES_DB: nsc_test
@@ -54,18 +56,17 @@ jobs:
       - name: go build
         run: go build ./...
 
-      - name: go test
-        run: go test -race ./...
-
-      - name: PostgreSQL store tests
-        env:
-          NSC_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/nsc_test?sslmode=disable
+      - name: Ensure PostgreSQL client
         run: |
           if ! command -v pg_dump >/dev/null; then
             sudo apt-get update
             sudo apt-get install --yes postgresql-client
           fi
-          go test -race ./internal/store -count=1
+
+      - name: go test
+        env:
+          NSC_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/nsc_test?sslmode=disable
+        run: go test -race ./...
 
   frontend:
     name: SPA typecheck / build

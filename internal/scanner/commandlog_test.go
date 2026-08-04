@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -66,12 +67,59 @@ func TestWriteCommandLogPreservesArgvAndPhase(t *testing.T) {
 	}
 }
 
+func TestWriteCommandLogCompactsLargeTemplateArgv(t *testing.T) {
+	const templateCount = 9000
+	templatePaths := make([]string, templateCount)
+	for i := range templatePaths {
+		templatePaths[i] = fmt.Sprintf("/bundle/templates/template-%04d.yaml", i)
+	}
+	args := buildArgs(
+		"/scan/targets.txt",
+		"/scan/results.jsonl",
+		"/scan/trace.fifo",
+		templatePaths,
+		types.ScanSpec{Options: types.ScanOptions{RateLimit: 42, MaxHostError: 100}},
+	)
+	var log bytes.Buffer
+	writeCommandLog(&log, "nuclei", "/opt/tools/nuclei", args)
+
+	if lines := strings.Count(log.String(), "\n"); lines != 1 {
+		t.Fatalf("command log has %d lines, want one: %q", lines, log.String())
+	}
+	if len(log.Bytes()) >= 16*1024 {
+		t.Fatalf("compacted command log is %d bytes, want less than 16 KiB", log.Len())
+	}
+	records := parseCommandLog(t, log.String())
+	if len(records) != 1 {
+		t.Fatalf("got %d command records, want 1", len(records))
+	}
+	if !slices.Contains(records[0].argv, fmt.Sprintf(templatePathSummaryFormat, templateCount)) {
+		t.Errorf("command log lacks template summary: %#v", records[0].argv)
+	}
+	if slices.Contains(records[0].argv, templatePaths[0]) || slices.Contains(records[0].argv, templatePaths[len(templatePaths)-1]) {
+		t.Errorf("command log retained full-catalog template paths: %#v", records[0].argv)
+	}
+	for _, arg := range []string{"-rate-limit", "42", "-max-host-error", "100"} {
+		if !slices.Contains(records[0].argv, arg) {
+			t.Errorf("command log lost non-template argument %q: %#v", arg, records[0].argv)
+		}
+	}
+}
+
 func TestWriteCommandLogRedactsSensitiveArguments(t *testing.T) {
 	var log bytes.Buffer
 	writeCommandLog(&log, "nuclei", "/opt/tools/nuclei", []string{
 		"-list", "/tmp/targets.txt",
 		"-token", "secret-token",
-		"--header=Authorization: Bearer secret-header",
+		"-H", "Authorization: Bearer secret-header",
+		"-V", "apikey=sk-secret",
+		"-sf", "/etc/nuclei/creds.yaml",
+		"-itoken", "interact-secret",
+		"-dtst", "dast-secret",
+		"-ck", "/etc/nuclei/client.key",
+		"-p", "http://user:pass@proxy",
+		"-proxy-auth=user:pass",
+		"--header=Authorization: Bearer secret-header=tail",
 		"-password", "secret-password",
 	})
 
@@ -83,15 +131,27 @@ func TestWriteCommandLogRedactsSensitiveArguments(t *testing.T) {
 		"/opt/tools/nuclei",
 		"-list", "/tmp/targets.txt",
 		"-token", "[REDACTED]",
+		"-H", "[REDACTED]",
+		"-V", "[REDACTED]",
+		"-sf", "[REDACTED]",
+		"-itoken", "[REDACTED]",
+		"-dtst", "[REDACTED]",
+		"-ck", "[REDACTED]",
+		"-p", "[REDACTED]",
+		"-proxy-auth=[REDACTED]",
 		"--header=[REDACTED]",
 		"-password", "[REDACTED]",
 	}
 	if !slices.Equal(records[0].argv, want) {
 		t.Errorf("redacted argv = %#v, want %#v", records[0].argv, want)
 	}
-	if strings.Contains(log.String(), "secret-token") || strings.Contains(log.String(), "secret-header") ||
-		strings.Contains(log.String(), "secret-password") {
-		t.Errorf("command log contains a sensitive value: %q", log.String())
+	for _, secret := range []string{
+		"secret-token", "secret-header", "sk-secret", "/etc/nuclei/creds.yaml",
+		"interact-secret", "dast-secret", "/etc/nuclei/client.key", "user:pass", "secret-password",
+	} {
+		if strings.Contains(log.String(), secret) {
+			t.Errorf("command log contains sensitive value %q: %q", secret, log.String())
+		}
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -139,6 +140,9 @@ func validateNode(in *store.ScannerNode, requireToken bool) error {
 	if in.Endpoint == "" {
 		return errBadRequest("endpoint is required")
 	}
+	if err := validateNodeEndpoint(in.Endpoint); err != nil {
+		return err
+	}
 	if requireToken && strings.TrimSpace(in.Token) == "" {
 		return errBadRequest("token is required")
 	}
@@ -150,6 +154,14 @@ func validateNode(in *store.ScannerNode, requireToken bool) error {
 		in.CIDRs[i] = c
 	}
 	return validateNodeTLS(in, requireToken)
+}
+
+func validateNodeEndpoint(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return errBadRequest("endpoint must be an absolute http or https URL")
+	}
+	return nil
 }
 
 // validateNodeTLS checks a node's optional mTLS material so bad PEM is a clean

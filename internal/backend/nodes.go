@@ -90,6 +90,9 @@ func parseNodeConfig(defaultURL, defaultToken, zonesJSON string) ([]store.Scanne
 		Token:    defaultToken,
 		CIDRs:    []string{},
 	}}
+	if err := validateNodeEndpoint(strings.TrimSpace(defaultURL)); err != nil {
+		return nil, fmt.Errorf("SCANNER_URL: %w", err)
+	}
 
 	if strings.TrimSpace(zonesJSON) != "" {
 		var cfgs []ScanZoneConfig
@@ -139,6 +142,9 @@ func validateNodeConfig(nodes []store.ScannerNode) error {
 			return fmt.Errorf("SCAN_ZONES: duplicate zone name %q", n.Name)
 		}
 		seen[n.Name] = true
+		if err := validateNodeEndpoint(strings.TrimSpace(n.Endpoint)); err != nil {
+			return fmt.Errorf("SCAN_ZONES: zone %q: %w", n.Name, err)
+		}
 		for _, cidr := range n.CIDRs {
 			_, ipnet, err := net.ParseCIDR(cidr)
 			if err != nil {

@@ -352,21 +352,27 @@ export interface ImportScanBundleResponse {
   findings_imported: number;
   lifecycle_created: number;
   lifecycle_updated: number;
+  coverage_mode: "ignore" | "trust";
   fallbacks?: { field: string; exporter_id: string }[];
 }
+
+export type ImportCoverageMode = "ignore" | "trust";
 
 /** importScanBundle uploads a scan bundle (a .nsc-bundle JSON or zip, #136) and
  *  recreates the scan and its results on this instance: the findings are
  *  re-derived via the normal ingest path, so this instance computes its own
-*  instance computes its own finding lifecycle from the imported results. The
+ *  finding lifecycle from the imported results. The
  *  exporter's analyst overlays are never carried over. conflict=duplicate
  *  imports under a fresh id instead of failing with 409 when the exported scan
- *  id already exists here. */
+ *  id already exists here. Imported endpoint coverage is ignored by default;
+ *  coverage="trust" is an explicit operator opt-in for mitigation evidence. */
 export async function importScanBundle(
   file: File,
   conflict: "error" | "duplicate" = "error",
+  coverage: ImportCoverageMode = "ignore",
 ): Promise<ImportScanBundleResponse> {
-  const res = await fetch(`/api/scans/import?conflict=${encodeURIComponent(conflict)}`, {
+  const params = new URLSearchParams({ conflict, coverage });
+  const res = await fetch(`/api/scans/import?${params.toString()}`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/octet-stream" },

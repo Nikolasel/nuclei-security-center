@@ -17,7 +17,8 @@ import (
 // one instance and imported into a second, empty instance; the imported scan
 // must reproduce every occurrence and lifecycle detail. Coverage claims and
 // warnings from an external bundle are retained in the portable manifest but
-// are not trusted as destination evidence, so the safe re-export omits them.
+// are not trusted as destination evidence by the default import mode, so the
+// safe re-export omits them.
 //
 //	NSC_TEST_DATABASE_URL=postgres://... go test ./internal/store -run TestScanBundleRoundTripPostgres
 func TestScanBundleRoundTripPostgres(t *testing.T) {
@@ -183,7 +184,7 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 	}
 
 	// Import into the empty destination instance.
-	result, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError)
+	result, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError, ImportCoverageIgnore)
 	if err != nil {
 		t.Fatalf("import bundle: %v", err)
 	}
@@ -278,11 +279,11 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 	}
 
 	// Default conflict policy refuses to overwrite.
-	if _, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError); !errors.Is(err, ErrScanBundleConflict) {
+	if _, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError, ImportCoverageIgnore); !errors.Is(err, ErrScanBundleConflict) {
 		t.Fatalf("expected ErrScanBundleConflict, got %v", err)
 	}
 	// Duplicate policy mints a new id and keeps the original intact.
-	dupResult, err := dest.ImportScanBundle(ctx, bundle, ImportConflictDuplicate)
+	dupResult, err := dest.ImportScanBundle(ctx, bundle, ImportConflictDuplicate, ImportCoverageIgnore)
 	if err != nil {
 		t.Fatalf("duplicate import: %v", err)
 	}
@@ -389,7 +390,7 @@ func TestScanBundleImportFallbackPostgres(t *testing.T) {
 		t.Fatalf("test bundle fails validation: %v", err)
 	}
 
-	result, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError)
+	result, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError, ImportCoverageIgnore)
 	if err != nil {
 		t.Fatalf("import fallback bundle: %v", err)
 	}
@@ -551,7 +552,7 @@ func TestScanBundleImportCoverageCannotAffectRepairPostgres(t *testing.T) {
 	if err := bundle.Validate(); err != nil {
 		t.Fatalf("forged bundle fails validation: %v", err)
 	}
-	result, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError)
+	result, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError, ImportCoverageIgnore)
 	if err != nil {
 		t.Fatalf("import coverage-only bundle: %v", err)
 	}

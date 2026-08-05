@@ -308,9 +308,12 @@ so scans survive a busy or briefly-unreachable node.
    its own lifecycle** (detection state, first/last-seen, mitigation counters,
    overlays) from the results exactly as if it had scanned the target itself.
    `covered_endpoints` and `coverage_warning` remain in the portable export
-   format for provenance, but are untrusted exporter-authored claims and are
-   discarded on import (the destination stores coverage as NULL); only exact
-   occurrences carried by the bundle can provide positive lifecycle evidence.
+   format for provenance, but are untrusted exporter-authored claims. The default
+   import mode (`coverage=ignore`) discards them and stores coverage as NULL;
+   an explicit operator opt-in (`coverage=trust`) persists exact endpoint pairs
+   and may use them for mitigation under the same scope/skipped-record rules as a
+   local completed scan. Exact occurrences carried by the bundle always provide
+   positive lifecycle evidence.
    `discovered_targets` is retained as display-only provenance and is not coverage
    evidence; lifecycle logic must not use it for mitigation.
    Missing local references (target / template set / scan policy / node /

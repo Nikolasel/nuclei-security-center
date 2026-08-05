@@ -84,11 +84,13 @@ type ScanBundleScan struct {
 	// mitigation evidence.
 	DiscoveredTargets []string `json:"discovered_targets,omitempty"`
 	// CoveredEndpoints is retained in the portable export format, but imports
-	// discard this untrusted external claim (#181); imported occurrences are the
-	// only positive evidence accepted by the destination lifecycle.
+	// discard this untrusted external claim (#181) unless the operator explicitly
+	// selects the import trust mode; imported occurrences are always positive
+	// evidence accepted by the destination lifecycle.
 	CoveredEndpoints []EndpointCoverage `json:"covered_endpoints"`
 	// CoverageWarning is exporter-authored trace metadata and is likewise
-	// discarded on import with CoveredEndpoints.
+	// discarded by default on import with CoveredEndpoints; the explicit trust
+	// mode retains it for the imported scan's display.
 	CoverageWarning string `json:"coverage_warning,omitempty"`
 	// TemplateIDs is the resolved concrete template selection the node ran. It is
 	// the readable form of spec.Templates.TemplateIDs.

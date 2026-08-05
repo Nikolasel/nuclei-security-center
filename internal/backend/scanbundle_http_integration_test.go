@@ -179,7 +179,7 @@ func TestScanBundleHTTPRoundTripPostgres(t *testing.T) {
 	if err := json.Unmarshal(impRR.Body.Bytes(), &result); err != nil {
 		t.Fatalf("decode import result: %v", err)
 	}
-	if result.ScanID != scanID || result.FindingsImported != 1 || len(result.Fallbacks) != 3 {
+	if result.ScanID != scanID || result.FindingsImported != 1 || result.CoverageMode != store.ImportCoverageIgnore || len(result.Fallbacks) != 3 {
 		t.Fatalf("import result wrong: %+v", result)
 	}
 	importedScan, err := destStore.GetScan(ctx, scanID)
@@ -228,5 +228,122 @@ func TestScanBundleHTTPRoundTripPostgres(t *testing.T) {
 	garbageRR := post(dest, "/api/scans/import", []byte{0x00, 0xff, 0xfe, 0xfa})
 	if garbageRR.Code != http.StatusBadRequest {
 		t.Fatalf("garbage bundle status = %d, want 400", garbageRR.Code)
+	}
+}
+
+// TestScanBundleHTTPImportTrustedCoveragePostgres verifies the explicit operator
+// opt-in path: a completed coverage-only bundle may advance mitigation evidence
+// when the request says coverage=trust. The default import path remains
+// fail-closed and is covered by the store regression test.
+func TestScanBundleHTTPImportTrustedCoveragePostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	st := openScanRequestTestStore(t, ctx, dsn)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h := NewServer(st, nil, nil, nil, http.NotFoundHandler(), logger).Handler()
+	invalidModeReq := httptest.NewRequest(http.MethodPost, "/api/scans/import?coverage=unexpected", nil)
+	invalidModeRR := httptest.NewRecorder()
+	h.ServeHTTP(invalidModeRR, invalidModeReq)
+	if invalidModeRR.Code != http.StatusBadRequest {
+		t.Fatalf("invalid coverage mode status = %d, want 400", invalidModeRR.Code)
+	}
+
+	target, err := st.CreateTarget(ctx, store.Target{
+		Name:  "trusted-import-" + types.NewID(),
+		Hosts: []string{"trusted-import.invalid"},
+	})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	finding := types.NucleiFinding{
+		TemplateID: "tpl-trusted-import",
+		Host:       "trusted-import.invalid",
+		MatchedAt:  "https://trusted-import.invalid/",
+		Type:       "http",
+		Info:       types.NucleiInfo{Name: "trusted-import-check", Severity: "high"},
+	}
+	raw, err := json.Marshal(finding)
+	if err != nil {
+		t.Fatalf("marshal finding: %v", err)
+	}
+	firstScanID, err := st.CreateScan(ctx, types.ScanSpec{Targets: target.Hosts}, store.ScanLink{
+		TargetID: target.ID,
+		Source:   "manual",
+	})
+	if err != nil {
+		t.Fatalf("create first scan: %v", err)
+	}
+	if err := st.IngestFinding(ctx, firstScanID, target.ID, finding, raw); err != nil {
+		t.Fatalf("ingest finding: %v", err)
+	}
+	coverage := []types.EndpointCoverage{{TemplateID: finding.TemplateID, Endpoint: "trusted-import.invalid:443"}}
+	if err := st.SetScanCoverage(ctx, firstScanID, coverage, ""); err != nil {
+		t.Fatalf("set first coverage: %v", err)
+	}
+	if err := st.MarkComplete(ctx, firstScanID, "3.3.0", "trusted-import"); err != nil {
+		t.Fatalf("complete first scan: %v", err)
+	}
+
+	bundle := types.ScanBundle{
+		Format:        types.ScanBundleFormat,
+		FormatVersion: types.ScanBundleFormatVersion,
+		ExportedAt:    time.Now().UTC(),
+		Config:        types.ScanBundleConfig{TargetID: target.ID},
+		Scan: types.ScanBundleScan{
+			ID:               types.NewID(),
+			State:            string(types.ScanComplete),
+			Source:           "manual",
+			CreatedAt:        time.Now().UTC().Add(time.Second),
+			CoveredEndpoints: coverage,
+			Spec:             json.RawMessage(`{"targets":["trusted-import.invalid"]}`),
+		},
+	}
+	if err := bundle.Validate(); err != nil {
+		t.Fatalf("trusted bundle fails validation: %v", err)
+	}
+	malformedBundle := bundle
+	malformedBundle.Scan.ID = types.NewID()
+	malformedBundle.Scan.CoveredEndpoints = []types.EndpointCoverage{{Endpoint: "trusted-import.invalid:443"}}
+	malformedBody, err := json.Marshal(malformedBundle)
+	if err != nil {
+		t.Fatalf("marshal malformed trusted bundle: %v", err)
+	}
+	malformedReq := httptest.NewRequest(http.MethodPost, "/api/scans/import?coverage=trust", bytes.NewReader(malformedBody))
+	malformedRR := httptest.NewRecorder()
+	h.ServeHTTP(malformedRR, malformedReq)
+	if malformedRR.Code != http.StatusBadRequest {
+		t.Fatalf("malformed trusted coverage status = %d, want 400", malformedRR.Code)
+	}
+	body, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatalf("marshal trusted bundle: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/scans/import?coverage=trust", bytes.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("trusted import status = %d, body %s", rr.Code, rr.Body.String())
+	}
+	var result struct {
+		CoverageMode string `json:"coverage_mode"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode trusted import result: %v", err)
+	}
+	if result.CoverageMode != "trust" {
+		t.Fatalf("trusted import coverage mode = %q, want trust", result.CoverageMode)
+	}
+
+	lifecycle, _, err := st.ListLifecycleFindings(ctx, store.FindingQuery{}, 50, 0)
+	if err != nil {
+		t.Fatalf("list trusted lifecycle: %v", err)
+	}
+	if len(lifecycle) != 1 || lifecycle[0].DetectionState != "mitigated" {
+		t.Fatalf("trusted import detection state = %+v, want mitigated", lifecycle)
 	}
 }

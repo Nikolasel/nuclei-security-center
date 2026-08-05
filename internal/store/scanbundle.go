@@ -17,9 +17,11 @@ import (
 // (scan row + dispatch spec + occurrence log) into structs the backend assembles
 // into the versioned manifest; import recreates the scan on this instance and
 // ingests its findings through the normal lifecycle path, so the destination
-// derives its own dedup/lifecycle state from the results exactly as if it had
-// scanned the target itself. Missing referenced entities fall back to their
-// default (NULL) value.
+// derives its own dedup/lifecycle state from the results exactly as
+// if it had scanned the target itself. External endpoint-coverage claims are not
+// trusted as local evidence; imported occurrences can still provide positive
+// evidence through the normal lifecycle path. Missing referenced entities fall
+// back to their default (NULL) value.
 
 // BundleFinding is one immutable occurrence plus the preserved Nuclei JSON
 // (`COALESCE(raw_line, raw::text)`), ready for the manifest.
@@ -299,15 +301,12 @@ func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, confl
 		errText = firstNonEmpty(errText, "scan was in-flight when exported; imported as failed")
 	}
 
-	coveredJSON, err := json.Marshal(b.Scan.CoveredEndpoints)
-	if err != nil {
-		return nil, err
-	}
-	if string(coveredJSON) == "null" {
-		// The column's CHECK requires an array (or NULL); an absent coverage list
-		// imports as NULL, mirroring "no coverage evidence recorded".
-		coveredJSON = nil
-	}
+	// Endpoint coverage is execution-trace evidence from the exporting scanner
+	// node. Bundle contents are untrusted, so never persist claimed coverage from
+	// an import: lifecycle repair could otherwise treat a coverage-only bundle as
+	// proof that an absent finding was mitigated. Imported occurrences still
+	// provide positive evidence through the normal ingest path below.
+	var coveredJSON []byte
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO scans (id, state, spec, target_id, template_set_id, scan_policy_id,
 		                    source, schedule_id, node_id, nuclei_version, templates_commit, error,
@@ -366,10 +365,10 @@ func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, confl
 		result.FindingsImported++
 	}
 
-	// A completed scan's coverage evidence advances the destination's
-	// last_covering_scan pointers exactly like a scan finishing normally. It is
-	// deliberately withheld for failed/cancelled imports — a failed scan's
-	// coverage is unreliable, so it proves nothing (closure stays evidence-driven).
+	// A completed import advances last_covering_scan only for lifecycle rows the
+	// bundle actually observed. It deliberately ignores claimed endpoint coverage
+	// because external scanner evidence is untrusted; failed/cancelled imports
+	// prove nothing (closure stays evidence-driven).
 	if state == string(types.ScanComplete) {
 		if err := applyScanCoverage(ctx, tx, scanID); err != nil {
 			return nil, fmt.Errorf("apply imported scan coverage: %w", err)
@@ -429,14 +428,11 @@ func resolveScanBundleRefs(ctx context.Context, tx pgx.Tx, b *types.ScanBundle) 
 }
 
 // applyScanCoverage advances the destination's last_covering_scan evidence
-// pointers for the lifecycle rows the imported scan actually observed. This is
-// deliberately narrower than MarkComplete's completion-time update: a real scan
-// advances coverage from its covered_endpoints list (verified evidence that the
-// node probed the pair), while an import may only advance it for occurrences it
-// actually carries — a manifest that merely claims coverage has no observations
-// behind it, so it must not close a finding it never saw. The caller gates this
-// on state == ScanComplete, so a failed import proves nothing either. No scan
-// state or timestamps are flipped here.
+// pointers for lifecycle rows the imported scan actually observed. It never
+// reads covered_endpoints: a manifest that merely claims coverage has no
+// observations behind it, so it must not close a finding it never saw. The
+// caller gates this on state == ScanComplete, so a failed import proves nothing
+// either. No scan state or timestamps are flipped here.
 func applyScanCoverage(ctx context.Context, tx pgx.Tx, scanID string) error {
 	_, err := tx.Exec(ctx,
 		`WITH completed_scan AS (

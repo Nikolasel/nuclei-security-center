@@ -99,7 +99,8 @@ analyst's overlays are never touched (they were never exported). The manifest's
 `covered_endpoints` and `coverage_warning` are exporter-authored trace claims and are discarded
 on import, so the destination stores coverage as unknown (`NULL`) and never treats a claimed
 coverage-only bundle as mitigation evidence. Exact findings carried by a completed bundle still
-provide positive evidence through normal occurrence ingestion. The default conflict policy
+provide positive evidence through normal occurrence ingestion. `discovered_targets` is retained
+for scan-detail display only and never contributes to mitigation evidence. The default conflict policy
 `error` returns **409** when the exported scan id already exists locally; `conflict=duplicate`
 imports under a fresh id instead. A bundle must be a format/version this backend understands
 and must validate (`400` otherwise) — including a `scan.source` and no future-dated

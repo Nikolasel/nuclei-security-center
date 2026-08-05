@@ -79,7 +79,10 @@ type ScanBundleScan struct {
 	CreatedAt           time.Time  `json:"created_at"`
 	StartedAt           *time.Time `json:"started_at,omitempty"`
 	FinishedAt          *time.Time `json:"finished_at,omitempty"`
-	DiscoveredTargets   []string   `json:"discovered_targets,omitempty"`
+	// DiscoveredTargets is retained on import for historical scan-detail display
+	// only; lifecycle logic must never treat this external scanner output as
+	// mitigation evidence.
+	DiscoveredTargets []string `json:"discovered_targets,omitempty"`
 	// CoveredEndpoints is retained in the portable export format, but imports
 	// discard this untrusted external claim (#181); imported occurrences are the
 	// only positive evidence accepted by the destination lifecycle.

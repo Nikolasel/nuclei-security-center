@@ -15,9 +15,9 @@ import (
 // re-export cycle against a real migrated PostgreSQL database: a scan with
 // findings, analyst overlays, discovery evidence and coverage is exported from
 // one instance and imported into a second, empty instance; the imported scan
-// must reproduce every occurrence and lifecycle detail. Coverage from an
-// external bundle is retained in the portable manifest but is not trusted as
-// destination mitigation evidence, so the safe re-export omits it.
+// must reproduce every occurrence and lifecycle detail. Coverage claims and
+// warnings from an external bundle are retained in the portable manifest but
+// are not trusted as destination evidence, so the safe re-export omits them.
 //
 //	NSC_TEST_DATABASE_URL=postgres://... go test ./internal/store -run TestScanBundleRoundTripPostgres
 func TestScanBundleRoundTripPostgres(t *testing.T) {
@@ -112,7 +112,7 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 		{TemplateID: "tpl-a", Endpoint: "roundtrip.invalid:443"},
 		{TemplateID: "tpl-b", Endpoint: "roundtrip.invalid:53"},
 	}
-	if err := origin.SetScanCoverage(ctx, scanID, coverage, ""); err != nil {
+	if err := origin.SetScanCoverage(ctx, scanID, coverage, "source trace warning"); err != nil {
 		t.Fatalf("set scan coverage: %v", err)
 	}
 	if err := origin.MarkComplete(ctx, scanID, "3.3.0", "roundtrip-commit"); err != nil {
@@ -214,6 +214,9 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 	if importedScan.CoveredEndpoints != nil {
 		t.Fatalf("imported coverage must be unknown, got %v", importedScan.CoveredEndpoints)
 	}
+	if importedScan.CoverageWarning != "" {
+		t.Fatalf("imported coverage warning must be discarded, got %q", importedScan.CoverageWarning)
+	}
 
 	// Occurrences must be reproduced, and the composite scope FK satisfied.
 	occurrences, total, err := dest.ListFindings(ctx, FindingFilter{ScanID: scanID, Limit: 50})
@@ -265,6 +268,7 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 	expectedBundle := *bundle
 	expectedBundle.ExportedAt = time.Time{}
 	expectedBundle.Scan.CoveredEndpoints = nil
+	expectedBundle.Scan.CoverageWarning = ""
 	destinationBundle := *reBundle
 	destinationBundle.ExportedAt = time.Time{}
 	originJSON, _ := json.Marshal(&expectedBundle)

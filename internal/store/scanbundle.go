@@ -301,12 +301,15 @@ func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, confl
 		errText = firstNonEmpty(errText, "scan was in-flight when exported; imported as failed")
 	}
 
-	// Endpoint coverage and its warning are execution-trace claims from the
-	// exporting scanner node. Bundle contents are untrusted, so never persist
-	// either from an import: lifecycle repair could otherwise treat a coverage-
-	// only bundle as proof that an absent finding was mitigated, and the warning
-	// could misrepresent the destination's unknown coverage. Imported occurrences
-	// still provide positive evidence through the normal ingest path below.
+	// `covered_endpoints` is execution-trace evidence used for mitigation, and
+	// `coverage_warning` describes that trace. Both are claims from the exporting
+	// scanner node and untrusted on import, so never persist either: lifecycle
+	// repair could otherwise treat a coverage-only bundle as proof that an absent
+	// finding was mitigated, and the warning could misrepresent the destination's
+	// unknown coverage. `discovered_targets` is also external scanner output, but
+	// is retained as display-only provenance; no lifecycle path uses it as evidence.
+	// Imported occurrences still provide positive evidence through the normal ingest
+	// path below.
 	var coveredJSON []byte
 	var coverageWarning *string
 	if _, err := tx.Exec(ctx,

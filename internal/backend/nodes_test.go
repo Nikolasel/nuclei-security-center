@@ -37,6 +37,7 @@ func TestParseNodeConfigInvalid(t *testing.T) {
 		{"missing name", `[{"cidrs":["10.0.0.0/8"],"url":"u","token":"t"}]`},
 		{"reserved default name", `[{"name":"default","url":"u","token":"t"}]`},
 		{"missing url/token", `[{"name":"a","cidrs":["10.0.0.0/8"]}]`},
+		{"unsupported endpoint", `[{"name":"a","url":"ftp://scanner","token":"t"}]`},
 		{"bad cidr", `[{"name":"a","cidrs":["nope"],"url":"u","token":"t"}]`},
 		{"dup name", `[{"name":"a","url":"u","token":"t"},{"name":"a","url":"u2","token":"t2"}]`},
 		{"overlap identical", `[{"name":"a","cidrs":["10.0.0.0/8"],"url":"u","token":"t"},{"name":"b","cidrs":["10.0.0.0/8"],"url":"u2","token":"t2"}]`},
@@ -54,8 +55,34 @@ func TestParseNodeConfigInvalid(t *testing.T) {
 func TestParseNodeConfigWithinNodeOverlapAllowed(t *testing.T) {
 	// Overlapping CIDRs inside one node are harmless (same node, no ambiguity).
 	if _, err := parseNodeConfig("http://d", "t",
-		`[{"name":"a","cidrs":["10.0.0.0/8","10.1.2.0/24"],"url":"u","token":"t"}]`); err != nil {
+		`[{"name":"a","cidrs":["10.0.0.0/8","10.1.2.0/24"],"url":"http://a","token":"t"}]`); err != nil {
 		t.Errorf("within-node overlap should be allowed: %v", err)
+	}
+}
+
+func TestValidateNodeEndpoint(t *testing.T) {
+	cases := []struct {
+		name     string
+		endpoint string
+		wantErr  bool
+	}{
+		{name: "http", endpoint: "http://scanner:8081"},
+		{name: "https", endpoint: "https://scanner.example/v1"},
+		{name: "missing scheme", endpoint: "scanner:8081", wantErr: true},
+		{name: "unsupported scheme", endpoint: "ftp://scanner:21", wantErr: true},
+		{name: "missing host", endpoint: "http:///v1", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateNode(&store.ScannerNode{
+				Name:     "node",
+				Endpoint: tc.endpoint,
+				Token:    "token",
+			}, true)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("validateNode(%q) error = %v, wantErr %t", tc.endpoint, err, tc.wantErr)
+			}
+		})
 	}
 }
 

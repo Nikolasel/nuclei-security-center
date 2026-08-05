@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,9 +15,9 @@ import (
 )
 
 func TestScannerClientDoesNotFollowRedirects(t *testing.T) {
-	followed := false
+	var followed atomic.Bool
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		followed = true
+		followed.Store(true)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer target.Close()
@@ -27,21 +28,11 @@ func TestScannerClientDoesNotFollowRedirects(t *testing.T) {
 	defer origin.Close()
 
 	client := NewScannerClient(origin.URL, "node-token")
-	req, err := client.newReq(context.Background(), http.MethodGet, "/v1/scans/scan-1/results", nil)
-	if err != nil {
-		t.Fatal(err)
+	_, err := client.Results(context.Background(), "scan-1")
+	if err == nil || !strings.Contains(err.Error(), "302 Found") {
+		t.Fatalf("Results error = %v, want original 302 response", err)
 	}
-
-	resp, err := client.newHTTPClient(time.Second).Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusFound {
-		t.Fatalf("status = %s, want 302 Found", resp.Status)
-	}
-	if followed {
+	if followed.Load() {
 		t.Fatal("scanner client followed a redirect to a different origin")
 	}
 }

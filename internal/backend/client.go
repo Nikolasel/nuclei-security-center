@@ -45,7 +45,9 @@ func NewScannerClient(baseURL, token string) *ScannerClient {
 
 // newHTTPClient builds an *http.Client with the given timeout, wiring in the
 // client's TLS config (if any) so mTLS applies uniformly to short calls and the
-// streaming results fetch alike.
+// streaming results fetch alike. Redirects are returned to the caller instead of
+// followed because scanner nodes have no legitimate reason to redirect the
+// backend's fixed /v1 requests to another network destination.
 func (c *ScannerClient) newHTTPClient(timeout time.Duration) *http.Client {
 	hc := &http.Client{
 		Timeout: timeout,

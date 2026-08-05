@@ -139,6 +139,9 @@ func validateNodeConfig(nodes []store.ScannerNode) error {
 			return fmt.Errorf("SCAN_ZONES: duplicate zone name %q", n.Name)
 		}
 		seen[n.Name] = true
+		if err := validateNodeEndpoint(strings.TrimSpace(n.Endpoint)); err != nil {
+			return fmt.Errorf("SCAN_ZONES: zone %q: %w", n.Name, err)
+		}
 		for _, cidr := range n.CIDRs {
 			_, ipnet, err := net.ParseCIDR(cidr)
 			if err != nil {

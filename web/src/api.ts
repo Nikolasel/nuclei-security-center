@@ -260,6 +260,7 @@ export const ASSIGNABLE_ROLES = ["viewer", "operator", "admin"] as const;
 export const DEFAULT_TOKEN_TTL_DAYS = 90;
 
 export type ScanState = "queued" | "running" | "complete" | "failed" | "cancelled";
+export type CoverageOrigin = "node" | "import_untrusted" | "import_trusted";
 
 // ScanProgress is live progress for a running scan, present only while running.
 // `phase` says which stage it describes: "discovering" (naabu, #86) or "scanning"
@@ -317,6 +318,9 @@ export interface Scan {
   covered_endpoints?: EndpointCoverage[] | null;
   /** fail-closed diagnostics when request-trace evidence was incomplete. */
   coverage_warning?: string;
+  /** provenance of endpoint coverage; imported claims are visibly classified
+   *  because only node and explicit trusted-import origins may mitigate. */
+  coverage_origin?: CoverageOrigin;
   created_at: string;
   finished_at?: string;
 }

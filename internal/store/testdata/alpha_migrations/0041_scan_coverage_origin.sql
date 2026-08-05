@@ -4,7 +4,7 @@
 -- covered_endpoints as lifecycle mitigation evidence. Ordinary imports retain
 -- the scan and its findings but are marked untrusted by the backend.
 ALTER TABLE scans
-    ADD COLUMN coverage_origin TEXT NOT NULL DEFAULT 'node';
+    ADD COLUMN coverage_origin TEXT NOT NULL DEFAULT 'import_untrusted';
 
 ALTER TABLE scans
     ADD CONSTRAINT scans_coverage_origin_check

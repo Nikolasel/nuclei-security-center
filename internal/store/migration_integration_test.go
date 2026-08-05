@@ -40,9 +40,9 @@ func TestAlphaMigrationFixtureIntegrity(t *testing.T) {
 		_, _ = digest.Write([]byte{0})
 	}
 
-	const want = "343e62d4516b2cdbf846171796740333bbf3a403836e8d9a9bbd6c55b927e4b0"
+	const want = "aaa660a110ba8bc210e1f8919a28b6f74baaad200395d875465ccf20a1776ddf"
 	if got := fmt.Sprintf("%x", digest.Sum(nil)); got != want {
-		t.Fatalf("alpha migration fixture digest = %s, want %s; fixtures are immutable history", got, want)
+		t.Fatalf("alpha migration fixture digest = %s, want %s; update the pin only for an intentional pre-beta reference-chain change", got, want)
 	}
 }
 

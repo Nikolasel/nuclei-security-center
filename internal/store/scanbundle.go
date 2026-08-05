@@ -250,6 +250,7 @@ const (
 	CoverageOriginNode            = "node"
 	CoverageOriginImportUntrusted = "import_untrusted"
 	CoverageOriginImportTrusted   = "import_trusted"
+	coverageOriginClaimedSQL      = "('" + CoverageOriginNode + "', '" + CoverageOriginImportTrusted + "')"
 )
 
 func coverageOriginAllowsClaimedCoverage(origin string) bool {
@@ -515,13 +516,13 @@ func applyScanCoverage(ctx context.Context, tx pgx.Tx, scanID string, trustClaim
 		    SELECT observed.finding_id AS id FROM observed
 		 )`
 	if trustClaimedCoverage {
-		candidates = `
+		candidates = fmt.Sprintf(`
 		 coverage_pairs AS MATERIALIZED (
 		    SELECT pair->>'template_id' AS template_id,
 		           pair->>'endpoint' AS endpoint
 		      FROM completed_scan
 		      CROSS JOIN LATERAL jsonb_array_elements(
-		          CASE WHEN completed_scan.coverage_origin IN ('node', 'import_trusted')
+		          CASE WHEN completed_scan.coverage_origin IN %s
 		                      AND completed_scan.skipped_finding_count = 0
 		               THEN COALESCE(completed_scan.covered_endpoints, '[]'::jsonb)
 		               ELSE '[]'::jsonb END
@@ -543,7 +544,7 @@ func applyScanCoverage(ctx context.Context, tx pgx.Tx, scanID string, trustClaim
 		     WHERE lifecycle.endpoint_key <> ''
 		    UNION
 		    SELECT observed.finding_id FROM observed
-		 )`
+		 )`, coverageOriginClaimedSQL)
 	}
 	query := fmt.Sprintf(`WITH completed_scan AS (
 		    SELECT id, target_id, covered_endpoints, coverage_origin, skipped_finding_count, created_at

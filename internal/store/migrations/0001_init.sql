@@ -167,7 +167,7 @@ CREATE TABLE scans (
     skipped_finding_count integer DEFAULT 0 NOT NULL,
     CONSTRAINT scans_covered_endpoints_array CHECK (((covered_endpoints IS NULL) OR (jsonb_typeof(covered_endpoints) = 'array'::text))),
     CONSTRAINT scans_skipped_finding_count_check CHECK ((skipped_finding_count >= 0)),
-    coverage_origin text DEFAULT 'node'::text NOT NULL,
+    coverage_origin text DEFAULT 'import_untrusted'::text NOT NULL,
     CONSTRAINT scans_coverage_origin_check CHECK ((coverage_origin = ANY (ARRAY['node'::text, 'import_untrusted'::text, 'import_trusted'::text])))
 );
 

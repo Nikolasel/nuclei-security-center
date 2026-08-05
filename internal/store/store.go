@@ -392,8 +392,7 @@ func (s *Store) FailOrphanedScans(ctx context.Context, reason string) (int64, er
 // its exact occurrences still provide positive evidence, but its absence cannot
 // advance mitigation evidence.
 func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templatesCommit string) error {
-	_, err := s.pool.Exec(ctx,
-		`WITH completed_scan AS (
+	query := fmt.Sprintf(`WITH completed_scan AS (
 		    UPDATE scans
 		       SET state = $1, nuclei_version = $2, templates_commit = $3, finished_at = now()
 		     WHERE id = $4 AND state <> $5
@@ -404,7 +403,7 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 		           pair->>'endpoint' AS endpoint
 		      FROM completed_scan
 		      CROSS JOIN LATERAL jsonb_array_elements(
-		          CASE WHEN completed_scan.coverage_origin IN ('node', 'import_trusted')
+		          CASE WHEN completed_scan.coverage_origin IN %s
 		                      AND completed_scan.skipped_finding_count = 0
 		               THEN COALESCE(completed_scan.covered_endpoints, '[]'::jsonb)
 		               ELSE '[]'::jsonb END
@@ -444,7 +443,8 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 		               AND (previous.created_at, previous.id) <
 		                   (completed_scan.created_at, completed_scan.id)
 		        )
-		    )`,
+		    )`, coverageOriginClaimedSQL)
+	_, err := s.pool.Exec(ctx, query,
 		types.ScanComplete, nucleiVersion, templatesCommit, scanID, types.ScanCancelled,
 	)
 	return err
@@ -726,8 +726,7 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 	if state == string(types.ScanQueued) || state == string(types.ScanRunning) {
 		return "", "", ErrConflict
 	}
-	affectedRows, err := tx.Query(ctx,
-		`WITH deleted_scan AS (
+	query := fmt.Sprintf(`WITH deleted_scan AS (
 		    SELECT target_id, covered_endpoints, coverage_origin, skipped_finding_count
 		      FROM scans
 		     WHERE id = $1
@@ -737,7 +736,7 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 		           pair->>'endpoint' AS endpoint
 		      FROM deleted_scan
 		      CROSS JOIN LATERAL jsonb_array_elements(
-		          CASE WHEN deleted_scan.coverage_origin IN ('node', 'import_trusted')
+		          CASE WHEN deleted_scan.coverage_origin IN %s
 		                      AND deleted_scan.skipped_finding_count = 0
 		               THEN COALESCE(deleted_scan.covered_endpoints, '[]'::jsonb)
 		               ELSE '[]'::jsonb END
@@ -765,8 +764,8 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 		 UNION
 		 SELECT finding_id
 		   FROM findings
-		  WHERE scan_id = $1 AND finding_id IS NOT NULL`,
-		id)
+		  WHERE scan_id = $1 AND finding_id IS NOT NULL`, coverageOriginClaimedSQL)
+	affectedRows, err := tx.Query(ctx, query, id)
 	if err != nil {
 		return "", "", fmt.Errorf("list affected lifecycle: %w", err)
 	}

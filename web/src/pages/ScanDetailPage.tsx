@@ -1,6 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { api, scanBundleExportUrl, scanLogUrl, scanRawUrl, type EndpointCoverage } from "../api";
+import {
+  api,
+  scanBundleExportUrl,
+  scanLogUrl,
+  scanRawUrl,
+  type CoverageOrigin,
+  type EndpointCoverage,
+} from "../api";
 import { hasRole, useMe } from "../auth";
 import { ScanFindingsView } from "../components/ScanFindingsView";
 import { Button, Card, ErrorText, ProgressBar, Spinner, StateBadge } from "../components/ui";
@@ -282,6 +289,7 @@ export function ScanDetailPage() {
               <CoveredEndpoints
                 endpoints={scan.data.covered_endpoints}
                 warning={scan.data.coverage_warning}
+                origin={scan.data.coverage_origin}
               />
             )}
           </Card>
@@ -303,13 +311,16 @@ export function ScanDetailPage() {
 function CoveredEndpoints({
   endpoints,
   warning,
+  origin,
 }: {
   endpoints?: EndpointCoverage[] | null;
   warning?: string;
+  origin?: CoverageOrigin;
 }) {
   if (endpoints == null) {
     return (
       <div className="mt-4 rounded bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+        <CoverageSource origin={origin} />
         <p>Endpoint coverage unavailable · this scan cannot mark absent findings as mitigated</p>
         {warning && <p className="mt-1 break-words">{warning}</p>}
       </div>
@@ -318,6 +329,7 @@ function CoveredEndpoints({
   const visibleEndpoints = endpoints.slice(0, 500);
   return (
     <div className="mt-4">
+      <CoverageSource origin={origin} />
       <p className="text-xs font-medium text-neutral-500">
         Template/endpoint checks completed · {endpoints.length.toLocaleString()}{" "}
         {endpoints.length === 1 ? "pair" : "pairs"}
@@ -349,6 +361,41 @@ function CoveredEndpoints({
         </div>
       )}
     </div>
+  );
+}
+
+function coverageSource(origin?: CoverageOrigin): { label: string; className: string } {
+  switch (origin) {
+    case "node":
+      return {
+        label: "scanner node",
+        className: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+      };
+    case "import_trusted":
+      return {
+        label: "trusted imported bundle · operator opt-in",
+        className: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+      };
+    case "import_untrusted":
+      return {
+        label: "untrusted imported bundle · not mitigation evidence",
+        className: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+      };
+    default:
+      return {
+        label: "unknown source · not mitigation evidence",
+        className: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+      };
+  }
+}
+
+function CoverageSource({ origin }: { origin?: CoverageOrigin }) {
+  const source = coverageSource(origin);
+  return (
+    <p className="mb-2 text-xs text-neutral-500">
+      Coverage source:{" "}
+      <span className={`rounded-full px-2 py-0.5 font-medium ${source.className}`}>{source.label}</span>
+    </p>
   );
 }
 

@@ -11,6 +11,31 @@ import (
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
+func TestCoverageOriginDefaultsToUntrustedPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openIsolatedPostgres(t, ctx, dsn)
+	scanID := types.NewID()
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO scans (id, state, spec) VALUES ($1, $2, $3)`,
+		scanID, types.ScanFailed, json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("insert scan without coverage origin: %v", err)
+	}
+
+	var origin string
+	if err := st.pool.QueryRow(ctx, `SELECT coverage_origin FROM scans WHERE id = $1`, scanID).Scan(&origin); err != nil {
+		t.Fatalf("read default coverage origin: %v", err)
+	}
+	if origin != CoverageOriginImportUntrusted {
+		t.Fatalf("default coverage origin = %q, want %q", origin, CoverageOriginImportUntrusted)
+	}
+}
+
 // TestScanBundleRoundTripPostgres exercises the complete export → import →
 // re-export cycle against a real migrated PostgreSQL database: a scan with
 // findings, analyst overlays, discovery evidence and coverage is exported from

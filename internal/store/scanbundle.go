@@ -243,6 +243,19 @@ const (
 	ImportCoverageTrust ImportCoverageMode = "trust"
 )
 
+// CoverageOrigin identifies the provenance of persisted endpoint coverage.
+// Only node traces and explicit trusted imports may contribute claimed
+// mitigation evidence; ordinary imports are retained as untrusted provenance.
+const (
+	CoverageOriginNode            = "node"
+	CoverageOriginImportUntrusted = "import_untrusted"
+	CoverageOriginImportTrusted   = "import_trusted"
+)
+
+func coverageOriginAllowsClaimedCoverage(origin string) bool {
+	return origin == CoverageOriginNode || origin == CoverageOriginImportTrusted
+}
+
 // ErrInvalidImportedCoverage indicates a malformed coverage claim supplied to
 // the explicit trust mode. The default ignore mode deliberately does not reject
 // these exporter-authored claims because it never consumes them.
@@ -343,6 +356,11 @@ func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, confl
 		errText = firstNonEmpty(errText, "scan was in-flight when exported; imported as failed")
 	}
 
+	coverageOrigin := CoverageOriginImportUntrusted
+	if coverageMode == ImportCoverageTrust {
+		coverageOrigin = CoverageOriginImportTrusted
+	}
+
 	// `covered_endpoints` is execution-trace evidence used for mitigation, and
 	// `coverage_warning` describes that trace. Both are claims from the exporting
 	// scanner node and untrusted on import by default, so never persist either
@@ -365,12 +383,12 @@ func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, confl
 		`INSERT INTO scans (id, state, spec, target_id, template_set_id, scan_policy_id,
 		                    source, schedule_id, node_id, nuclei_version, templates_commit, error,
 		                    skipped_finding_count, created_at, started_at, finished_at,
-		                    discovered_targets, covered_endpoints, coverage_warning)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+		                    discovered_targets, covered_endpoints, coverage_warning, coverage_origin)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
 		scanID, state, b.Scan.Spec, nullStr(scan.TargetID), nullStr(scan.TemplateSetID), nullStr(scan.ScanPolicyID),
 		nullStr(b.Scan.Source), nullStr(scan.ScheduleID), nullStr(scan.NodeID), nullStr(b.Scan.NucleiVersion), nullStr(b.Scan.TemplatesCommit), nullStr(errText),
 		b.Scan.SkippedFindingCount, b.Scan.CreatedAt, b.Scan.StartedAt, b.Scan.FinishedAt,
-		orEmpty(b.Scan.DiscoveredTargets), coveredJSON, coverageWarning,
+		orEmpty(b.Scan.DiscoveredTargets), coveredJSON, coverageWarning, coverageOrigin,
 	); err != nil {
 		// Two concurrent imports of the same bundle can both clear the existence
 		// pre-check under READ COMMITTED; surface the unique-violation loser as
@@ -503,7 +521,8 @@ func applyScanCoverage(ctx context.Context, tx pgx.Tx, scanID string, trustClaim
 		           pair->>'endpoint' AS endpoint
 		      FROM completed_scan
 		      CROSS JOIN LATERAL jsonb_array_elements(
-		          CASE WHEN completed_scan.skipped_finding_count = 0
+		          CASE WHEN completed_scan.coverage_origin IN ('node', 'import_trusted')
+		                      AND completed_scan.skipped_finding_count = 0
 		               THEN COALESCE(completed_scan.covered_endpoints, '[]'::jsonb)
 		               ELSE '[]'::jsonb END
 		      ) AS pair
@@ -527,7 +546,7 @@ func applyScanCoverage(ctx context.Context, tx pgx.Tx, scanID string, trustClaim
 		 )`
 	}
 	query := fmt.Sprintf(`WITH completed_scan AS (
-		    SELECT id, target_id, covered_endpoints, skipped_finding_count, created_at
+		    SELECT id, target_id, covered_endpoints, coverage_origin, skipped_finding_count, created_at
 		      FROM scans WHERE id = $1
 		 ),%s
 		 UPDATE finding_lifecycle lifecycle

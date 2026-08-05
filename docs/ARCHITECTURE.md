@@ -154,7 +154,12 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
     disappearance from a flapping one. **Closure is evidence-driven — there is no
     manual "fixed."** `scans.covered_endpoints` stores the deduplicated
     `{template_id, endpoint}` positive trace evidence: NULL means unavailable and fails
-    closed, while an empty array is known zero coverage. Endpoint normalization uses
+    closed, while an empty array is known zero coverage. `scans.coverage_origin` durably records
+    whether that column came from a local node trace, an ordinary untrusted import, or the
+    explicit trusted-import mode; lifecycle repair accepts claimed coverage only from the local
+    node or trusted-import origins. The operator's trusted-import choice is also emitted in the
+    audit event, because an operator-role compromise remains able to assert that mode by design.
+    Endpoint normalization uses
     scheme defaults and Nuclei's `type` (`http`→80, `https`/TLS→443, DNS→53,
     WHOIS→43). Findings such as `file`/`code` results that have no network host:port
     deliberately remain ineligible for automatic mitigation; the API/UI exposes this as

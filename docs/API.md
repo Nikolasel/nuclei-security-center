@@ -104,6 +104,10 @@ operator opt-in: exact imported endpoint pairs are persisted and may mark matchi
 findings mitigated, using the same scope and skipped-record rules as a completed local scan.
 In trust mode, each imported coverage pair must include a non-empty `template_id` and `endpoint`
 (`400` otherwise).
+The scan records durable `coverage_origin` provenance (`node`, `import_untrusted`, or
+`import_trusted`), and lifecycle repair accepts claimed coverage only from `node` or the explicit
+`import_trusted` origin. An operator-role compromise can still choose trust, so the mode is also
+included in the audit event as the compensating control.
 Exact findings carried by a completed bundle always provide positive evidence through normal
 occurrence ingestion. `discovered_targets` is retained for scan-detail display only and never
 contributes to mitigation evidence. The default conflict policy

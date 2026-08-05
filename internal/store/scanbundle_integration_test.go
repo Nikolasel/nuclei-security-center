@@ -560,9 +560,10 @@ func TestScanBundleImportCoverageCannotAffectRepairPostgres(t *testing.T) {
 		t.Fatalf("expected 0 findings imported, got %d", result.FindingsImported)
 	}
 	var importedCoverageIsNull, importedCoverageWarningIsNull bool
+	var importedCoverageOrigin string
 	if err := dest.pool.QueryRow(ctx,
-		`SELECT covered_endpoints IS NULL, coverage_warning IS NULL FROM scans WHERE id = $1`, bundle.Scan.ID).
-		Scan(&importedCoverageIsNull, &importedCoverageWarningIsNull); err != nil {
+		`SELECT covered_endpoints IS NULL, coverage_warning IS NULL, coverage_origin FROM scans WHERE id = $1`, bundle.Scan.ID).
+		Scan(&importedCoverageIsNull, &importedCoverageWarningIsNull, &importedCoverageOrigin); err != nil {
 		t.Fatalf("read imported coverage state: %v", err)
 	}
 	if !importedCoverageIsNull {
@@ -570,6 +571,15 @@ func TestScanBundleImportCoverageCannotAffectRepairPostgres(t *testing.T) {
 	}
 	if !importedCoverageWarningIsNull {
 		t.Fatal("imported coverage_warning must be discarded with untrusted coverage")
+	}
+	if importedCoverageOrigin != CoverageOriginImportUntrusted {
+		t.Fatalf("imported coverage origin = %q, want %q", importedCoverageOrigin, CoverageOriginImportUntrusted)
+	}
+	// Simulate a legacy/import writer that left a claim in the shared column:
+	// the durable untrusted origin must still prevent deferred repair from using it.
+	if _, err := dest.pool.Exec(ctx,
+		`UPDATE scans SET covered_endpoints = $1::jsonb WHERE id = $2`, coverage, bundle.Scan.ID); err != nil {
+		t.Fatalf("install legacy imported coverage claim: %v", err)
 	}
 
 	// Deleting the newer real scan triggers repair. The forged imported scan must

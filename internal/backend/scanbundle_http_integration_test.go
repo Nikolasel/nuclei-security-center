@@ -189,6 +189,9 @@ func TestScanBundleHTTPRoundTripPostgres(t *testing.T) {
 	if importedScan.State != string(types.ScanComplete) {
 		t.Fatalf("imported scan state = %q, want complete", importedScan.State)
 	}
+	if importedScan.CoverageOrigin != store.CoverageOriginImportUntrusted {
+		t.Fatalf("imported scan coverage origin = %q, want %q", importedScan.CoverageOrigin, store.CoverageOriginImportUntrusted)
+	}
 
 	// Default conflict policy: a second import of the same scan id is a 409.
 	againRR := post(dest, "/api/scans/import", jsonRR.Body.Bytes())
@@ -288,6 +291,22 @@ func TestScanBundleHTTPImportTrustedCoveragePostgres(t *testing.T) {
 	if err := st.MarkComplete(ctx, firstScanID, "3.3.0", "trusted-import"); err != nil {
 		t.Fatalf("complete first scan: %v", err)
 	}
+	repairScanID, err := st.CreateScan(ctx, types.ScanSpec{Targets: target.Hosts}, store.ScanLink{
+		TargetID: target.ID,
+		Source:   "manual",
+	})
+	if err != nil {
+		t.Fatalf("create trusted repair-trigger scan: %v", err)
+	}
+	if err := st.IngestFinding(ctx, repairScanID, target.ID, finding, raw); err != nil {
+		t.Fatalf("ingest trusted repair-trigger finding: %v", err)
+	}
+	if err := st.SetScanCoverage(ctx, repairScanID, coverage, ""); err != nil {
+		t.Fatalf("set trusted repair-trigger coverage: %v", err)
+	}
+	if err := st.MarkComplete(ctx, repairScanID, "3.3.0", "trusted-import"); err != nil {
+		t.Fatalf("complete trusted repair-trigger scan: %v", err)
+	}
 
 	bundle := types.ScanBundle{
 		Format:        types.ScanBundleFormat,
@@ -298,7 +317,7 @@ func TestScanBundleHTTPImportTrustedCoveragePostgres(t *testing.T) {
 			ID:               types.NewID(),
 			State:            string(types.ScanComplete),
 			Source:           "manual",
-			CreatedAt:        time.Now().UTC().Add(time.Second),
+			CreatedAt:        time.Now().UTC().Add(2 * time.Minute),
 			CoveredEndpoints: coverage,
 			Spec:             json.RawMessage(`{"targets":["trusted-import.invalid"]}`),
 		},
@@ -338,6 +357,13 @@ func TestScanBundleHTTPImportTrustedCoveragePostgres(t *testing.T) {
 	if result.CoverageMode != "trust" {
 		t.Fatalf("trusted import coverage mode = %q, want trust", result.CoverageMode)
 	}
+	trustedScan, err := st.GetScan(ctx, bundle.Scan.ID)
+	if err != nil {
+		t.Fatalf("get trusted imported scan: %v", err)
+	}
+	if trustedScan.CoverageOrigin != store.CoverageOriginImportTrusted {
+		t.Fatalf("trusted imported scan coverage origin = %q, want %q", trustedScan.CoverageOrigin, store.CoverageOriginImportTrusted)
+	}
 
 	lifecycle, _, err := st.ListLifecycleFindings(ctx, store.FindingQuery{}, 50, 0)
 	if err != nil {
@@ -345,5 +371,15 @@ func TestScanBundleHTTPImportTrustedCoveragePostgres(t *testing.T) {
 	}
 	if len(lifecycle) != 1 || lifecycle[0].DetectionState != "mitigated" {
 		t.Fatalf("trusted import detection state = %+v, want mitigated", lifecycle)
+	}
+	if _, _, err := st.DeleteScan(ctx, repairScanID); err != nil {
+		t.Fatalf("delete trusted repair-trigger scan: %v", err)
+	}
+	lifecycle, _, err = st.ListLifecycleFindings(ctx, store.FindingQuery{}, 50, 0)
+	if err != nil {
+		t.Fatalf("list trusted lifecycle after repair: %v", err)
+	}
+	if len(lifecycle) != 1 || lifecycle[0].DetectionState != "mitigated" {
+		t.Fatalf("trusted import lost mitigation after repair: %+v", lifecycle)
 	}
 }

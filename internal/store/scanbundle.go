@@ -301,12 +301,14 @@ func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, confl
 		errText = firstNonEmpty(errText, "scan was in-flight when exported; imported as failed")
 	}
 
-	// Endpoint coverage is execution-trace evidence from the exporting scanner
-	// node. Bundle contents are untrusted, so never persist claimed coverage from
-	// an import: lifecycle repair could otherwise treat a coverage-only bundle as
-	// proof that an absent finding was mitigated. Imported occurrences still
-	// provide positive evidence through the normal ingest path below.
+	// Endpoint coverage and its warning are execution-trace claims from the
+	// exporting scanner node. Bundle contents are untrusted, so never persist
+	// either from an import: lifecycle repair could otherwise treat a coverage-
+	// only bundle as proof that an absent finding was mitigated, and the warning
+	// could misrepresent the destination's unknown coverage. Imported occurrences
+	// still provide positive evidence through the normal ingest path below.
 	var coveredJSON []byte
+	var coverageWarning *string
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO scans (id, state, spec, target_id, template_set_id, scan_policy_id,
 		                    source, schedule_id, node_id, nuclei_version, templates_commit, error,
@@ -316,7 +318,7 @@ func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, confl
 		scanID, state, b.Scan.Spec, nullStr(scan.TargetID), nullStr(scan.TemplateSetID), nullStr(scan.ScanPolicyID),
 		nullStr(b.Scan.Source), nullStr(scan.ScheduleID), nullStr(scan.NodeID), nullStr(b.Scan.NucleiVersion), nullStr(b.Scan.TemplatesCommit), nullStr(errText),
 		b.Scan.SkippedFindingCount, b.Scan.CreatedAt, b.Scan.StartedAt, b.Scan.FinishedAt,
-		orEmpty(b.Scan.DiscoveredTargets), coveredJSON, nullStr(b.Scan.CoverageWarning),
+		orEmpty(b.Scan.DiscoveredTargets), coveredJSON, coverageWarning,
 	); err != nil {
 		// Two concurrent imports of the same bundle can both clear the existence
 		// pre-check under READ COMMITTED; surface the unique-violation loser as

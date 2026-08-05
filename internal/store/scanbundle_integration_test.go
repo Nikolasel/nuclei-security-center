@@ -539,6 +539,7 @@ func TestScanBundleImportCoverageCannotAffectRepairPostgres(t *testing.T) {
 			Source:           "manual",
 			CreatedAt:        time.Now().UTC().Add(time.Minute),
 			CoveredEndpoints: coverage,
+			CoverageWarning:  "forged exporter warning",
 			Spec:             json.RawMessage(`{"targets":["coverage.invalid"]}`),
 		},
 		Findings: nil,
@@ -553,13 +554,17 @@ func TestScanBundleImportCoverageCannotAffectRepairPostgres(t *testing.T) {
 	if result.FindingsImported != 0 {
 		t.Fatalf("expected 0 findings imported, got %d", result.FindingsImported)
 	}
-	var importedCoverageIsNull bool
+	var importedCoverageIsNull, importedCoverageWarningIsNull bool
 	if err := dest.pool.QueryRow(ctx,
-		`SELECT covered_endpoints IS NULL FROM scans WHERE id = $1`, bundle.Scan.ID).Scan(&importedCoverageIsNull); err != nil {
+		`SELECT covered_endpoints IS NULL, coverage_warning IS NULL FROM scans WHERE id = $1`, bundle.Scan.ID).
+		Scan(&importedCoverageIsNull, &importedCoverageWarningIsNull); err != nil {
 		t.Fatalf("read imported coverage state: %v", err)
 	}
 	if !importedCoverageIsNull {
 		t.Fatal("imported covered_endpoints must be discarded as untrusted evidence")
+	}
+	if !importedCoverageWarningIsNull {
+		t.Fatal("imported coverage_warning must be discarded with untrusted coverage")
 	}
 
 	// Deleting the newer real scan triggers repair. The forged imported scan must

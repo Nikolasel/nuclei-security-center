@@ -294,7 +294,7 @@ so scans survive a busy or briefly-unreachable node.
 9. **Bundle export / import (#136)** — a viewer-level `GET /api/scans/{id}/export`
    serializes the **complete record of one scan result** into a versioned,
    self-contained manifest (`format` + `format_version`, `scan` record incl.
-   timestamps/state/source/`discovered_targets`/`covered_endpoints`/resolved
+   timestamps/state/source/`discovered_targets`/`covered_endpoints`/`coverage_warning`/resolved
    `template_ids` + `templates_commit`/verbatim `spec`, config refs + snapshots,
    and all **occurrences** with their preserved raw JSONL). Like a scan-results
    file (a Nessus `.ness` import), the bundle carries **the scan's data, not the
@@ -307,6 +307,10 @@ so scans survive a busy or briefly-unreachable node.
    payload (never trusted from the manifest), and the destination **re-derives
    its own lifecycle** (detection state, first/last-seen, mitigation counters,
    overlays) from the results exactly as if it had scanned the target itself.
+   `covered_endpoints` and `coverage_warning` remain in the portable export
+   format for provenance, but are untrusted exporter-authored claims and are
+   discarded on import (the destination stores coverage as NULL); only exact
+   occurrences carried by the bundle can provide positive lifecycle evidence.
    Missing local references (target / template set / scan policy / node /
    schedule) fall back to NULL and are reported — never a failure. In-flight
    exports import as `failed`; a scan id that already exists locally is `409` by

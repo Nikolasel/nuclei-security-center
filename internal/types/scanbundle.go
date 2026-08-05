@@ -69,19 +69,24 @@ type ScanBundle struct {
 
 // ScanBundleScan is the scan record as captured in a bundle.
 type ScanBundleScan struct {
-	ID                  string             `json:"id"`
-	State               string             `json:"state"`
-	Source              string             `json:"source,omitempty"`
-	NucleiVersion       string             `json:"nuclei_version,omitempty"`
-	TemplatesCommit     string             `json:"templates_commit,omitempty"`
-	Error               string             `json:"error,omitempty"`
-	SkippedFindingCount int                `json:"skipped_finding_count"`
-	CreatedAt           time.Time          `json:"created_at"`
-	StartedAt           *time.Time         `json:"started_at,omitempty"`
-	FinishedAt          *time.Time         `json:"finished_at,omitempty"`
-	DiscoveredTargets   []string           `json:"discovered_targets,omitempty"`
-	CoveredEndpoints    []EndpointCoverage `json:"covered_endpoints"`
-	CoverageWarning     string             `json:"coverage_warning,omitempty"`
+	ID                  string     `json:"id"`
+	State               string     `json:"state"`
+	Source              string     `json:"source,omitempty"`
+	NucleiVersion       string     `json:"nuclei_version,omitempty"`
+	TemplatesCommit     string     `json:"templates_commit,omitempty"`
+	Error               string     `json:"error,omitempty"`
+	SkippedFindingCount int        `json:"skipped_finding_count"`
+	CreatedAt           time.Time  `json:"created_at"`
+	StartedAt           *time.Time `json:"started_at,omitempty"`
+	FinishedAt          *time.Time `json:"finished_at,omitempty"`
+	DiscoveredTargets   []string   `json:"discovered_targets,omitempty"`
+	// CoveredEndpoints is retained in the portable export format, but imports
+	// discard this untrusted external claim (#181); imported occurrences are the
+	// only positive evidence accepted by the destination lifecycle.
+	CoveredEndpoints []EndpointCoverage `json:"covered_endpoints"`
+	// CoverageWarning is exporter-authored trace metadata and is likewise
+	// discarded on import with CoveredEndpoints.
+	CoverageWarning string `json:"coverage_warning,omitempty"`
 	// TemplateIDs is the resolved concrete template selection the node ran. It is
 	// the readable form of spec.Templates.TemplateIDs.
 	TemplateIDs []string `json:"template_ids,omitempty"`

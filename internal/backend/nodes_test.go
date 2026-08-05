@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
@@ -31,24 +32,35 @@ func TestParseNodeConfigValid(t *testing.T) {
 
 func TestParseNodeConfigInvalid(t *testing.T) {
 	cases := []struct {
-		name, zones string
+		name, zones, wantErr string
 	}{
-		{"bad json", `not json`},
-		{"missing name", `[{"cidrs":["10.0.0.0/8"],"url":"u","token":"t"}]`},
-		{"reserved default name", `[{"name":"default","url":"u","token":"t"}]`},
-		{"missing url/token", `[{"name":"a","cidrs":["10.0.0.0/8"]}]`},
-		{"unsupported endpoint", `[{"name":"a","url":"ftp://scanner","token":"t"}]`},
-		{"bad cidr", `[{"name":"a","cidrs":["nope"],"url":"u","token":"t"}]`},
-		{"dup name", `[{"name":"a","url":"u","token":"t"},{"name":"a","url":"u2","token":"t2"}]`},
-		{"overlap identical", `[{"name":"a","cidrs":["10.0.0.0/8"],"url":"u","token":"t"},{"name":"b","cidrs":["10.0.0.0/8"],"url":"u2","token":"t2"}]`},
-		{"overlap nested", `[{"name":"a","cidrs":["10.0.0.0/8"],"url":"u","token":"t"},{"name":"b","cidrs":["10.1.2.0/24"],"url":"u2","token":"t2"}]`},
+		{"bad json", `not json`, "invalid JSON"},
+		{"missing name", `[{"cidrs":["10.0.0.0/8"],"url":"http://u","token":"t"}]`, "missing a name"},
+		{"reserved default name", `[{"name":"default","url":"http://u","token":"t"}]`, "reserved for SCANNER_URL"},
+		{"missing url/token", `[{"name":"a","cidrs":["10.0.0.0/8"]}]`, "needs a url and token"},
+		{"unsupported endpoint", `[{"name":"a","url":"ftp://scanner","token":"t"}]`, "endpoint must be an absolute http or https URL"},
+		{"bad cidr", `[{"name":"a","cidrs":["nope"],"url":"http://u","token":"t"}]`, "bad CIDR"},
+		{"dup name", `[{"name":"a","url":"http://u","token":"t"},{"name":"a","url":"http://u2","token":"t2"}]`, "duplicate zone name"},
+		{"overlap identical", `[{"name":"a","cidrs":["10.0.0.0/8"],"url":"http://u","token":"t"},{"name":"b","cidrs":["10.0.0.0/8"],"url":"http://u2","token":"t2"}]`, "overlapping CIDRs"},
+		{"overlap nested", `[{"name":"a","cidrs":["10.0.0.0/8"],"url":"http://u","token":"t"},{"name":"b","cidrs":["10.1.2.0/24"],"url":"http://u2","token":"t2"}]`, "overlapping CIDRs"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := parseNodeConfig("http://d", "t", c.zones); err == nil {
-				t.Errorf("parseNodeConfig(%q) = nil error, want error", c.zones)
+			_, err := parseNodeConfig("http://d", "t", c.zones)
+			if err == nil {
+				t.Fatalf("parseNodeConfig(%q) = nil error, want error containing %q", c.zones, c.wantErr)
+			}
+			if !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("parseNodeConfig(%q) error = %q, want substring %q", c.zones, err, c.wantErr)
 			}
 		})
+	}
+}
+
+func TestParseNodeConfigInvalidDefaultEndpoint(t *testing.T) {
+	_, err := parseNodeConfig("scanner:8081", "t", "")
+	if err == nil || !strings.Contains(err.Error(), "SCANNER_URL: endpoint must be an absolute http or https URL") {
+		t.Fatalf("parseNodeConfig invalid default endpoint error = %v, want SCANNER_URL prefix", err)
 	}
 }
 

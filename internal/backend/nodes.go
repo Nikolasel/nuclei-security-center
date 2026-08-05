@@ -90,6 +90,9 @@ func parseNodeConfig(defaultURL, defaultToken, zonesJSON string) ([]store.Scanne
 		Token:    defaultToken,
 		CIDRs:    []string{},
 	}}
+	if err := validateNodeEndpoint(strings.TrimSpace(defaultURL)); err != nil {
+		return nil, fmt.Errorf("SCANNER_URL: %w", err)
+	}
 
 	if strings.TrimSpace(zonesJSON) != "" {
 		var cfgs []ScanZoneConfig

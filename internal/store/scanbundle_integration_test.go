@@ -11,12 +11,39 @@ import (
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
+func TestCoverageOriginDefaultsToUntrustedPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openIsolatedPostgres(t, ctx, dsn)
+	scanID := types.NewID()
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO scans (id, state, spec) VALUES ($1, $2, $3)`,
+		scanID, types.ScanFailed, json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("insert scan without coverage origin: %v", err)
+	}
+
+	var origin string
+	if err := st.pool.QueryRow(ctx, `SELECT coverage_origin FROM scans WHERE id = $1`, scanID).Scan(&origin); err != nil {
+		t.Fatalf("read default coverage origin: %v", err)
+	}
+	if origin != CoverageOriginImportUntrusted {
+		t.Fatalf("default coverage origin = %q, want %q", origin, CoverageOriginImportUntrusted)
+	}
+}
+
 // TestScanBundleRoundTripPostgres exercises the complete export → import →
 // re-export cycle against a real migrated PostgreSQL database: a scan with
 // findings, analyst overlays, discovery evidence and coverage is exported from
 // one instance and imported into a second, empty instance; the imported scan
-// must reproduce every occurrence and lifecycle detail, and re-exporting from
-// the destination must equal the origin's bundle.
+// must reproduce every occurrence and lifecycle detail. Coverage claims and
+// warnings from an external bundle are retained in the portable manifest but
+// are not trusted as destination evidence by the default import mode, so the
+// safe re-export omits them.
 //
 //	NSC_TEST_DATABASE_URL=postgres://... go test ./internal/store -run TestScanBundleRoundTripPostgres
 func TestScanBundleRoundTripPostgres(t *testing.T) {
@@ -111,7 +138,7 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 		{TemplateID: "tpl-a", Endpoint: "roundtrip.invalid:443"},
 		{TemplateID: "tpl-b", Endpoint: "roundtrip.invalid:53"},
 	}
-	if err := origin.SetScanCoverage(ctx, scanID, coverage, ""); err != nil {
+	if err := origin.SetScanCoverage(ctx, scanID, coverage, "source trace warning"); err != nil {
 		t.Fatalf("set scan coverage: %v", err)
 	}
 	if err := origin.MarkComplete(ctx, scanID, "3.3.0", "roundtrip-commit"); err != nil {
@@ -182,7 +209,7 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 	}
 
 	// Import into the empty destination instance.
-	result, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError)
+	result, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError, ImportCoverageIgnore)
 	if err != nil {
 		t.Fatalf("import bundle: %v", err)
 	}
@@ -210,8 +237,11 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 	if len(importedScan.DiscoveredTargets) != 2 {
 		t.Fatalf("imported discovered targets lost: %v", importedScan.DiscoveredTargets)
 	}
-	if len(importedScan.CoveredEndpoints) != 2 {
-		t.Fatalf("imported coverage lost: %v", importedScan.CoveredEndpoints)
+	if importedScan.CoveredEndpoints != nil {
+		t.Fatalf("imported coverage must be unknown, got %v", importedScan.CoveredEndpoints)
+	}
+	if importedScan.CoverageWarning != "" {
+		t.Fatalf("imported coverage warning must be discarded, got %q", importedScan.CoverageWarning)
 	}
 
 	// Occurrences must be reproduced, and the composite scope FK satisfied.
@@ -261,22 +291,24 @@ func TestScanBundleRoundTripPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("re-export bundle: %v", err)
 	}
-	norm := func(b *types.ScanBundle) *types.ScanBundle {
-		b.ExportedAt = time.Time{}
-		return b
-	}
-	originJSON, _ := json.Marshal(norm(bundle))
-	destJSON, _ := json.Marshal(norm(reBundle))
+	expectedBundle := *bundle
+	expectedBundle.ExportedAt = time.Time{}
+	expectedBundle.Scan.CoveredEndpoints = nil
+	expectedBundle.Scan.CoverageWarning = ""
+	destinationBundle := *reBundle
+	destinationBundle.ExportedAt = time.Time{}
+	originJSON, _ := json.Marshal(&expectedBundle)
+	destJSON, _ := json.Marshal(&destinationBundle)
 	if string(originJSON) != string(destJSON) {
 		t.Fatalf("re-export diverges from origin bundle:\norigin: %s\ndest:   %s", originJSON, destJSON)
 	}
 
 	// Default conflict policy refuses to overwrite.
-	if _, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError); !errors.Is(err, ErrScanBundleConflict) {
+	if _, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError, ImportCoverageIgnore); !errors.Is(err, ErrScanBundleConflict) {
 		t.Fatalf("expected ErrScanBundleConflict, got %v", err)
 	}
 	// Duplicate policy mints a new id and keeps the original intact.
-	dupResult, err := dest.ImportScanBundle(ctx, bundle, ImportConflictDuplicate)
+	dupResult, err := dest.ImportScanBundle(ctx, bundle, ImportConflictDuplicate, ImportCoverageIgnore)
 	if err != nil {
 		t.Fatalf("duplicate import: %v", err)
 	}
@@ -383,7 +415,7 @@ func TestScanBundleImportFallbackPostgres(t *testing.T) {
 		t.Fatalf("test bundle fails validation: %v", err)
 	}
 
-	result, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError)
+	result, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError, ImportCoverageIgnore)
 	if err != nil {
 		t.Fatalf("import fallback bundle: %v", err)
 	}
@@ -441,14 +473,14 @@ func TestScanBundleImportFallbackPostgres(t *testing.T) {
 	}
 }
 
-// TestScanBundleImportCannotCloseUnobservedPostgres locks the review finding
-// that a coverage-only manifest must never advance the destination's detection
-// state: coverage evidence on import is anchored on the occurrences the bundle
-// actually carries, never on its claimed covered_endpoints, so a bundle with
-// zero findings cannot mark an existing open finding mitigated (or pin it so).
+// TestScanBundleImportCoverageCannotAffectRepairPostgres locks the review
+// finding that imported coverage is untrusted lifecycle evidence: a coverage-
+// only manifest must not advance the destination's detection state immediately
+// or during later scan-deletion repair. Coverage evidence on import is anchored
+// on the occurrences the bundle actually carries, never on claimed endpoints.
 //
-//	NSC_TEST_DATABASE_URL=postgres://... go test ./internal/store -run TestScanBundleImportCannotCloseUnobservedPostgres
-func TestScanBundleImportCannotCloseUnobservedPostgres(t *testing.T) {
+//	NSC_TEST_DATABASE_URL=postgres://... go test ./internal/store -run TestScanBundleImportCoverageCannotAffectRepairPostgres
+func TestScanBundleImportCoverageCannotAffectRepairPostgres(t *testing.T) {
 	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("NSC_TEST_DATABASE_URL is not set")
@@ -500,6 +532,29 @@ func TestScanBundleImportCannotCloseUnobservedPostgres(t *testing.T) {
 		t.Fatalf("covering scan = %q, want %q", coveringBefore, firstScanID)
 	}
 
+	// A second real observation becomes the latest covering scan. Deleting it
+	// later will trigger lifecycle repair while the first observation remains.
+	repairScanID, err := dest.CreateScan(ctx, types.ScanSpec{Targets: target.Hosts}, ScanLink{TargetID: target.ID, Source: "manual"})
+	if err != nil {
+		t.Fatalf("create repair-trigger scan: %v", err)
+	}
+	if err := dest.IngestFinding(ctx, repairScanID, target.ID, finding, raw); err != nil {
+		t.Fatalf("ingest repair-trigger finding: %v", err)
+	}
+	if err := dest.SetScanCoverage(ctx, repairScanID, coverage, ""); err != nil {
+		t.Fatalf("set repair-trigger coverage: %v", err)
+	}
+	if err := dest.MarkComplete(ctx, repairScanID, "3.3.0", "coverage-commit"); err != nil {
+		t.Fatalf("complete repair-trigger scan: %v", err)
+	}
+	if err := dest.pool.QueryRow(ctx,
+		`SELECT last_covering_scan FROM finding_lifecycle WHERE template_id = $1`, "tpl-close").Scan(&coveringBefore); err != nil {
+		t.Fatalf("read latest covering scan: %v", err)
+	}
+	if coveringBefore != repairScanID {
+		t.Fatalf("covering scan = %q, want repair-trigger scan %q", coveringBefore, repairScanID)
+	}
+
 	// A forged bundle: complete, newer, attributing the exact coverage pair, but
 	// carrying zero findings. Under the old coverage_pairs join this would click
 	// last_covering_scan forward and close the finding; import must refuse to.
@@ -514,6 +569,7 @@ func TestScanBundleImportCannotCloseUnobservedPostgres(t *testing.T) {
 			Source:           "manual",
 			CreatedAt:        time.Now().UTC().Add(time.Minute),
 			CoveredEndpoints: coverage,
+			CoverageWarning:  "forged exporter warning",
 			Spec:             json.RawMessage(`{"targets":["coverage.invalid"]}`),
 		},
 		Findings: nil,
@@ -521,20 +577,54 @@ func TestScanBundleImportCannotCloseUnobservedPostgres(t *testing.T) {
 	if err := bundle.Validate(); err != nil {
 		t.Fatalf("forged bundle fails validation: %v", err)
 	}
-	result, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError)
+	result, err := dest.ImportScanBundle(ctx, bundle, ImportConflictError, ImportCoverageIgnore)
 	if err != nil {
 		t.Fatalf("import coverage-only bundle: %v", err)
 	}
 	if result.FindingsImported != 0 {
 		t.Fatalf("expected 0 findings imported, got %d", result.FindingsImported)
 	}
+	var importedCoverageIsNull, importedCoverageWarningIsNull bool
+	var importedCoverageOrigin string
+	if err := dest.pool.QueryRow(ctx,
+		`SELECT covered_endpoints IS NULL, coverage_warning IS NULL, coverage_origin FROM scans WHERE id = $1`, bundle.Scan.ID).
+		Scan(&importedCoverageIsNull, &importedCoverageWarningIsNull, &importedCoverageOrigin); err != nil {
+		t.Fatalf("read imported coverage state: %v", err)
+	}
+	if !importedCoverageIsNull {
+		t.Fatal("imported covered_endpoints must be discarded as untrusted evidence")
+	}
+	if !importedCoverageWarningIsNull {
+		t.Fatal("imported coverage_warning must be discarded with untrusted coverage")
+	}
+	if importedCoverageOrigin != CoverageOriginImportUntrusted {
+		t.Fatalf("imported coverage origin = %q, want %q", importedCoverageOrigin, CoverageOriginImportUntrusted)
+	}
+	// Simulate a legacy/import writer that left a claim in the shared column:
+	// the durable untrusted origin must still prevent deferred repair from using it.
+	if _, err := dest.pool.Exec(ctx,
+		`UPDATE scans SET covered_endpoints = $1::jsonb WHERE id = $2`, coverage, bundle.Scan.ID); err != nil {
+		t.Fatalf("install legacy imported coverage claim: %v", err)
+	}
 
+	// Deleting the newer real scan triggers repair. The forged imported scan must
+	// not replace the surviving real scan as mitigation evidence.
+	if _, _, err := dest.DeleteScan(ctx, repairScanID); err != nil {
+		t.Fatalf("delete repair-trigger scan: %v", err)
+	}
 	var coveringAfter string
 	if err := dest.pool.QueryRow(ctx,
 		`SELECT last_covering_scan FROM finding_lifecycle WHERE template_id = $1`, "tpl-close").Scan(&coveringAfter); err != nil {
 		t.Fatalf("read covering scan after: %v", err)
 	}
 	if coveringAfter != firstScanID {
-		t.Fatalf("coverage-only import moved last_covering_scan to %q (want %q)", coveringAfter, coveringBefore)
+		t.Fatalf("coverage-only import moved last_covering_scan to %q (want %q)", coveringAfter, firstScanID)
+	}
+	lifecycle, _, err := dest.ListLifecycleFindings(ctx, FindingQuery{}, 50, 0)
+	if err != nil {
+		t.Fatalf("list lifecycle after repair: %v", err)
+	}
+	if len(lifecycle) != 1 || lifecycle[0].DetectionState == "mitigated" {
+		t.Fatalf("forged imported coverage changed detection state: %+v", lifecycle)
 	}
 }

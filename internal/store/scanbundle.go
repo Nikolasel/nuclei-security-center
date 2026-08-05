@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -17,9 +18,12 @@ import (
 // (scan row + dispatch spec + occurrence log) into structs the backend assembles
 // into the versioned manifest; import recreates the scan on this instance and
 // ingests its findings through the normal lifecycle path, so the destination
-// derives its own dedup/lifecycle state from the results exactly as if it had
-// scanned the target itself. Missing referenced entities fall back to their
-// default (NULL) value.
+// derives its own dedup/lifecycle state from the results exactly as
+// if it had scanned the target itself. External endpoint-coverage claims are not
+// trusted as local evidence; imported occurrences can still provide positive
+// evidence through the normal lifecycle path. Missing referenced entities fall
+// back to their default (NULL) value. Imported endpoint coverage is ignored by
+// default; an operator may explicitly opt into trusting it for mitigation.
 
 // BundleFinding is one immutable occurrence plus the preserved Nuclei JSON
 // (`COALESCE(raw_line, raw::text)`), ready for the manifest.
@@ -227,6 +231,46 @@ const (
 	ImportConflictDuplicate ImportConflict = "duplicate"
 )
 
+// ImportCoverageMode controls whether endpoint coverage from the exporting
+// scanner may be used as mitigation evidence on import.
+type ImportCoverageMode string
+
+const (
+	// ImportCoverageIgnore is the safe default: imported coverage is discarded.
+	ImportCoverageIgnore ImportCoverageMode = "ignore"
+	// ImportCoverageTrust is an explicit operator opt-in to use exact imported
+	// endpoint coverage as mitigation evidence.
+	ImportCoverageTrust ImportCoverageMode = "trust"
+)
+
+// CoverageOrigin identifies the provenance of persisted endpoint coverage.
+// Only node traces and explicit trusted imports may contribute claimed
+// mitigation evidence; ordinary imports are retained as untrusted provenance.
+const (
+	CoverageOriginNode            = "node"
+	CoverageOriginImportUntrusted = "import_untrusted"
+	CoverageOriginImportTrusted   = "import_trusted"
+	coverageOriginClaimedSQL      = "('" + CoverageOriginNode + "', '" + CoverageOriginImportTrusted + "')"
+)
+
+func coverageOriginAllowsClaimedCoverage(origin string) bool {
+	return origin == CoverageOriginNode || origin == CoverageOriginImportTrusted
+}
+
+// ErrInvalidImportedCoverage indicates a malformed coverage claim supplied to
+// the explicit trust mode. The default ignore mode deliberately does not reject
+// these exporter-authored claims because it never consumes them.
+var ErrInvalidImportedCoverage = errors.New("invalid imported endpoint coverage")
+
+func validateImportedCoverage(endpoints []types.EndpointCoverage) error {
+	for i, endpoint := range endpoints {
+		if strings.TrimSpace(endpoint.TemplateID) == "" || strings.TrimSpace(endpoint.Endpoint) == "" {
+			return fmt.Errorf("%w at index %d", ErrInvalidImportedCoverage, i)
+		}
+	}
+	return nil
+}
+
 // ImportFallback records one bundle reference that did not exist locally and
 // fell back to its default (NULL).
 type ImportFallback struct {
@@ -236,11 +280,12 @@ type ImportFallback struct {
 
 // ScanImportResult summarizes an applied import.
 type ScanImportResult struct {
-	ScanID           string           `json:"scan_id"`
-	FindingsImported int              `json:"findings_imported"`
-	LifecycleCreated int              `json:"lifecycle_created"`
-	LifecycleUpdated int              `json:"lifecycle_updated"`
-	Fallbacks        []ImportFallback `json:"fallbacks,omitempty"`
+	ScanID           string             `json:"scan_id"`
+	FindingsImported int                `json:"findings_imported"`
+	LifecycleCreated int                `json:"lifecycle_created"`
+	LifecycleUpdated int                `json:"lifecycle_updated"`
+	CoverageMode     ImportCoverageMode `json:"coverage_mode"`
+	Fallbacks        []ImportFallback   `json:"fallbacks,omitempty"`
 }
 
 // ErrScanBundleConflict is returned when importing a bundle whose scan id
@@ -253,10 +298,23 @@ var ErrScanBundleConflict = errors.New("scan already exists")
 // target itself. It runs in one transaction, so a malformed bundle leaves no
 // partial state. Referenced entities missing locally fall back to NULL — the
 // same default a deleted target/policy leaves behind.
+// Imported endpoint coverage is discarded unless coverageMode is the explicit
+// operator opt-in ImportCoverageTrust.
 //
 // The manifest is validated by the caller (types.ScanBundle.Validate); this
 // function still fails closed on any per-row projection error.
-func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, conflict ImportConflict) (*ScanImportResult, error) {
+func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, conflict ImportConflict, coverageMode ImportCoverageMode) (*ScanImportResult, error) {
+	if coverageMode == "" {
+		coverageMode = ImportCoverageIgnore
+	}
+	if coverageMode != ImportCoverageIgnore && coverageMode != ImportCoverageTrust {
+		return nil, fmt.Errorf("invalid import coverage mode %q", coverageMode)
+	}
+	if coverageMode == ImportCoverageTrust {
+		if err := validateImportedCoverage(b.Scan.CoveredEndpoints); err != nil {
+			return nil, err
+		}
+	}
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
@@ -299,25 +357,39 @@ func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, confl
 		errText = firstNonEmpty(errText, "scan was in-flight when exported; imported as failed")
 	}
 
-	coveredJSON, err := json.Marshal(b.Scan.CoveredEndpoints)
-	if err != nil {
-		return nil, err
+	coverageOrigin := CoverageOriginImportUntrusted
+	if coverageMode == ImportCoverageTrust {
+		coverageOrigin = CoverageOriginImportTrusted
 	}
-	if string(coveredJSON) == "null" {
-		// The column's CHECK requires an array (or NULL); an absent coverage list
-		// imports as NULL, mirroring "no coverage evidence recorded".
-		coveredJSON = nil
+
+	// `covered_endpoints` is execution-trace evidence used for mitigation, and
+	// `coverage_warning` describes that trace. Both are claims from the exporting
+	// scanner node and untrusted on import by default, so never persist either
+	// unless the operator explicitly selected ImportCoverageTrust. In trust mode,
+	// exact pairs are persisted and applied using the same lifecycle evidence rules
+	// as a completed local scan. `discovered_targets` is also external scanner
+	// output, but is retained as display-only provenance; no lifecycle path uses it
+	// as evidence. Imported occurrences still provide positive evidence through the
+	// normal ingest path below.
+	var coveredJSON []byte
+	var coverageWarning *string
+	if coverageMode == ImportCoverageTrust && b.Scan.CoveredEndpoints != nil {
+		coveredJSON, err = json.Marshal(b.Scan.CoveredEndpoints)
+		if err != nil {
+			return nil, fmt.Errorf("marshal imported endpoint coverage: %w", err)
+		}
+		coverageWarning = nullStr(b.Scan.CoverageWarning)
 	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO scans (id, state, spec, target_id, template_set_id, scan_policy_id,
 		                    source, schedule_id, node_id, nuclei_version, templates_commit, error,
 		                    skipped_finding_count, created_at, started_at, finished_at,
-		                    discovered_targets, covered_endpoints, coverage_warning)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+		                    discovered_targets, covered_endpoints, coverage_warning, coverage_origin)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
 		scanID, state, b.Scan.Spec, nullStr(scan.TargetID), nullStr(scan.TemplateSetID), nullStr(scan.ScanPolicyID),
 		nullStr(b.Scan.Source), nullStr(scan.ScheduleID), nullStr(scan.NodeID), nullStr(b.Scan.NucleiVersion), nullStr(b.Scan.TemplatesCommit), nullStr(errText),
 		b.Scan.SkippedFindingCount, b.Scan.CreatedAt, b.Scan.StartedAt, b.Scan.FinishedAt,
-		orEmpty(b.Scan.DiscoveredTargets), coveredJSON, nullStr(b.Scan.CoverageWarning),
+		orEmpty(b.Scan.DiscoveredTargets), coveredJSON, coverageWarning, coverageOrigin,
 	); err != nil {
 		// Two concurrent imports of the same bundle can both clear the existence
 		// pre-check under READ COMMITTED; surface the unique-violation loser as
@@ -334,7 +406,7 @@ func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, confl
 	// path derives the destination's own first/last-seen, mitigation counters,
 	// and evidence pointers. Analyst overlays already on the destination are
 	// never touched (import is the scan result, not the exporter's analysis).
-	result := &ScanImportResult{ScanID: scanID, Fallbacks: fallbacks}
+	result := &ScanImportResult{ScanID: scanID, CoverageMode: coverageMode, Fallbacks: fallbacks}
 	for _, bf := range b.Findings {
 		f := types.NucleiFinding{
 			TemplateID: bf.TemplateID,
@@ -366,12 +438,11 @@ func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, confl
 		result.FindingsImported++
 	}
 
-	// A completed scan's coverage evidence advances the destination's
-	// last_covering_scan pointers exactly like a scan finishing normally. It is
-	// deliberately withheld for failed/cancelled imports — a failed scan's
-	// coverage is unreliable, so it proves nothing (closure stays evidence-driven).
+	// A completed import advances last_covering_scan only for lifecycle rows the
+	// bundle actually observed, unless the operator explicitly trusted exact
+	// imported endpoint coverage. Failed/cancelled imports prove nothing.
 	if state == string(types.ScanComplete) {
-		if err := applyScanCoverage(ctx, tx, scanID); err != nil {
+		if err := applyScanCoverage(ctx, tx, scanID, coverageMode == ImportCoverageTrust); err != nil {
 			return nil, fmt.Errorf("apply imported scan coverage: %w", err)
 		}
 	}
@@ -429,30 +500,67 @@ func resolveScanBundleRefs(ctx context.Context, tx pgx.Tx, b *types.ScanBundle) 
 }
 
 // applyScanCoverage advances the destination's last_covering_scan evidence
-// pointers for the lifecycle rows the imported scan actually observed. This is
-// deliberately narrower than MarkComplete's completion-time update: a real scan
-// advances coverage from its covered_endpoints list (verified evidence that the
-// node probed the pair), while an import may only advance it for occurrences it
-// actually carries — a manifest that merely claims coverage has no observations
-// behind it, so it must not close a finding it never saw. The caller gates this
-// on state == ScanComplete, so a failed import proves nothing either. No scan
-// state or timestamps are flipped here.
-func applyScanCoverage(ctx context.Context, tx pgx.Tx, scanID string) error {
-	_, err := tx.Exec(ctx,
-		`WITH completed_scan AS (
-		    SELECT id, target_id, created_at
-		      FROM scans WHERE id = $1
+// pointers for lifecycle rows the imported scan actually observed. When
+// trustClaimedCoverage is true, exact persisted endpoint pairs are also
+// eligible, matching MarkComplete's local-scan evidence rules. The caller gates
+// this on state == ScanComplete, so a failed import proves nothing.
+func applyScanCoverage(ctx context.Context, tx pgx.Tx, scanID string, trustClaimedCoverage bool) error {
+	candidates := `
+		 observed AS MATERIALIZED (
+		    SELECT DISTINCT observed.finding_id
+		      FROM completed_scan
+		      JOIN findings observed ON observed.scan_id = completed_scan.id
+		     WHERE observed.finding_id IS NOT NULL
+		 ),
+		 candidate_lifecycle AS MATERIALIZED (
+		    SELECT observed.finding_id AS id FROM observed
+		 )`
+	if trustClaimedCoverage {
+		candidates = fmt.Sprintf(`
+		 coverage_pairs AS MATERIALIZED (
+		    SELECT pair->>'template_id' AS template_id,
+		           pair->>'endpoint' AS endpoint
+		      FROM completed_scan
+		      CROSS JOIN LATERAL jsonb_array_elements(
+		          CASE WHEN completed_scan.coverage_origin IN %s
+		                      AND completed_scan.skipped_finding_count = 0
+		               THEN COALESCE(completed_scan.covered_endpoints, '[]'::jsonb)
+		               ELSE '[]'::jsonb END
+		      ) AS pair
+		     WHERE jsonb_typeof(pair) = 'object'
 		 ),
 		 observed AS MATERIALIZED (
 		    SELECT DISTINCT observed.finding_id
 		      FROM completed_scan
 		      JOIN findings observed ON observed.scan_id = completed_scan.id
 		     WHERE observed.finding_id IS NOT NULL
-		 )
+		 ),
+		 candidate_lifecycle AS MATERIALIZED (
+		    SELECT lifecycle.id
+		      FROM coverage_pairs coverage
+		      JOIN finding_lifecycle lifecycle
+		        ON lifecycle.template_id = coverage.template_id
+		       AND lifecycle.endpoint_key = coverage.endpoint
+		     WHERE lifecycle.endpoint_key <> ''
+		    UNION
+		    SELECT observed.finding_id FROM observed
+		 )`, coverageOriginClaimedSQL)
+	}
+	query := fmt.Sprintf(`WITH completed_scan AS (
+		    SELECT id, target_id, covered_endpoints, coverage_origin, skipped_finding_count, created_at
+		      FROM scans WHERE id = $1
+		 ),%s
 		 UPDATE finding_lifecycle lifecycle
 		    SET last_covering_scan = completed_scan.id
-		   FROM completed_scan, observed candidate
-		  WHERE lifecycle.id = candidate.finding_id
+		   FROM completed_scan, candidate_lifecycle candidate
+		  WHERE lifecycle.id = candidate.id
+		    AND EXISTS (
+		        SELECT 1
+		          FROM findings associated
+		          JOIN scans associated_scan ON associated_scan.id = associated.scan_id
+		         WHERE associated.finding_id = lifecycle.id
+		           AND associated_scan.target_id IS NOT DISTINCT FROM completed_scan.target_id
+		    )
 		    AND (
 		        lifecycle.last_covering_scan IS NULL
 		        OR EXISTS (
@@ -462,8 +570,8 @@ func applyScanCoverage(ctx context.Context, tx pgx.Tx, scanID string) error {
 		               AND (previous.created_at, previous.id) <
 		                   (completed_scan.created_at, completed_scan.id)
 		        )
-		    )`,
-		scanID)
+		    )`, candidates)
+	_, err := tx.Exec(ctx, query, scanID)
 	return err
 }
 

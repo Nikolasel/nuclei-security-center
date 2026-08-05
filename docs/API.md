@@ -86,19 +86,31 @@ the exporter's globally deduplicated finding lifecycle** — analyst disposition
 first/last-seen, and mitigation counters are never exported. `format=zip` wraps the same
 document as `manifest.json` inside a zip archive.
 
-`POST /api/scans/import?conflict=error|duplicate` (operator, audited `scan_imported`) recreates
-the scan on this instance and ingests its findings through the normal lifecycle path, so the
-destination **re-derives its own lifecycle** (dedup identity, first/last-seen, mitigation
-state) from the results exactly as if it had scanned the target itself. The dedup identity is
+`POST /api/scans/import?conflict=error|duplicate&coverage=ignore|trust` (operator, audited
+`scan_imported`) recreates the scan on this instance and ingests its findings through the normal
+lifecycle path, so the destination **re-derives its own lifecycle** (dedup identity,
+first/last-seen, mitigation state) from the results exactly as if it had scanned the target
+itself. The dedup identity is
 **recomputed from the verbatim raw payload** — never trusted from the manifest — and occurrence
 scope follows the resolved destination target. References (target / template set / scan policy /
 node / schedule) that don't exist here **fall back to NULL** and are listed in the response's
 `fallbacks`; a missing entity never fails the import (fail-soft on references, fail-hard on the
 bundle itself). An in-flight (queued/running) export imports as `failed`. A destination
-analyst's overlays are never touched (they were never exported). Coverage evidence is applied
-only to lifecycle findings the bundle actually carries observations for, and only when the
-imported scan completed — a manifest that merely claims coverage can never close a finding it
-did not observe. The default conflict policy
+analyst's overlays are never touched (they were never exported). The manifest's
+`covered_endpoints` and `coverage_warning` are exporter-authored trace claims. With the default
+`coverage=ignore`, they are discarded, the destination stores coverage as unknown (`NULL`), and
+a coverage-only bundle cannot mitigate an existing finding. `coverage=trust` is an explicit
+operator opt-in: exact imported endpoint pairs are persisted and may mark matching existing
+findings mitigated, using the same scope and skipped-record rules as a completed local scan.
+In trust mode, each imported coverage pair must include a non-empty `template_id` and `endpoint`
+(`400` otherwise).
+The scan records durable `coverage_origin` provenance (`node`, `import_untrusted`, or
+`import_trusted`), and lifecycle repair accepts claimed coverage only from `node` or the explicit
+`import_trusted` origin. An operator-role compromise can still choose trust, so the mode is also
+included in the audit event as the compensating control.
+Exact findings carried by a completed bundle always provide positive evidence through normal
+occurrence ingestion. `discovered_targets` is retained for scan-detail display only and never
+contributes to mitigation evidence. The default conflict policy
 `error` returns **409** when the exported scan id already exists locally; `conflict=duplicate`
 imports under a fresh id instead. A bundle must be a format/version this backend understands
 and must validate (`400` otherwise) — including a `scan.source` and no future-dated

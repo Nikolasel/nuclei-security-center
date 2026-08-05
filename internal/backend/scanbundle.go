@@ -145,9 +145,9 @@ func readZipBundleManifest(body []byte) ([]byte, error) {
 }
 
 // handleImportScanBundle recreates a scan from a bundle on this instance
-// (POST /api/scans/import?conflict=error|duplicate). Operator-level and
-// audited; the response reports what was imported and which references fell
-// back to their defaults.
+// (POST /api/scans/import?conflict=error|duplicate&coverage=ignore|trust).
+// Operator-level and audited; coverage=ignore is the safe default and coverage=trust
+// is an explicit opt-in to use imported endpoint coverage for mitigation.
 func (s *Server) handleImportScanBundle(w http.ResponseWriter, r *http.Request) {
 	conflict := store.ImportConflictError
 	switch strings.TrimSpace(r.URL.Query().Get("conflict")) {
@@ -157,6 +157,16 @@ func (s *Server) handleImportScanBundle(w http.ResponseWriter, r *http.Request) 
 		conflict = store.ImportConflictDuplicate
 	default:
 		http.Error(w, "invalid conflict policy (want error or duplicate)", http.StatusBadRequest)
+		return
+	}
+	coverageMode := store.ImportCoverageIgnore
+	switch strings.TrimSpace(r.URL.Query().Get("coverage")) {
+	case "", string(store.ImportCoverageIgnore):
+		coverageMode = store.ImportCoverageIgnore
+	case string(store.ImportCoverageTrust):
+		coverageMode = store.ImportCoverageTrust
+	default:
+		http.Error(w, "invalid coverage mode (want ignore or trust)", http.StatusBadRequest)
 		return
 	}
 
@@ -190,8 +200,12 @@ func (s *Server) handleImportScanBundle(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	result, err := s.store.ImportScanBundle(r.Context(), &b, conflict)
+	result, err := s.store.ImportScanBundle(r.Context(), &b, conflict, coverageMode)
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidImportedCoverage) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		if errors.Is(err, store.ErrScanBundleConflict) {
 			http.Error(w, "a scan with id "+b.Scan.ID+" already exists (delete it, or re-import with conflict=duplicate)", http.StatusConflict)
 			return
@@ -204,6 +218,7 @@ func (s *Server) handleImportScanBundle(w http.ResponseWriter, r *http.Request) 
 		slog.Int("findings_imported", result.FindingsImported),
 		slog.Int("lifecycle_created", result.LifecycleCreated),
 		slog.Int("lifecycle_updated", result.LifecycleUpdated),
+		slog.String("coverage_mode", string(result.CoverageMode)),
 		slog.Int("reference_fallbacks", len(result.Fallbacks)),
 	)
 	writeJSON(w, http.StatusCreated, result)

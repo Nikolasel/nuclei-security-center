@@ -260,6 +260,7 @@ export const ASSIGNABLE_ROLES = ["viewer", "operator", "admin"] as const;
 export const DEFAULT_TOKEN_TTL_DAYS = 90;
 
 export type ScanState = "queued" | "running" | "complete" | "failed" | "cancelled";
+export type CoverageOrigin = "node" | "import_untrusted" | "import_trusted";
 
 // ScanProgress is live progress for a running scan, present only while running.
 // `phase` says which stage it describes: "discovering" (naabu, #86) or "scanning"
@@ -317,6 +318,9 @@ export interface Scan {
   covered_endpoints?: EndpointCoverage[] | null;
   /** fail-closed diagnostics when request-trace evidence was incomplete. */
   coverage_warning?: string;
+  /** provenance of endpoint coverage; imported claims are visibly classified
+   *  because only node and explicit trusted-import origins may mitigate. */
+  coverage_origin?: CoverageOrigin;
   created_at: string;
   finished_at?: string;
 }
@@ -352,21 +356,27 @@ export interface ImportScanBundleResponse {
   findings_imported: number;
   lifecycle_created: number;
   lifecycle_updated: number;
+  coverage_mode: "ignore" | "trust";
   fallbacks?: { field: string; exporter_id: string }[];
 }
+
+export type ImportCoverageMode = "ignore" | "trust";
 
 /** importScanBundle uploads a scan bundle (a .nsc-bundle JSON or zip, #136) and
  *  recreates the scan and its results on this instance: the findings are
  *  re-derived via the normal ingest path, so this instance computes its own
-*  instance computes its own finding lifecycle from the imported results. The
+ *  finding lifecycle from the imported results. The
  *  exporter's analyst overlays are never carried over. conflict=duplicate
  *  imports under a fresh id instead of failing with 409 when the exported scan
- *  id already exists here. */
+ *  id already exists here. Imported endpoint coverage is ignored by default;
+ *  coverage="trust" is an explicit operator opt-in for mitigation evidence. */
 export async function importScanBundle(
   file: File,
   conflict: "error" | "duplicate" = "error",
+  coverage: ImportCoverageMode = "ignore",
 ): Promise<ImportScanBundleResponse> {
-  const res = await fetch(`/api/scans/import?conflict=${encodeURIComponent(conflict)}`, {
+  const params = new URLSearchParams({ conflict, coverage });
+  const res = await fetch(`/api/scans/import?${params.toString()}`, {
     method: "POST",
     credentials: "same-origin",
     headers: { "Content-Type": "application/octet-stream" },

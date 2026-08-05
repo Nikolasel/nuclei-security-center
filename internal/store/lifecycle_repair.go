@@ -99,7 +99,7 @@ func repairLifecycleFindings(ctx context.Context, tx pgx.Tx, lifecycleIDs []int6
 	// one of the affected global findings. Exact observations are positive
 	// evidence; otherwise a scan covers only an exact template+endpoint pair.
 	scanRows, err := tx.Query(ctx,
-		`SELECT scans.id, scans.target_id, scans.covered_endpoints,
+		`SELECT scans.id, scans.target_id, scans.coverage_origin, scans.covered_endpoints,
 		        scans.skipped_finding_count
 		   FROM scans
 		  WHERE scans.state = 'complete'
@@ -117,19 +117,22 @@ func repairLifecycleFindings(ctx context.Context, tx pgx.Tx, lifecycleIDs []int6
 	}
 	var scanIDs []string
 	targetByScan := map[string]string{}
+	coverageOriginByScan := map[string]string{}
 	coverageByScan := map[string]map[types.EndpointCoverage]struct{}{}
 	skippedByScan := map[string]int{}
 	for scanRows.Next() {
 		var id string
 		var targetID *string
+		var coverageOrigin string
 		var coveredJSON []byte
 		var skippedCount int
-		if err := scanRows.Scan(&id, &targetID, &coveredJSON, &skippedCount); err != nil {
+		if err := scanRows.Scan(&id, &targetID, &coverageOrigin, &coveredJSON, &skippedCount); err != nil {
 			scanRows.Close()
 			return err
 		}
 		scanIDs = append(scanIDs, id)
 		targetByScan[id] = targetScopeKey(targetID)
+		coverageOriginByScan[id] = coverageOrigin
 		skippedByScan[id] = skippedCount
 		if coveredJSON != nil {
 			var endpoints []types.EndpointCoverage
@@ -190,6 +193,9 @@ func repairLifecycleFindings(ctx context.Context, tx pgx.Tx, lifecycleIDs []int6
 				return true
 			}
 			if skippedByScan[scanID] > 0 {
+				return false
+			}
+			if !coverageOriginAllowsClaimedCoverage(coverageOriginByScan[scanID]) {
 				return false
 			}
 			coverage, known := coverageByScan[scanID]

@@ -268,10 +268,10 @@ func (s *Store) CreateScan(ctx context.Context, spec types.ScanSpec, link ScanLi
 		source = "adhoc"
 	}
 	_, err = s.pool.Exec(ctx,
-		`INSERT INTO scans (id, state, spec, target_id, template_set_id, scan_policy_id, source, schedule_id, templates_commit)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		`INSERT INTO scans (id, state, spec, target_id, template_set_id, scan_policy_id, source, schedule_id, templates_commit, coverage_origin)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 		id, types.ScanQueued, specJSON, nullStr(link.TargetID), nullStr(link.TemplateSetID),
-		nullStr(link.ScanPolicyID), source, nullStr(link.ScheduleID), nullStr(spec.Templates.TemplatesCommit),
+		nullStr(link.ScanPolicyID), source, nullStr(link.ScheduleID), nullStr(spec.Templates.TemplatesCommit), CoverageOriginNode,
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert scan: %w", err)
@@ -392,19 +392,19 @@ func (s *Store) FailOrphanedScans(ctx context.Context, reason string) (int64, er
 // its exact occurrences still provide positive evidence, but its absence cannot
 // advance mitigation evidence.
 func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templatesCommit string) error {
-	_, err := s.pool.Exec(ctx,
-		`WITH completed_scan AS (
+	query := fmt.Sprintf(`WITH completed_scan AS (
 		    UPDATE scans
 		       SET state = $1, nuclei_version = $2, templates_commit = $3, finished_at = now()
 		     WHERE id = $4 AND state <> $5
-		     RETURNING id, target_id, covered_endpoints, skipped_finding_count, created_at
+		     RETURNING id, target_id, covered_endpoints, coverage_origin, skipped_finding_count, created_at
 		 ),
 		 coverage_pairs AS MATERIALIZED (
 		    SELECT pair->>'template_id' AS template_id,
 		           pair->>'endpoint' AS endpoint
 		      FROM completed_scan
 		      CROSS JOIN LATERAL jsonb_array_elements(
-		          CASE WHEN completed_scan.skipped_finding_count = 0
+		          CASE WHEN completed_scan.coverage_origin IN %s
+		                      AND completed_scan.skipped_finding_count = 0
 		               THEN COALESCE(completed_scan.covered_endpoints, '[]'::jsonb)
 		               ELSE '[]'::jsonb END
 		      ) AS pair
@@ -443,7 +443,8 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 		               AND (previous.created_at, previous.id) <
 		                   (completed_scan.created_at, completed_scan.id)
 		        )
-		    )`,
+		    )`, coverageOriginClaimedSQL)
+	_, err := s.pool.Exec(ctx, query,
 		types.ScanComplete, nucleiVersion, templatesCommit, scanID, types.ScanCancelled,
 	)
 	return err
@@ -474,9 +475,9 @@ func (s *Store) SetScanCoverage(ctx context.Context, scanID string, endpoints []
 	}
 	_, err = s.pool.Exec(ctx,
 		`UPDATE scans
-		    SET covered_endpoints = $2::jsonb, coverage_warning = $3
+		    SET covered_endpoints = $2::jsonb, coverage_warning = $3, coverage_origin = $4
 		  WHERE id = $1`,
-		scanID, raw, nullStr(warning))
+		scanID, raw, nullStr(warning), CoverageOriginNode)
 	return err
 }
 
@@ -569,6 +570,10 @@ type ScanRow struct {
 	// nil means unavailable; empty means the trace was valid but nothing answered.
 	CoveredEndpoints []types.EndpointCoverage `json:"covered_endpoints"`
 	CoverageWarning  string                   `json:"coverage_warning,omitempty"`
+	// CoverageOrigin records whether endpoint coverage came from a local scanner
+	// trace or an explicitly trusted import. Untrusted imports are retained as
+	// provenance but cannot contribute claimed mitigation evidence.
+	CoverageOrigin string `json:"coverage_origin"`
 	// Progress is live scan progress (#66), attached by the API layer for running
 	// scans from the orchestrator's in-memory cache — never read from or written
 	// to the database.
@@ -586,7 +591,7 @@ const scanSelect = `
 	       s.nuclei_version, s.templates_commit, s.error, s.skipped_finding_count,
 	       s.raw_object_key, s.log_object_key,
 	       s.created_at, s.finished_at, s.discovered_targets,
-	       s.covered_endpoints, s.coverage_warning
+	       s.covered_endpoints, s.coverage_warning, s.coverage_origin
 	  FROM scans s
 	  LEFT JOIN targets t ON t.id = s.target_id
 	  LEFT JOIN template_sets ts ON ts.id = s.template_set_id
@@ -598,14 +603,14 @@ const scanCancellableStates = `('queued', 'running')`
 
 func scanScan(row pgx.Row) (ScanRow, error) {
 	var r ScanRow
-	var targetID, targetName, templateSetID, templateSetName, scanPolicyID, scanPolicyName, nodeID, nodeName, nucleiVersion, templatesCommit, errStr, rawKey, logKey, coverageWarning *string
+	var targetID, targetName, templateSetID, templateSetName, scanPolicyID, scanPolicyName, nodeID, nodeName, nucleiVersion, templatesCommit, errStr, rawKey, logKey, coverageWarning, coverageOrigin *string
 	var hosts []string
 	var coveredJSON []byte
 	if err := row.Scan(&r.ID, &r.State, &targetID, &targetName, &hosts, &templateSetID, &templateSetName,
 		&scanPolicyID, &scanPolicyName, &nodeID, &nodeName,
 		&nucleiVersion, &templatesCommit, &errStr, &r.SkippedFindingCount, &rawKey, &logKey,
 		&r.CreatedAt, &r.FinishedAt,
-		&r.DiscoveredTargets, &coveredJSON, &coverageWarning); err != nil {
+		&r.DiscoveredTargets, &coveredJSON, &coverageWarning, &coverageOrigin); err != nil {
 		return ScanRow{}, err
 	}
 	if coveredJSON != nil {
@@ -629,6 +634,7 @@ func scanScan(row pgx.Row) (ScanRow, error) {
 	r.TemplatesCommit = deref(templatesCommit)
 	r.Error = deref(errStr)
 	r.CoverageWarning = deref(coverageWarning)
+	r.CoverageOrigin = deref(coverageOrigin)
 	r.HasRaw = rawKey != nil
 	r.HasLog = logKey != nil
 	return r, nil
@@ -720,9 +726,8 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 	if state == string(types.ScanQueued) || state == string(types.ScanRunning) {
 		return "", "", ErrConflict
 	}
-	affectedRows, err := tx.Query(ctx,
-		`WITH deleted_scan AS (
-		    SELECT target_id, covered_endpoints, skipped_finding_count
+	query := fmt.Sprintf(`WITH deleted_scan AS (
+		    SELECT target_id, covered_endpoints, coverage_origin, skipped_finding_count
 		      FROM scans
 		     WHERE id = $1
 		 ),
@@ -731,7 +736,8 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 		           pair->>'endpoint' AS endpoint
 		      FROM deleted_scan
 		      CROSS JOIN LATERAL jsonb_array_elements(
-		          CASE WHEN deleted_scan.skipped_finding_count = 0
+		          CASE WHEN deleted_scan.coverage_origin IN %s
+		                      AND deleted_scan.skipped_finding_count = 0
 		               THEN COALESCE(deleted_scan.covered_endpoints, '[]'::jsonb)
 		               ELSE '[]'::jsonb END
 		      ) AS pair
@@ -758,8 +764,8 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 		 UNION
 		 SELECT finding_id
 		   FROM findings
-		  WHERE scan_id = $1 AND finding_id IS NOT NULL`,
-		id)
+		  WHERE scan_id = $1 AND finding_id IS NOT NULL`, coverageOriginClaimedSQL)
+	affectedRows, err := tx.Query(ctx, query, id)
 	if err != nil {
 		return "", "", fmt.Errorf("list affected lifecycle: %w", err)
 	}

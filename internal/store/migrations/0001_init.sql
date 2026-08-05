@@ -166,12 +166,16 @@ CREATE TABLE scans (
     coverage_warning text,
     skipped_finding_count integer DEFAULT 0 NOT NULL,
     CONSTRAINT scans_covered_endpoints_array CHECK (((covered_endpoints IS NULL) OR (jsonb_typeof(covered_endpoints) = 'array'::text))),
-    CONSTRAINT scans_skipped_finding_count_check CHECK ((skipped_finding_count >= 0))
+    CONSTRAINT scans_skipped_finding_count_check CHECK ((skipped_finding_count >= 0)),
+    coverage_origin text DEFAULT 'import_untrusted'::text NOT NULL,
+    CONSTRAINT scans_coverage_origin_check CHECK ((coverage_origin = ANY (ARRAY['node'::text, 'import_untrusted'::text, 'import_trusted'::text])))
 );
 
 COMMENT ON COLUMN scans.covered_endpoints IS 'Successful Nuclei request evidence as [{template_id, endpoint(host:port)}]; NULL means unknown';
 
 COMMENT ON COLUMN scans.coverage_warning IS 'Fail-closed request-trace diagnostic surfaced on scan detail';
+
+COMMENT ON COLUMN scans.coverage_origin IS 'Provenance of covered_endpoints: node, import_untrusted, or import_trusted';
 
 CREATE TABLE schedules (
     id uuid NOT NULL,

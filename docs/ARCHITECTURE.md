@@ -154,7 +154,12 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
     disappearance from a flapping one. **Closure is evidence-driven — there is no
     manual "fixed."** `scans.covered_endpoints` stores the deduplicated
     `{template_id, endpoint}` positive trace evidence: NULL means unavailable and fails
-    closed, while an empty array is known zero coverage. Endpoint normalization uses
+    closed, while an empty array is known zero coverage. `scans.coverage_origin` durably records
+    whether that column came from a local node trace, an ordinary untrusted import, or the
+    explicit trusted-import mode; lifecycle repair accepts claimed coverage only from the local
+    node or trusted-import origins. The operator's trusted-import choice is also emitted in the
+    audit event, because an operator-role compromise remains able to assert that mode by design.
+    Endpoint normalization uses
     scheme defaults and Nuclei's `type` (`http`→80, `https`/TLS→443, DNS→53,
     WHOIS→43). Findings such as `file`/`code` results that have no network host:port
     deliberately remain ineligible for automatic mitigation; the API/UI exposes this as
@@ -294,7 +299,7 @@ so scans survive a busy or briefly-unreachable node.
 9. **Bundle export / import (#136)** — a viewer-level `GET /api/scans/{id}/export`
    serializes the **complete record of one scan result** into a versioned,
    self-contained manifest (`format` + `format_version`, `scan` record incl.
-   timestamps/state/source/`discovered_targets`/`covered_endpoints`/resolved
+   timestamps/state/source/`discovered_targets`/`covered_endpoints`/`coverage_warning`/resolved
    `template_ids` + `templates_commit`/verbatim `spec`, config refs + snapshots,
    and all **occurrences** with their preserved raw JSONL). Like a scan-results
    file (a Nessus `.ness` import), the bundle carries **the scan's data, not the
@@ -307,6 +312,15 @@ so scans survive a busy or briefly-unreachable node.
    payload (never trusted from the manifest), and the destination **re-derives
    its own lifecycle** (detection state, first/last-seen, mitigation counters,
    overlays) from the results exactly as if it had scanned the target itself.
+   `covered_endpoints` and `coverage_warning` remain in the portable export
+   format for provenance, but are untrusted exporter-authored claims. The default
+   import mode (`coverage=ignore`) discards them and stores coverage as NULL;
+   an explicit operator opt-in (`coverage=trust`) persists exact endpoint pairs
+   and may use them for mitigation under the same scope/skipped-record rules as a
+   local completed scan. Exact occurrences carried by the bundle always provide
+   positive lifecycle evidence.
+   `discovered_targets` is retained as display-only provenance and is not coverage
+   evidence; lifecycle logic must not use it for mitigation.
    Missing local references (target / template set / scan policy / node /
    schedule) fall back to NULL and are reported — never a failure. In-flight
    exports import as `failed`; a scan id that already exists locally is `409` by

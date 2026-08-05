@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { importScanBundle } from "../api";
+import { importScanBundle, type ImportCoverageMode } from "../api";
 import { Button, ErrorText, Field, Modal } from "../components/ui";
 
 export function ImportBundleModal({ onClose }: { onClose: () => void }) {
@@ -10,12 +10,13 @@ export function ImportBundleModal({ onClose }: { onClose: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState("");
   const [conflict, setConflict] = useState<"error" | "duplicate">("error");
+  const [coverage, setCoverage] = useState<ImportCoverageMode>("ignore");
 
   const importBundle = useMutation({
     mutationFn: () => {
       const file = inputRef.current?.files?.[0];
       if (!file) throw new Error("choose a bundle file first");
-      return importScanBundle(file, conflict);
+      return importScanBundle(file, conflict, coverage);
     },
     onSuccess: (res) => {
       void qc.invalidateQueries({ queryKey: ["scans"] });
@@ -36,7 +37,9 @@ export function ImportBundleModal({ onClose }: { onClose: () => void }) {
           Findings are re-ingested as if the target had been scanned: this
           instance re-derives its own finding lifecycle from the results.
           References to targets, template sets or scan policies that do not exist
-          here fall back to their defaults.
+          here fall back to their defaults. Imported endpoint coverage is ignored
+          by default; use the explicit opt-in below only when the exporting scan
+          is trusted.
         </p>
         <Field label="Bundle file">
           <input
@@ -52,6 +55,23 @@ export function ImportBundleModal({ onClose }: { onClose: () => void }) {
             <option value="error">Refuse to import (recommended)</option>
             <option value="duplicate">Import under a new id</option>
           </select>
+        </Field>
+        <Field label="Imported endpoint coverage">
+          <label className="flex items-start gap-2 text-sm text-neutral-700 dark:text-neutral-300">
+            <input
+              type="checkbox"
+              checked={coverage === "trust"}
+              onChange={(e) => setCoverage(e.target.checked ? "trust" : "ignore")}
+              className="mt-0.5"
+            />
+            <span>Use imported coverage to evaluate mitigations</span>
+          </label>
+          {coverage === "trust" && (
+            <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+              Only enable this when you trust the exporting scanner and its scope. A coverage-only
+              bundle may mark existing findings as mitigated.
+            </p>
+          )}
         </Field>
         {fileName && <p className="text-xs text-neutral-400">Selected: {fileName}</p>}
         {importBundle.isError && <ErrorText error={importBundle.error} />}

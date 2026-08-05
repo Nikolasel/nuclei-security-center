@@ -23,8 +23,8 @@ func TestAlphaMigrationFixtureIntegrity(t *testing.T) {
 		t.Fatalf("list alpha migration fixtures: %v", err)
 	}
 	sort.Strings(names)
-	if len(names) != 41 {
-		t.Fatalf("alpha migration fixture count = %d, want 41", len(names))
+	if len(names) != 42 {
+		t.Fatalf("alpha migration fixture count = %d, want 42", len(names))
 	}
 
 	digest := sha256.New()
@@ -40,7 +40,7 @@ func TestAlphaMigrationFixtureIntegrity(t *testing.T) {
 		_, _ = digest.Write([]byte{0})
 	}
 
-	const want = "750ca67f0d6bc16c06e4e37bdc221d1e92d664708332181f0324dc55db679633"
+	const want = "343e62d4516b2cdbf846171796740333bbf3a403836e8d9a9bbd6c55b927e4b0"
 	if got := fmt.Sprintf("%x", digest.Sum(nil)); got != want {
 		t.Fatalf("alpha migration fixture digest = %s, want %s; fixtures are immutable history", got, want)
 	}
@@ -382,36 +382,14 @@ func TestBaselineMatchesAlphaChainPostgres(t *testing.T) {
 
 	alphaDump := normalizedSchemaDump(t, ctx, pgDump, dsn, alphaSchema)
 	baselineDump := normalizedSchemaDump(t, ctx, pgDump, dsn, baselineSchema)
-	if !strings.Contains(baselineDump, "coverage_origin") {
-		t.Fatal("beta baseline is missing scans.coverage_origin")
-	}
-	baselineComparable := withoutCoverageOrigin(baselineDump)
-	if alphaDump != baselineComparable {
-		t.Fatalf("beta baseline differs from the alpha migration chain: %s", firstSchemaDifference(alphaDump, baselineComparable))
+	if alphaDump != baselineDump {
+		t.Fatalf("beta baseline differs from the alpha migration chain: %s", firstSchemaDifference(alphaDump, baselineDump))
 	}
 	alphaState := readInitialApplicationState(t, ctx, alpha)
 	baselineState := readInitialApplicationState(t, ctx, baseline)
 	if fmt.Sprint(alphaState) != fmt.Sprint(baselineState) {
 		t.Fatalf("beta baseline initial state = %#v, want alpha-chain state %#v", baselineState, alphaState)
 	}
-}
-
-func withoutCoverageOrigin(schema string) string {
-	lines := strings.Split(schema, "\n")
-	filtered := lines[:0]
-	removingCoverageBlock := false
-	for _, line := range lines {
-		if strings.Contains(line, "coverage_origin") {
-			removingCoverageBlock = true
-			continue
-		}
-		if removingCoverageBlock && (line == "--" || line == "") {
-			continue
-		}
-		removingCoverageBlock = false
-		filtered = append(filtered, line)
-	}
-	return strings.Join(filtered, "\n")
 }
 
 type initialApplicationState struct {

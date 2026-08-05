@@ -5,12 +5,46 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
+
+func TestScannerClientDoesNotFollowRedirects(t *testing.T) {
+	followed := false
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		followed = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/internal", http.StatusFound)
+	}))
+	defer origin.Close()
+
+	client := NewScannerClient(origin.URL, "node-token")
+	req, err := client.newReq(context.Background(), http.MethodGet, "/v1/scans/scan-1/results", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := client.newHTTPClient(time.Second).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %s, want 302 Found", resp.Status)
+	}
+	if followed {
+		t.Fatal("scanner client followed a redirect to a different origin")
+	}
+}
 
 func TestScannerClientValidateTemplate(t *testing.T) {
 	const yaml = "id: custom-check\n"

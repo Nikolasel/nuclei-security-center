@@ -47,7 +47,12 @@ func NewScannerClient(baseURL, token string) *ScannerClient {
 // client's TLS config (if any) so mTLS applies uniformly to short calls and the
 // streaming results fetch alike.
 func (c *ScannerClient) newHTTPClient(timeout time.Duration) *http.Client {
-	hc := &http.Client{Timeout: timeout}
+	hc := &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	if c.tlsCfg != nil {
 		hc.Transport = &http.Transport{TLSClientConfig: c.tlsCfg.Clone()}
 	}

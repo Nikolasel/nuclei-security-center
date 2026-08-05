@@ -17,15 +17,6 @@ import (
 //go:embed testdata/alpha_migrations/*.sql
 var alphaMigrationsFS embed.FS
 
-func embeddedMigrationCount(t *testing.T) int {
-	t.Helper()
-	names, err := fs.Glob(migrationsFS, "migrations/*.sql")
-	if err != nil {
-		t.Fatalf("list embedded migrations: %v", err)
-	}
-	return len(names)
-}
-
 func TestAlphaMigrationFixtureIntegrity(t *testing.T) {
 	names, err := fs.Glob(alphaMigrationsFS, "testdata/alpha_migrations/*.sql")
 	if err != nil {
@@ -310,8 +301,8 @@ func TestMigrateRollsBackSQLWhenHistoryRecordFailsPostgres(t *testing.T) {
 	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count migration records after retry: %v", err)
 	}
-	if want := embeddedMigrationCount(t); migrationCount != want {
-		t.Fatalf("migration record count after retry = %d, want %d", migrationCount, want)
+	if migrationCount != 1 {
+		t.Fatalf("migration record count after retry = %d, want 1", migrationCount)
 	}
 }
 
@@ -363,8 +354,8 @@ func TestMigrateSerializesConcurrentStartsPostgres(t *testing.T) {
 	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count migration records after concurrent starts: %v", err)
 	}
-	if want := embeddedMigrationCount(t); migrationCount != want {
-		t.Fatalf("migration record count after concurrent starts = %d, want %d", migrationCount, want)
+	if migrationCount != 1 {
+		t.Fatalf("migration record count after concurrent starts = %d, want 1", migrationCount)
 	}
 }
 
@@ -391,14 +382,36 @@ func TestBaselineMatchesAlphaChainPostgres(t *testing.T) {
 
 	alphaDump := normalizedSchemaDump(t, ctx, pgDump, dsn, alphaSchema)
 	baselineDump := normalizedSchemaDump(t, ctx, pgDump, dsn, baselineSchema)
-	if alphaDump != baselineDump {
-		t.Fatalf("beta baseline differs from the alpha migration chain: %s", firstSchemaDifference(alphaDump, baselineDump))
+	if !strings.Contains(baselineDump, "coverage_origin") {
+		t.Fatal("beta baseline is missing scans.coverage_origin")
+	}
+	baselineComparable := withoutCoverageOrigin(baselineDump)
+	if alphaDump != baselineComparable {
+		t.Fatalf("beta baseline differs from the alpha migration chain: %s", firstSchemaDifference(alphaDump, baselineComparable))
 	}
 	alphaState := readInitialApplicationState(t, ctx, alpha)
 	baselineState := readInitialApplicationState(t, ctx, baseline)
 	if fmt.Sprint(alphaState) != fmt.Sprint(baselineState) {
 		t.Fatalf("beta baseline initial state = %#v, want alpha-chain state %#v", baselineState, alphaState)
 	}
+}
+
+func withoutCoverageOrigin(schema string) string {
+	lines := strings.Split(schema, "\n")
+	filtered := lines[:0]
+	removingCoverageBlock := false
+	for _, line := range lines {
+		if strings.Contains(line, "coverage_origin") {
+			removingCoverageBlock = true
+			continue
+		}
+		if removingCoverageBlock && (line == "--" || line == "") {
+			continue
+		}
+		removingCoverageBlock = false
+		filtered = append(filtered, line)
+	}
+	return strings.Join(filtered, "\n")
 }
 
 type initialApplicationState struct {

@@ -27,7 +27,7 @@ const (
 	maxPortableUpload      = 64 << 20  // 64 MiB compressed/JSON request
 	maxPortableExpanded    = 256 << 20 // 256 MiB decompressed YAML
 	maxPortableFiles       = 25000
-	maxPortableManifest    = 8 << 20 // 8 MiB manifest metadata
+	maxPortableMetadata    = 8 << 20 // 8 MiB non-template archive metadata
 )
 
 type portableTemplateMeta struct {
@@ -402,10 +402,10 @@ func parsePortableArchive(data []byte, filename string) (parsedPortableArchive, 
 }
 
 func parsePortableJSON(data []byte) (parsedPortableArchive, error) {
-	var doc portableJSONArchive
 	dec := json.NewDecoder(io.LimitReader(bytes.NewReader(data), maxPortableExpanded+1))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&doc); err != nil {
+	doc, err := decodePortableJSONDocument(dec)
+	if err != nil {
 		return parsedPortableArchive{}, fmt.Errorf("decode JSON: %w", err)
 	}
 	if err := ensureJSONEOF(dec); err != nil {
@@ -415,6 +415,84 @@ func parsePortableJSON(data []byte) (parsedPortableArchive, error) {
 		return parsedPortableArchive{}, fmt.Errorf("unsupported version %d", doc.Version)
 	}
 	return validatePortableEntries(doc.Templates, doc.Set)
+}
+
+func decodePortableJSONDocument(dec *json.Decoder) (portableJSONArchive, error) {
+	var doc portableJSONArchive
+	tok, err := dec.Token()
+	if err != nil {
+		return portableJSONArchive{}, err
+	}
+	if delim, ok := tok.(json.Delim); !ok || delim != '{' {
+		return portableJSONArchive{}, errors.New("JSON archive must be an object")
+	}
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			return portableJSONArchive{}, err
+		}
+		field, ok := key.(string)
+		if !ok {
+			return portableJSONArchive{}, errors.New("JSON object field name must be a string")
+		}
+		switch {
+		case strings.EqualFold(field, "version"):
+			if err := dec.Decode(&doc.Version); err != nil {
+				return portableJSONArchive{}, err
+			}
+		case strings.EqualFold(field, "templates"):
+			doc.Templates, err = decodePortableJSONTemplates(dec)
+			if err != nil {
+				return portableJSONArchive{}, err
+			}
+		case strings.EqualFold(field, "set"):
+			if err := dec.Decode(&doc.Set); err != nil {
+				return portableJSONArchive{}, err
+			}
+		default:
+			return portableJSONArchive{}, fmt.Errorf("json: unknown field %q", field)
+		}
+	}
+	end, err := dec.Token()
+	if err != nil {
+		return portableJSONArchive{}, err
+	}
+	if delim, ok := end.(json.Delim); !ok || delim != '}' {
+		return portableJSONArchive{}, errors.New("JSON archive object was not closed")
+	}
+	return doc, nil
+}
+
+func decodePortableJSONTemplates(dec *json.Decoder) ([]portableTemplateJSON, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if tok == nil {
+		return nil, nil
+	}
+	if delim, ok := tok.(json.Delim); !ok || delim != '[' {
+		return nil, errors.New("JSON templates must be an array")
+	}
+	var payloads []portableTemplateJSON
+	for dec.More() {
+		if len(payloads) >= maxPortableFiles {
+			return nil, fmt.Errorf("archive exceeds %d templates", maxPortableFiles)
+		}
+		var entry portableTemplateJSON
+		if err := dec.Decode(&entry); err != nil {
+			return nil, err
+		}
+		payloads = append(payloads, entry)
+	}
+	end, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if delim, ok := end.(json.Delim); !ok || delim != ']' {
+		return nil, errors.New("JSON templates array was not closed")
+	}
+	return payloads, nil
 }
 
 func parsePortableTarGz(data []byte) (parsedPortableArchive, error) {
@@ -452,11 +530,12 @@ func parsePortableTarGz(data []byte) (parsedPortableArchive, error) {
 		if hdr.Size < 0 || total+hdr.Size > maxPortableExpanded {
 			return parsedPortableArchive{}, errors.New("archive expands beyond 256 MiB")
 		}
-		if name == "manifest.json" && hdr.Size > maxPortableManifest {
-			return parsedPortableArchive{}, errors.New("manifest.json exceeds 8 MiB limit")
-		}
-		if strings.HasPrefix(name, "templates/") && hdr.Size > maxTemplateYAML {
-			return parsedPortableArchive{}, fmt.Errorf("template %q YAML exceeds 1 MiB limit", name)
+		if strings.HasPrefix(name, "templates/") {
+			if hdr.Size > maxTemplateYAML {
+				return parsedPortableArchive{}, fmt.Errorf("template %q YAML exceeds 1 MiB limit", name)
+			}
+		} else if hdr.Size > maxPortableMetadata {
+			return parsedPortableArchive{}, fmt.Errorf("archive metadata entry %q exceeds 8 MiB limit", name)
 		}
 		body, err := io.ReadAll(io.LimitReader(tr, hdr.Size+1))
 		if err != nil {

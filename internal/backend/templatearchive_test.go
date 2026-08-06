@@ -66,6 +66,13 @@ func TestPortableJSONRoundTripPreservesYAML(t *testing.T) {
 	}
 }
 
+func TestPortableJSONPreservesCaseInsensitiveArchiveFields(t *testing.T) {
+	data := []byte(fmt.Sprintf(`{%q:1,%q:null}`, "VERSION", "TEMPLATES"))
+	if _, err := parsePortableJSON(data); err != nil {
+		t.Fatalf("case-insensitive JSON fields rejected: %v", err)
+	}
+}
+
 func TestPortableJSONRejectsOversizedTemplateYAML(t *testing.T) {
 	template := oversizedPortableTemplate("portable-json-oversized")
 	data, err := buildPortableJSON([]store.Template{template}, nil)
@@ -93,9 +100,9 @@ func TestPortableTarGzRejectsOversizedManifestBeforeDecode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest = append(manifest, bytes.Repeat([]byte{' '}, maxPortableManifest+1)...)
+	manifest = append(manifest, bytes.Repeat([]byte{' '}, maxPortableMetadata+1)...)
 	data := portableTarGzFile(t, "manifest.json", manifest)
-	if _, err := parsePortableTarGz(data); err == nil || !strings.Contains(err.Error(), "manifest.json exceeds 8 MiB limit") {
+	if _, err := parsePortableTarGz(data); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("archive metadata entry %q exceeds 8 MiB limit", "manifest.json")) {
 		t.Fatalf("oversized manifest error = %v", err)
 	}
 }
@@ -116,6 +123,33 @@ func TestPortableTarGzRejectsManifestTemplateCountBeforePayloadAllocation(t *tes
 	data := portableTarGzFile(t, "manifest.json", manifest)
 	if _, err := parsePortableTarGz(data); err == nil || !strings.Contains(err.Error(), "archive exceeds 25000 templates") {
 		t.Fatalf("oversized manifest template count error = %v", err)
+	}
+}
+
+func TestPortableTarGzRejectsOversizedSetBeforeDecode(t *testing.T) {
+	set, err := json.Marshal(&portableSet{Name: "oversized set"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set = append(set, bytes.Repeat([]byte{' '}, maxPortableMetadata+1)...)
+	data := portableTarGzFile(t, "set.json", set)
+	if _, err := parsePortableTarGz(data); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("archive metadata entry %q exceeds 8 MiB limit", "set.json")) {
+		t.Fatalf("oversized set error = %v", err)
+	}
+}
+
+func TestPortableJSONRejectsTemplateCountBeforeDecodingNextEntry(t *testing.T) {
+	var data bytes.Buffer
+	data.WriteString(fmt.Sprintf(`{%q:1,%q:[`, "version", "templates"))
+	for i := 0; i < maxPortableFiles; i++ {
+		if i > 0 {
+			data.WriteByte(',')
+		}
+		data.WriteString(`{}`)
+	}
+	data.WriteString(fmt.Sprintf(`,%q:`, "id"))
+	if _, err := parsePortableJSON(data.Bytes()); err == nil || !strings.Contains(err.Error(), "archive exceeds 25000 templates") {
+		t.Fatalf("oversized JSON template count error = %v", err)
 	}
 }
 

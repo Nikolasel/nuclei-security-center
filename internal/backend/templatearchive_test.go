@@ -61,6 +61,28 @@ func TestPortableJSONRoundTripPreservesYAML(t *testing.T) {
 	}
 }
 
+func TestPortableJSONRejectsOversizedTemplateYAML(t *testing.T) {
+	template := oversizedPortableTemplate("portable-json-oversized")
+	data, err := buildPortableJSON([]store.Template{template}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parsePortableJSON(data); err == nil || !strings.Contains(err.Error(), `template "portable-json-oversized" YAML exceeds 1 MiB limit`) {
+		t.Fatalf("oversized JSON template error = %v", err)
+	}
+}
+
+func TestPortableTarGzRejectsOversizedTemplateYAML(t *testing.T) {
+	template := oversizedPortableTemplate("portable-tar-oversized")
+	data, err := buildPortableTarGz([]store.Template{template}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parsePortableTarGz(data); err == nil || !strings.Contains(err.Error(), `template "templates/custom/custom/portable-tar-oversized.yaml" YAML exceeds 1 MiB limit`) {
+		t.Fatalf("oversized tar.gz template error = %v", err)
+	}
+}
+
 func TestPortableExcludeSetRoundTripDoesNotFreezeCatalog(t *testing.T) {
 	excluded := portableTestTemplate("noisy-template", "custom", "custom/noisy-template.yaml")
 	set := &portableSet{
@@ -192,6 +214,15 @@ func TestPortableSetMustReferenceArchiveTemplates(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "absent from the archive") {
 		t.Fatalf("missing member error = %v", err)
 	}
+}
+
+func oversizedPortableTemplate(id string) store.Template {
+	template := portableTestTemplate(id, "custom", "custom/"+id+".yaml")
+	const paddingLine = "# padding\n"
+	template.YAML += strings.Repeat(paddingLine, (maxTemplateYAML-len(template.YAML))/len(paddingLine)+1)
+	sum := sha256.Sum256([]byte(template.YAML))
+	template.ContentSHA256 = hex.EncodeToString(sum[:])
+	return template
 }
 
 func TestImportedNamesAreDeterministic(t *testing.T) {

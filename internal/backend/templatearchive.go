@@ -448,6 +448,9 @@ func parsePortableTarGz(data []byte) (parsedPortableArchive, error) {
 		if _, duplicate := files[name]; duplicate {
 			return parsedPortableArchive{}, fmt.Errorf("duplicate tar entry %q", name)
 		}
+		if strings.HasPrefix(name, "templates/") && hdr.Size > maxTemplateYAML {
+			return parsedPortableArchive{}, fmt.Errorf("template %q YAML exceeds 1 MiB limit", name)
+		}
 		if hdr.Size < 0 || total+hdr.Size > maxPortableExpanded {
 			return parsedPortableArchive{}, errors.New("archive expands beyond 256 MiB")
 		}
@@ -525,6 +528,9 @@ func validatePortableEntries(
 	seen := make(map[string]struct{}, len(payloads))
 	for i := range payloads {
 		entry := &payloads[i]
+		if len(entry.YAML) > maxTemplateYAML {
+			return parsedPortableArchive{}, fmt.Errorf("template %q YAML exceeds 1 MiB limit", entry.ID)
+		}
 		if entry.ID == "" {
 			return parsedPortableArchive{}, errors.New("template id is required")
 		}

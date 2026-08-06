@@ -164,7 +164,8 @@ func TestAuthStateCookieMatchesOnlyTheExpectedState(t *testing.T) {
 
 func TestAuthStateCookiePathCoversCallbackRoute(t *testing.T) {
 	const callbackPath = "/api/auth/callback"
-	if authStateCookiePath == "" || !strings.HasPrefix(callbackPath, authStateCookiePath) {
+	cookiePath := strings.TrimSuffix(authStateCookiePath, "/")
+	if authStateCookiePath == "" || !strings.HasPrefix(callbackPath, cookiePath+"/") {
 		t.Fatalf("auth-state cookie path %q does not cover callback route %q", authStateCookiePath, callbackPath)
 	}
 }

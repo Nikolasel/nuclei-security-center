@@ -1,8 +1,13 @@
 package backend
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -80,6 +85,44 @@ func TestPortableTarGzRejectsOversizedTemplateYAML(t *testing.T) {
 	}
 	if _, err := parsePortableTarGz(data); err == nil || !strings.Contains(err.Error(), `template "templates/custom/custom/portable-tar-oversized.yaml" YAML exceeds 1 MiB limit`) {
 		t.Fatalf("oversized tar.gz template error = %v", err)
+	}
+}
+
+func TestPortableTarGzRejectsOversizedManifestBeforeDecode(t *testing.T) {
+	manifest, err := json.Marshal(portableManifest{Version: portableArchiveVersion, Templates: []portableTemplateMeta{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest = append(manifest, bytes.Repeat([]byte{' '}, maxPortableManifest+1)...)
+	data := portableTarGzFile(t, "manifest.json", manifest)
+	if _, err := parsePortableTarGz(data); err == nil || !strings.Contains(err.Error(), "manifest.json exceeds 8 MiB limit") {
+		t.Fatalf("oversized manifest error = %v", err)
+	}
+}
+
+func TestPortableTarGzRejectsManifestTemplateCountBeforePayloadAllocation(t *testing.T) {
+	entries := make([]portableTemplateMeta, maxPortableFiles+1)
+	for i := range entries {
+		entries[i] = portableTemplateMeta{
+			ID: fmt.Sprintf("template-%d", i), Source: "custom",
+			Path: fmt.Sprintf("custom/template-%d.yaml", i), Revision: 1,
+			SHA256: strings.Repeat("0", 64),
+		}
+	}
+	manifest, err := json.Marshal(portableManifest{Version: portableArchiveVersion, Templates: entries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := portableTarGzFile(t, "manifest.json", manifest)
+	if _, err := parsePortableTarGz(data); err == nil || !strings.Contains(err.Error(), "archive exceeds 25000 templates") {
+		t.Fatalf("oversized manifest template count error = %v", err)
+	}
+}
+
+func TestPortableValidationReportsMissingIDBeforeYAMLLimit(t *testing.T) {
+	_, err := validatePortableEntries([]portableTemplateJSON{{YAML: strings.Repeat("x", maxTemplateYAML+1)}}, nil)
+	if err == nil || err.Error() != "template id is required" {
+		t.Fatalf("missing id error = %v", err)
 	}
 }
 
@@ -223,6 +266,23 @@ func oversizedPortableTemplate(id string) store.Template {
 	sum := sha256.Sum256([]byte(template.YAML))
 	template.ContentSHA256 = hex.EncodeToString(sum[:])
 	return template
+}
+
+func portableTarGzFile(t *testing.T, name string, body []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	if err := writeBundleFile(tw, name, body); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 func TestImportedNamesAreDeterministic(t *testing.T) {

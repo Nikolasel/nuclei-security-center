@@ -27,6 +27,7 @@ const (
 	maxPortableUpload      = 64 << 20  // 64 MiB compressed/JSON request
 	maxPortableExpanded    = 256 << 20 // 256 MiB decompressed YAML
 	maxPortableFiles       = 25000
+	maxPortableManifest    = 8 << 20 // 8 MiB manifest metadata
 )
 
 type portableTemplateMeta struct {
@@ -448,11 +449,14 @@ func parsePortableTarGz(data []byte) (parsedPortableArchive, error) {
 		if _, duplicate := files[name]; duplicate {
 			return parsedPortableArchive{}, fmt.Errorf("duplicate tar entry %q", name)
 		}
-		if strings.HasPrefix(name, "templates/") && hdr.Size > maxTemplateYAML {
-			return parsedPortableArchive{}, fmt.Errorf("template %q YAML exceeds 1 MiB limit", name)
-		}
 		if hdr.Size < 0 || total+hdr.Size > maxPortableExpanded {
 			return parsedPortableArchive{}, errors.New("archive expands beyond 256 MiB")
+		}
+		if name == "manifest.json" && hdr.Size > maxPortableManifest {
+			return parsedPortableArchive{}, errors.New("manifest.json exceeds 8 MiB limit")
+		}
+		if strings.HasPrefix(name, "templates/") && hdr.Size > maxTemplateYAML {
+			return parsedPortableArchive{}, fmt.Errorf("template %q YAML exceeds 1 MiB limit", name)
 		}
 		body, err := io.ReadAll(io.LimitReader(tr, hdr.Size+1))
 		if err != nil {
@@ -485,6 +489,9 @@ func parsePortableTarGz(data []byte) (parsedPortableArchive, error) {
 	}
 	if manifest.Version != portableArchiveVersion {
 		return parsedPortableArchive{}, fmt.Errorf("unsupported version %d", manifest.Version)
+	}
+	if len(manifest.Templates) > maxPortableFiles {
+		return parsedPortableArchive{}, fmt.Errorf("archive exceeds %d templates", maxPortableFiles)
 	}
 	var set *portableSet
 	if setBody, ok := files["set.json"]; ok {
@@ -528,11 +535,11 @@ func validatePortableEntries(
 	seen := make(map[string]struct{}, len(payloads))
 	for i := range payloads {
 		entry := &payloads[i]
-		if len(entry.YAML) > maxTemplateYAML {
-			return parsedPortableArchive{}, fmt.Errorf("template %q YAML exceeds 1 MiB limit", entry.ID)
-		}
 		if entry.ID == "" {
 			return parsedPortableArchive{}, errors.New("template id is required")
+		}
+		if len(entry.YAML) > maxTemplateYAML {
+			return parsedPortableArchive{}, fmt.Errorf("template %q YAML exceeds 1 MiB limit", entry.ID)
 		}
 		if entry.Revision <= 0 {
 			return parsedPortableArchive{}, fmt.Errorf("template %q revision must be positive", entry.ID)

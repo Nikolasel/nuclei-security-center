@@ -90,7 +90,12 @@ func NewAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger, cf
 	}, nil
 }
 
-const authFlowTTL = 10 * time.Minute
+const (
+	authFlowTTL           = 10 * time.Minute
+	authStateCookieName   = "nsc_auth_state"
+	authStateCookiePath   = "/api/auth"
+	authStateCookieMaxAge = int(authFlowTTL / time.Second)
+)
 
 // handleLogin begins the authorization-code flow: it mints CSRF state, a nonce,
 // and a PKCE verifier, stashes them server-side, and redirects to the IdP.
@@ -111,6 +116,7 @@ func (a *Authenticator) handleLogin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "login unavailable", http.StatusInternalServerError)
 		return
 	}
+	a.setAuthStateCookie(w, state)
 
 	url := a.oauth.AuthCodeURL(state,
 		oidc.Nonce(nonce),
@@ -123,11 +129,18 @@ func (a *Authenticator) handleLogin(w http.ResponseWriter, r *http.Request) {
 // (with PKCE), verifies the ID token + nonce, maps roles, and establishes a
 // server-side session delivered as an httpOnly cookie.
 func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
+	state := r.URL.Query().Get("state")
+	if !authStateMatches(r, state) {
+		http.Error(w, "invalid or expired login state", http.StatusBadRequest)
+		return
+	}
+	defer a.clearAuthStateCookie(w)
+
 	if e := r.URL.Query().Get("error"); e != "" {
 		http.Error(w, "identity provider error: "+e, http.StatusUnauthorized)
 		return
 	}
-	flow, err := a.store.TakeAuthFlow(r.Context(), r.URL.Query().Get("state"))
+	flow, err := a.store.TakeAuthFlow(r.Context(), state)
 	if err != nil {
 		// Unknown/expired/replayed state — also the CSRF guard.
 		http.Error(w, "invalid or expired login state", http.StatusBadRequest)
@@ -241,6 +254,40 @@ func (a *Authenticator) setSessionCookie(w http.ResponseWriter, value string, ex
 		Value:    value,
 		Path:     "/",
 		Expires:  expires,
+		HttpOnly: true,
+		Secure:   a.cfg.SecureCookie,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func authStateMatches(r *http.Request, state string) bool {
+	if state == "" {
+		return false
+	}
+	c, err := r.Cookie(authStateCookieName)
+	return err == nil && c.Value != "" && c.Value == state
+}
+
+func (a *Authenticator) setAuthStateCookie(w http.ResponseWriter, value string) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     authStateCookieName,
+		Value:    value,
+		Path:     authStateCookiePath,
+		Expires:  time.Now().Add(authFlowTTL),
+		MaxAge:   authStateCookieMaxAge,
+		HttpOnly: true,
+		Secure:   a.cfg.SecureCookie,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (a *Authenticator) clearAuthStateCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     authStateCookieName,
+		Value:    "",
+		Path:     authStateCookiePath,
+		Expires:  time.Unix(1, 0),
+		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   a.cfg.SecureCookie,
 		SameSite: http.SameSiteLaxMode,

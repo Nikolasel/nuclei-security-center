@@ -10,6 +10,7 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -158,6 +159,13 @@ func TestAuthStateCookieMatchesOnlyTheExpectedState(t *testing.T) {
 				t.Fatalf("authStateMatches = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAuthStateCookiePathCoversCallbackRoute(t *testing.T) {
+	const callbackPath = "/api/auth/callback"
+	if authStateCookiePath == "" || !strings.HasPrefix(callbackPath, authStateCookiePath) {
+		t.Fatalf("auth-state cookie path %q does not cover callback route %q", authStateCookiePath, callbackPath)
 	}
 }
 

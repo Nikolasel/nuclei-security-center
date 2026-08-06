@@ -37,6 +37,146 @@ func TestScannerClientDoesNotFollowRedirects(t *testing.T) {
 	}
 }
 
+func TestScannerClientRejectsOversizedJSONResponses(t *testing.T) {
+	response, err := json.Marshal(map[string]string{
+		"padding": strings.Repeat("x", maxScannerJSONResponseBytes),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/scans" {
+			w.WriteHeader(http.StatusAccepted)
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
+		_, _ = w.Write(response)
+	}))
+	defer server.Close()
+
+	tests := []struct {
+		name string
+		call func(*ScannerClient) error
+	}{
+		{
+			name: "start scan",
+			call: func(client *ScannerClient) error {
+				_, err := client.StartScan(context.Background(), types.ScanSpec{})
+				return err
+			},
+		},
+		{
+			name: "status",
+			call: func(client *ScannerClient) error {
+				_, err := client.Status(context.Background(), "scan-1")
+				return err
+			},
+		},
+		{
+			name: "capabilities",
+			call: func(client *ScannerClient) error {
+				_, err := client.Capabilities(context.Background())
+				return err
+			},
+		},
+		{
+			name: "template validation",
+			call: func(client *ScannerClient) error {
+				_, err := client.ValidateTemplate(context.Background(), nil)
+				return err
+			},
+		},
+		{
+			name: "template batch validation",
+			call: func(client *ScannerClient) error {
+				_, err := client.ValidateTemplateBatch(context.Background(), nil)
+				return err
+			},
+		},
+		{
+			name: "template bundle",
+			call: func(client *ScannerClient) error {
+				_, err := client.PushBundle(context.Background(), nil)
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := NewScannerClient(server.URL, "node-token")
+			if err := test.call(client); err == nil {
+				t.Fatal("client accepted an oversized scanner response")
+			}
+		})
+	}
+}
+
+func TestScannerClientRejectsOversizedScanStatusCollections(t *testing.T) {
+	discovered := make([]string, maxScannerStatusCollectionItems+1)
+	for i := range discovered {
+		discovered[i] = "host:443"
+	}
+
+	covered := make([]types.EndpointCoverage, maxScannerStatusCollectionItems+1)
+	for i := range covered {
+		covered[i] = types.EndpointCoverage{TemplateID: "template", Endpoint: "host:443"}
+	}
+
+	tests := []struct {
+		name   string
+		status types.ScanStatus
+	}{
+		{
+			name:   "discovered targets",
+			status: types.ScanStatus{DiscoveredTargets: discovered},
+		},
+		{
+			name:   "covered endpoints",
+			status: types.ScanStatus{CoveredEndpoints: covered},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response, err := json.Marshal(test.status)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(response)
+			}))
+			defer server.Close()
+
+			client := NewScannerClient(server.URL, "node-token")
+			if _, err := client.Status(context.Background(), "scan-1"); err == nil {
+				t.Fatal("client accepted an oversized scanner status collection")
+			}
+		})
+	}
+}
+
+func TestScannerClientRejectsOversizedScanStatusValues(t *testing.T) {
+	status := types.ScanStatus{
+		DiscoveredTargets: []string{strings.Repeat("x", maxScannerNodeStringBytes+1)},
+	}
+	response, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(response)
+	}))
+	defer server.Close()
+
+	client := NewScannerClient(server.URL, "node-token")
+	if _, err := client.Status(context.Background(), "scan-1"); err == nil {
+		t.Fatal("client accepted an oversized scanner status value")
+	}
+}
+
 func TestScannerClientValidateTemplate(t *testing.T) {
 	const yaml = "id: custom-check\n"
 	client := NewScannerClient("http://scanner.test", "node-token")

@@ -33,6 +33,83 @@ type ScannerClient struct {
 	httpForTimeout func(time.Duration) *http.Client
 }
 
+// maxScannerJSONResponseBytes caps every non-streaming response from a scanner
+// node. Results and logs have separate streaming ceilings; control-plane JSON
+// must be bounded before encoding/json can allocate from node-controlled input.
+const (
+	maxScannerJSONResponseBytes     = 16 << 20 // 16 MiB
+	maxScannerStatusCollectionItems = 100_000
+	maxScannerNodeStringBytes       = 64 << 10 // 64 KiB per node-supplied string
+)
+
+func decodeScannerJSON(body io.Reader, dst any) error {
+	// Read one byte beyond the cap so a valid document followed by oversized
+	// trailing data is rejected too. Decoding directly from a LimitedReader
+	// would otherwise accept the first JSON value without consuming the body.
+	b, err := io.ReadAll(io.LimitReader(body, maxScannerJSONResponseBytes+1))
+	if err != nil {
+		return fmt.Errorf("read scanner response: %w", err)
+	}
+	if len(b) > maxScannerJSONResponseBytes {
+		return fmt.Errorf("scanner response body exceeds %d-byte limit", maxScannerJSONResponseBytes)
+	}
+	if err := json.NewDecoder(bytes.NewReader(b)).Decode(dst); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateScannerString(field, value string) error {
+	if len(value) > maxScannerNodeStringBytes {
+		return fmt.Errorf("scanner %s exceeds %d-byte limit", field, maxScannerNodeStringBytes)
+	}
+	return nil
+}
+
+func validateScanStatus(st types.ScanStatus) error {
+	if len(st.DiscoveredTargets) > maxScannerStatusCollectionItems {
+		return fmt.Errorf(
+			"scanner status discovered targets exceed %d-item limit",
+			maxScannerStatusCollectionItems,
+		)
+	}
+	if len(st.CoveredEndpoints) > maxScannerStatusCollectionItems {
+		return fmt.Errorf(
+			"scanner status covered endpoints exceed %d-item limit",
+			maxScannerStatusCollectionItems,
+		)
+	}
+	for _, target := range st.DiscoveredTargets {
+		if err := validateScannerString("discovered target", target); err != nil {
+			return err
+		}
+	}
+	for _, endpoint := range st.CoveredEndpoints {
+		if err := validateScannerString("covered endpoint template id", endpoint.TemplateID); err != nil {
+			return err
+		}
+		if err := validateScannerString("covered endpoint", endpoint.Endpoint); err != nil {
+			return err
+		}
+	}
+	if err := validateScannerString("scan id", st.ID); err != nil {
+		return err
+	}
+	if err := validateScannerString("Nuclei version", st.NucleiVersion); err != nil {
+		return err
+	}
+	if err := validateScannerString("templates commit", st.TemplatesCommit); err != nil {
+		return err
+	}
+	if err := validateScannerString("error", st.Error); err != nil {
+		return err
+	}
+	if err := validateScannerString("coverage warning", st.CoverageWarning); err != nil {
+		return err
+	}
+	return nil
+}
+
 // NewScannerClient builds a client for the node at baseURL (e.g. http://scanner:8081).
 func NewScannerClient(baseURL, token string) *ScannerClient {
 	c := &ScannerClient{
@@ -97,7 +174,10 @@ func (c *ScannerClient) StartScan(ctx context.Context, spec types.ScanSpec) (str
 		return "", fmt.Errorf("start scan: %s", statusErr(resp))
 	}
 	var out types.StartScanResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := decodeScannerJSON(resp.Body, &out); err != nil {
+		return "", err
+	}
+	if err := validateScannerString("scan id", out.ScanID); err != nil {
 		return "", err
 	}
 	return out.ScanID, nil
@@ -118,7 +198,10 @@ func (c *ScannerClient) Status(ctx context.Context, nodeScanID string) (types.Sc
 		return types.ScanStatus{}, fmt.Errorf("status: %s", statusErr(resp))
 	}
 	var st types.ScanStatus
-	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+	if err := decodeScannerJSON(resp.Body, &st); err != nil {
+		return types.ScanStatus{}, err
+	}
+	if err := validateScanStatus(st); err != nil {
 		return types.ScanStatus{}, err
 	}
 	return st, nil
@@ -141,7 +224,13 @@ func (c *ScannerClient) Capabilities(ctx context.Context) (types.Capabilities, e
 		return types.Capabilities{}, fmt.Errorf("capabilities: %s", statusErr(resp))
 	}
 	var caps types.Capabilities
-	if err := json.NewDecoder(resp.Body).Decode(&caps); err != nil {
+	if err := decodeScannerJSON(resp.Body, &caps); err != nil {
+		return types.Capabilities{}, err
+	}
+	if err := validateScannerString("Nuclei version", caps.NucleiVersion); err != nil {
+		return types.Capabilities{}, err
+	}
+	if err := validateScannerString("templates commit", caps.TemplatesCommit); err != nil {
 		return types.Capabilities{}, err
 	}
 	return caps, nil
@@ -165,7 +254,7 @@ func (c *ScannerClient) ValidateTemplate(ctx context.Context, yaml []byte) (type
 		return types.TemplateValidationResult{}, fmt.Errorf("validate template: %s", statusErr(resp))
 	}
 	var result types.TemplateValidationResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := decodeScannerJSON(resp.Body, &result); err != nil {
 		return types.TemplateValidationResult{}, err
 	}
 	if result.Errors == nil {
@@ -191,7 +280,7 @@ func (c *ScannerClient) ValidateTemplateBatch(ctx context.Context, bundle []byte
 		return types.TemplateBatchValidationResult{}, fmt.Errorf("validate template batch: %s", statusErr(resp))
 	}
 	var result types.TemplateBatchValidationResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := decodeScannerJSON(resp.Body, &result); err != nil {
 		return types.TemplateBatchValidationResult{}, err
 	}
 	if result.Failures == nil {
@@ -228,7 +317,10 @@ func (c *ScannerClient) PushBundle(ctx context.Context, bundle []byte) (types.Te
 		return types.TemplateBundleStatus{}, fmt.Errorf("push bundle: %s", statusErr(resp))
 	}
 	var st types.TemplateBundleStatus
-	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+	if err := decodeScannerJSON(resp.Body, &st); err != nil {
+		return types.TemplateBundleStatus{}, err
+	}
+	if err := validateScannerString("templates commit", st.TemplatesCommit); err != nil {
 		return types.TemplateBundleStatus{}, err
 	}
 	return st, nil

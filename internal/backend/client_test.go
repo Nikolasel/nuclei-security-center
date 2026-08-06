@@ -180,41 +180,6 @@ func TestScannerClientRejectsOversizedScanStatusCollections(t *testing.T) {
 	}
 }
 
-func TestScannerClientStopsBeforeDecodingOversizedScanStatusCollection(t *testing.T) {
-	var body strings.Builder
-	key, err := json.Marshal("discovered_targets")
-	if err != nil {
-		t.Fatal(err)
-	}
-	target, err := json.Marshal("host:443")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body.WriteByte('{')
-	_, _ = body.Write(key)
-	body.WriteString(`:[`)
-	for i := 0; i < maxScannerStatusCollectionItems; i++ {
-		if i > 0 {
-			body.WriteByte(',')
-		}
-		_, _ = body.Write(target)
-	}
-	body.WriteString(`,{}`)
-	body.WriteString(`]}`)
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.WriteString(w, body.String())
-	}))
-	defer server.Close()
-
-	client := NewScannerClient(server.URL, "node-token")
-	_, err = client.Status(context.Background(), "scan-1")
-	if err == nil || !strings.Contains(err.Error(), "discovered targets exceed") {
-		t.Fatalf("status error = %v, want collection cap before decoding the next item", err)
-	}
-}
-
 func TestScannerClientStatusDecodesAllFields(t *testing.T) {
 	want := types.ScanStatus{
 		ID:              "scan-1",

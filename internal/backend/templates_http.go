@@ -15,8 +15,9 @@ import (
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
-// maxTemplateYAML caps a custom-template upload. Nuclei templates are small
-// (a few KB); this is generous while bounding memory on a bad request (CWE-770).
+// maxTemplateYAML caps any individual template YAML upload. Nuclei templates
+// are small (a few KB); this is generous while bounding memory on a bad request
+// (CWE-770). Portable archive imports reuse the same limit.
 const maxTemplateYAML = 1 << 20 // 1 MiB
 
 // customTemplateValidationTimeout bounds node selection plus validation across

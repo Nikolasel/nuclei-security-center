@@ -282,6 +282,32 @@ func TestScannerClientStatusPreservesKnownEmptyCollections(t *testing.T) {
 	}
 }
 
+func TestScannerClientStatusIgnoresUnknownFields(t *testing.T) {
+	response, err := json.Marshal(map[string]any{
+		"state": types.ScanRunning,
+		"future": map[string]any{
+			"items": []any{1, map[string]any{"nested": true}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(response)
+	}))
+	defer server.Close()
+
+	client := NewScannerClient(server.URL, "node-token")
+	got, err := client.Status(context.Background(), "scan-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != types.ScanRunning {
+		t.Fatalf("state = %q, want %q", got.State, types.ScanRunning)
+	}
+}
+
 func TestScannerClientRejectsOversizedScanStatusValues(t *testing.T) {
 	status := types.ScanStatus{
 		DiscoveredTargets: []string{strings.Repeat("x", maxScannerNodeStringBytes+1)},

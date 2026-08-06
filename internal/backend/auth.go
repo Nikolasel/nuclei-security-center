@@ -134,7 +134,8 @@ func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid or expired login state", http.StatusBadRequest)
 		return
 	}
-	defer a.clearAuthStateCookie(w)
+	// Clear before any response write so the deletion reaches the browser.
+	a.clearAuthStateCookie(w)
 
 	if e := r.URL.Query().Get("error"); e != "" {
 		http.Error(w, "identity provider error: "+e, http.StatusUnauthorized)

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -112,6 +113,28 @@ func TestScannerClientRejectsOversizedJSONResponses(t *testing.T) {
 	}
 }
 
+func TestScannerClientRejectsMultipleJSONValues(t *testing.T) {
+	first, err := json.Marshal(types.StartScanResponse{ScanID: "scan-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := json.Marshal(types.StartScanResponse{ScanID: "scan-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := append(first, second...)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write(response)
+	}))
+	defer server.Close()
+
+	client := NewScannerClient(server.URL, "node-token")
+	if _, err := client.StartScan(context.Background(), types.ScanSpec{}); err == nil {
+		t.Fatal("client accepted multiple scanner JSON values")
+	}
+}
+
 func TestScannerClientRejectsOversizedScanStatusCollections(t *testing.T) {
 	discovered := make([]string, maxScannerStatusCollectionItems+1)
 	for i := range discovered {
@@ -157,6 +180,108 @@ func TestScannerClientRejectsOversizedScanStatusCollections(t *testing.T) {
 	}
 }
 
+func TestScannerClientStopsBeforeDecodingOversizedScanStatusCollection(t *testing.T) {
+	var body strings.Builder
+	key, err := json.Marshal("discovered_targets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := json.Marshal("host:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body.WriteByte('{')
+	_, _ = body.Write(key)
+	body.WriteString(`:[`)
+	for i := 0; i < maxScannerStatusCollectionItems; i++ {
+		if i > 0 {
+			body.WriteByte(',')
+		}
+		_, _ = body.Write(target)
+	}
+	body.WriteString(`,{}`)
+	body.WriteString(`]}`)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, body.String())
+	}))
+	defer server.Close()
+
+	client := NewScannerClient(server.URL, "node-token")
+	_, err = client.Status(context.Background(), "scan-1")
+	if err == nil || !strings.Contains(err.Error(), "discovered targets exceed") {
+		t.Fatalf("status error = %v, want collection cap before decoding the next item", err)
+	}
+}
+
+func TestScannerClientStatusDecodesAllFields(t *testing.T) {
+	want := types.ScanStatus{
+		ID:              "scan-1",
+		State:           types.ScanRunning,
+		NucleiVersion:   "3.4.0",
+		TemplatesCommit: "commit-1",
+		FindingCount:    3,
+		Error:           "",
+		Progress: &types.ScanProgress{
+			Phase:    types.PhaseScanning,
+			Percent:  42.5,
+			Requests: 12,
+			Total:    20,
+			Hosts:    4,
+			RPS:      2,
+			Matched:  3,
+		},
+		DiscoveredTargets: []string{"host:443", "host:8443"},
+		CoveredEndpoints: []types.EndpointCoverage{
+			{TemplateID: "template-1", Endpoint: "host:443"},
+		},
+		CoverageWarning: "partial telemetry",
+	}
+	response, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(response)
+	}))
+	defer server.Close()
+
+	client := NewScannerClient(server.URL, "node-token")
+	got, err := client.Status(context.Background(), "scan-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("status = %+v, want %+v", got, want)
+	}
+}
+
+func TestScannerClientStatusPreservesKnownEmptyCollections(t *testing.T) {
+	response, err := json.Marshal(map[string]any{
+		"discovered_targets": []string{},
+		"covered_endpoints":  []types.EndpointCoverage{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(response)
+	}))
+	defer server.Close()
+
+	client := NewScannerClient(server.URL, "node-token")
+	got, err := client.Status(context.Background(), "scan-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DiscoveredTargets == nil || got.CoveredEndpoints == nil {
+		t.Fatalf("status lost known empty collections: %+v", got)
+	}
+}
+
 func TestScannerClientRejectsOversizedScanStatusValues(t *testing.T) {
 	status := types.ScanStatus{
 		DiscoveredTargets: []string{strings.Repeat("x", maxScannerNodeStringBytes+1)},
@@ -174,6 +299,44 @@ func TestScannerClientRejectsOversizedScanStatusValues(t *testing.T) {
 	client := NewScannerClient(server.URL, "node-token")
 	if _, err := client.Status(context.Background(), "scan-1"); err == nil {
 		t.Fatal("client accepted an oversized scanner status value")
+	}
+}
+
+func TestScannerClientRejectsOversizedScanStatusStateAndProgress(t *testing.T) {
+	tooLong := strings.Repeat("x", maxScannerNodeStringBytes+1)
+	tests := []struct {
+		name   string
+		status types.ScanStatus
+	}{
+		{
+			name:   "state",
+			status: types.ScanStatus{State: types.ScanState(tooLong)},
+		},
+		{
+			name: "progress phase",
+			status: types.ScanStatus{
+				Progress: &types.ScanProgress{Phase: types.ScanPhase(tooLong)},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response, err := json.Marshal(test.status)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write(response)
+			}))
+			defer server.Close()
+
+			client := NewScannerClient(server.URL, "node-token")
+			if _, err := client.Status(context.Background(), "scan-1"); err == nil {
+				t.Fatal("client accepted an oversized scanner state or progress phase")
+			}
+		})
 	}
 }
 

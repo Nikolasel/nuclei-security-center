@@ -38,7 +38,7 @@ type ScannerClient struct {
 // must be bounded before encoding/json can allocate from node-controlled input.
 const (
 	maxScannerJSONResponseBytes     = 16 << 20 // 16 MiB
-	maxScannerStatusCollectionItems = 100_000
+	maxScannerStatusCollectionItems = 500_000  // 500k; the 16 MiB body cap remains authoritative
 	maxScannerNodeStringBytes       = 64 << 10 // 64 KiB per node-supplied string
 )
 
@@ -51,10 +51,217 @@ func decodeScannerJSON(body io.Reader, dst any) error {
 		return fmt.Errorf("read scanner response: %w", err)
 	}
 	if len(b) > maxScannerJSONResponseBytes {
-		return fmt.Errorf("scanner response body exceeds %d-byte limit", maxScannerJSONResponseBytes)
+		return scannerResponseTooLargeError()
 	}
-	if err := json.NewDecoder(bytes.NewReader(b)).Decode(dst); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	if err := dec.Decode(dst); err != nil {
 		return err
+	}
+	return ensureScannerJSONEOF(dec)
+}
+
+func scannerResponseTooLargeError() error {
+	return fmt.Errorf("scanner response body exceeds %d-byte limit", maxScannerJSONResponseBytes)
+}
+
+func ensureScannerJSONEOF(dec *json.Decoder) error {
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("multiple JSON values are not supported")
+		}
+		return err
+	}
+	return nil
+}
+
+func decodeScannerStatus(body io.Reader, st *types.ScanStatus) error {
+	limited := &io.LimitedReader{R: body, N: maxScannerJSONResponseBytes + 1}
+	dec := json.NewDecoder(limited)
+	if err := decodeScannerStatusObject(dec, st); err != nil {
+		if limited.N <= 0 {
+			return scannerResponseTooLargeError()
+		}
+		return err
+	}
+	if err := ensureScannerJSONEOF(dec); err != nil {
+		if limited.N <= 0 {
+			return scannerResponseTooLargeError()
+		}
+		return err
+	}
+	if limited.N <= 0 {
+		return scannerResponseTooLargeError()
+	}
+	return nil
+}
+
+func decodeScannerStatusObject(dec *json.Decoder, st *types.ScanStatus) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if tok == nil {
+		return nil
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok || delim != '{' {
+		return errors.New("scanner status must be a JSON object")
+	}
+	for dec.More() {
+		key, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		field, ok := key.(string)
+		if !ok {
+			return errors.New("scanner status field name must be a string")
+		}
+		switch {
+		case strings.EqualFold(field, "id"):
+			err = dec.Decode(&st.ID)
+		case strings.EqualFold(field, "state"):
+			err = dec.Decode(&st.State)
+		case strings.EqualFold(field, "nuclei_version"):
+			err = dec.Decode(&st.NucleiVersion)
+		case strings.EqualFold(field, "templates_commit"):
+			err = dec.Decode(&st.TemplatesCommit)
+		case strings.EqualFold(field, "finding_count"):
+			err = dec.Decode(&st.FindingCount)
+		case strings.EqualFold(field, "error"):
+			err = dec.Decode(&st.Error)
+		case strings.EqualFold(field, "progress"):
+			err = dec.Decode(&st.Progress)
+		case strings.EqualFold(field, "discovered_targets"):
+			st.DiscoveredTargets, err = decodeScannerStatusStrings(dec, "discovered targets")
+		case strings.EqualFold(field, "covered_endpoints"):
+			st.CoveredEndpoints, err = decodeScannerStatusCoverage(dec)
+		case strings.EqualFold(field, "coverage_warning"):
+			err = dec.Decode(&st.CoverageWarning)
+		default:
+			err = skipScannerJSONValue(dec)
+		}
+		if err != nil {
+			return fmt.Errorf("scanner status field %q: %w", field, err)
+		}
+	}
+	end, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if end, ok := end.(json.Delim); !ok || end != '}' {
+		return errors.New("scanner status object was not closed")
+	}
+	return nil
+}
+
+func decodeScannerStatusStrings(dec *json.Decoder, field string) ([]string, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if tok == nil {
+		return nil, nil
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok || delim != '[' {
+		return nil, fmt.Errorf("%s must be an array", field)
+	}
+	values := make([]string, 0)
+	for dec.More() {
+		if len(values) >= maxScannerStatusCollectionItems {
+			return nil, scannerStatusCollectionLimitError(field)
+		}
+		var value string
+		if err := dec.Decode(&value); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	end, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if end, ok := end.(json.Delim); !ok || end != ']' {
+		return nil, fmt.Errorf("%s array was not closed", field)
+	}
+	return values, nil
+}
+
+func decodeScannerStatusCoverage(dec *json.Decoder) ([]types.EndpointCoverage, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if tok == nil {
+		return nil, nil
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok || delim != '[' {
+		return nil, errors.New("covered endpoints must be an array")
+	}
+	values := make([]types.EndpointCoverage, 0)
+	for dec.More() {
+		if len(values) >= maxScannerStatusCollectionItems {
+			return nil, scannerStatusCollectionLimitError("covered endpoints")
+		}
+		var value types.EndpointCoverage
+		if err := dec.Decode(&value); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	end, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if end, ok := end.(json.Delim); !ok || end != ']' {
+		return nil, errors.New("covered endpoints array was not closed")
+	}
+	return values, nil
+}
+
+func scannerStatusCollectionLimitError(field string) error {
+	return fmt.Errorf("scanner status %s exceed %d-item limit", field, maxScannerStatusCollectionItems)
+}
+
+func skipScannerJSONValue(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil
+	}
+	if delim != '{' && delim != '[' {
+		return errors.New("unexpected JSON closing delimiter")
+	}
+	stack := []json.Delim{delim}
+	for len(stack) > 0 {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		delim, ok := tok.(json.Delim)
+		if !ok {
+			continue
+		}
+		switch delim {
+		case '{', '[':
+			stack = append(stack, delim)
+		case '}', ']':
+			want := json.Delim('{')
+			if delim == ']' {
+				want = '['
+			}
+			if stack[len(stack)-1] != want {
+				return errors.New("mismatched JSON closing delimiter")
+			}
+			stack = stack[:len(stack)-1]
+		default:
+			return errors.New("unexpected JSON delimiter")
+		}
 	}
 	return nil
 }
@@ -94,6 +301,14 @@ func validateScanStatus(st types.ScanStatus) error {
 	}
 	if err := validateScannerString("scan id", st.ID); err != nil {
 		return err
+	}
+	if err := validateScannerString("state", string(st.State)); err != nil {
+		return err
+	}
+	if st.Progress != nil {
+		if err := validateScannerString("progress phase", string(st.Progress.Phase)); err != nil {
+			return err
+		}
 	}
 	if err := validateScannerString("Nuclei version", st.NucleiVersion); err != nil {
 		return err
@@ -198,7 +413,7 @@ func (c *ScannerClient) Status(ctx context.Context, nodeScanID string) (types.Sc
 		return types.ScanStatus{}, fmt.Errorf("status: %s", statusErr(resp))
 	}
 	var st types.ScanStatus
-	if err := decodeScannerJSON(resp.Body, &st); err != nil {
+	if err := decodeScannerStatus(resp.Body, &st); err != nil {
 		return types.ScanStatus{}, err
 	}
 	if err := validateScanStatus(st); err != nil {

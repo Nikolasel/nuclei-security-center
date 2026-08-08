@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"bytes"
+	"strings"
 	"sync"
 	"testing"
 
@@ -94,5 +95,86 @@ func TestStatsWriterMirrorsRawOut(t *testing.T) {
 	// errOut still excludes the stats line.
 	if got := errBuf.String(); got != "[INF] loading templates\n[ERR] host down\n" {
 		t.Fatalf("errOut = %q", got)
+	}
+}
+
+func TestStatsWriterBoundsUnterminatedDiagnosticAndErrorTail(t *testing.T) {
+	var errOut cappedBuffer
+	var rawOut bytes.Buffer
+	sw := &statsWriter{errOut: &errOut, rawOut: &rawOut}
+
+	input := append(bytes.Repeat([]byte{'x'}, maxCapturedOutput), []byte("tail-marker")...)
+	if _, err := sw.Write(input); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if got := len(sw.buf); got > maxCapturedOutput {
+		t.Fatalf("pending line length = %d, want <= %d", got, maxCapturedOutput)
+	}
+	sw.flush()
+
+	if got := rawOut.Bytes(); !bytes.Equal(got, input) {
+		t.Fatalf("rawOut length = %d, want %d-byte verbatim stream", len(got), len(input))
+	}
+	if got := len(errOut.String()); got > maxCapturedOutput {
+		t.Fatalf("errOut length = %d, want <= %d", got, maxCapturedOutput)
+	}
+	if !strings.HasSuffix(errOut.String(), "tail-marker\n") {
+		t.Fatalf("errOut did not retain the diagnostic tail: %q", errOut.String())
+	}
+}
+
+func TestCappedBufferDoesNotAllocatePerOverflowWrite(t *testing.T) {
+	seed := bytes.Repeat([]byte{'s'}, maxCapturedOutput)
+	chunk := bytes.Repeat([]byte{'x'}, 63)
+	const writes = 256
+
+	allocs := testing.AllocsPerRun(3, func() {
+		var buffer cappedBuffer
+		_, _ = buffer.Write(seed)
+		for i := 0; i < writes; i++ {
+			_, _ = buffer.Write(chunk)
+		}
+	})
+	if allocs > 16 {
+		t.Fatalf("cappedBuffer allocations per run = %.0f, want <= 16", allocs)
+	}
+}
+
+func TestCappedBufferRetainsExactTailAcrossWraps(t *testing.T) {
+	chunks := [][]byte{
+		bytes.Repeat([]byte{'a'}, maxCapturedOutput-3),
+		[]byte("0123456789"),
+		[]byte("tail"),
+	}
+	var (
+		buffer cappedBuffer
+		input  []byte
+	)
+	for _, chunk := range chunks {
+		_, _ = buffer.Write(chunk)
+		input = append(input, chunk...)
+	}
+
+	want := input[len(input)-maxCapturedOutput:]
+	if got := buffer.String(); got != string(want) {
+		t.Fatalf("tail mismatch: got suffix %q, want %q", got[len(got)-16:], string(want[len(want)-16:]))
+	}
+	if !buffer.truncated {
+		t.Fatal("truncated = false, want true after ring overflow")
+	}
+}
+
+func TestCappedBufferExactCapacityIsNotTruncated(t *testing.T) {
+	input := bytes.Repeat([]byte{'x'}, maxCapturedOutput)
+	var buffer cappedBuffer
+
+	if got, err := buffer.Write(input); err != nil || got != len(input) {
+		t.Fatalf("Write = (%d, %v), want (%d, nil)", got, err, len(input))
+	}
+	if buffer.truncated {
+		t.Fatal("truncated = true, want false when the exact-capacity input is retained")
+	}
+	if got := buffer.String(); got != string(input) {
+		t.Fatalf("retained content differs from exact-capacity input")
 	}
 }

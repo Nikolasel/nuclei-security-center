@@ -1,7 +1,6 @@
 package scanner
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -17,6 +16,8 @@ import (
 )
 
 const (
+	// Deliberately shared by template validation, scan diagnostics, and stats
+	// framing so every subprocess diagnostic path has the same bounded tail.
 	maxCapturedOutput   = 64 << 10 // 64 KiB retained tail for subprocess diagnostics
 	maxValidationErrors = 20
 	maxValidationLine   = 1024
@@ -84,30 +85,59 @@ func (r *Runner) ValidateTemplate(ctx context.Context, yaml []byte) (types.Templ
 // cappedBuffer accepts the complete process stream while retaining only a
 // bounded tail. Nuclei's actionable fatal diagnostic is normally at the end.
 type cappedBuffer struct {
-	buf       bytes.Buffer
+	buf       []byte
+	start     int
+	length    int
 	truncated bool
 }
 
 func (b *cappedBuffer) Write(p []byte) (int, error) {
 	original := len(p)
+	if original == 0 {
+		return 0, nil
+	}
+	if len(b.buf) == 0 {
+		b.buf = make([]byte, maxCapturedOutput)
+	}
 	if original >= maxCapturedOutput {
-		b.buf.Reset()
-		_, _ = b.buf.Write(p[original-maxCapturedOutput:])
+		copy(b.buf, p[original-maxCapturedOutput:])
+		b.start = 0
+		b.length = maxCapturedOutput
 		b.truncated = true
 		return original, nil
 	}
-	overflow := b.buf.Len() + original - maxCapturedOutput
+	overflow := b.length + original - maxCapturedOutput
 	if overflow > 0 {
-		kept := append([]byte(nil), b.buf.Bytes()[overflow:]...)
-		b.buf.Reset()
-		_, _ = b.buf.Write(kept)
+		b.start = (b.start + overflow) % maxCapturedOutput
+		b.length -= overflow
 		b.truncated = true
 	}
-	_, _ = b.buf.Write(p)
+	index := (b.start + b.length) % maxCapturedOutput
+	first := len(b.buf) - index
+	if first > len(p) {
+		first = len(p)
+	}
+	copy(b.buf[index:index+first], p[:first])
+	if first < len(p) {
+		copy(b.buf[:len(p)-first], p[first:])
+	}
+	b.length += len(p)
 	return original, nil
 }
 
-func (b *cappedBuffer) String() string { return b.buf.String() }
+func (b *cappedBuffer) String() string {
+	if b.length == 0 {
+		return ""
+	}
+	out := make([]byte, b.length)
+	first := len(b.buf) - b.start
+	if first > b.length {
+		first = b.length
+	}
+	copy(out, b.buf[b.start:b.start+first])
+	copy(out[first:], b.buf[:b.length-first])
+	return string(out)
+}
 
 func validationDiagnostics(output, templatePath string) []string {
 	lines := actionableValidationLines(output)

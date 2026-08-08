@@ -327,7 +327,7 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 		// Nuclei exits 0 even when it finds nothing; a non-zero exit is a real
 		// failure (bad flags, killed, etc.). Summarize the stderr tail so a burst of
 		// repeated "Skipped … unresponsive" lines can't crowd out the real reason.
-		msg := strings.TrimSpace(summarizeStderr(stderr.String(), 20))
+		msg := summarizeCapturedStderr(&stderr, 20)
 		j.fail(fmt.Errorf("nuclei: %v: %s", err, msg))
 		return
 	}
@@ -529,6 +529,18 @@ func lastLines(s string, n int) string {
 // "unresponsive permanently: cause=…" forms). On a scan of many host:port pairs
 // these arrive as a long burst at the end.
 var skippedUnresponsiveRe = regexp.MustCompile(`Skipped .* unresponsive`)
+
+func summarizeCapturedStderr(stderr *cappedBuffer, n int) string {
+	msg := strings.TrimSpace(summarizeStderr(stderr.String(), n))
+	if !stderr.truncated {
+		return msg
+	}
+	const marker = "[WRN] stderr tail truncated; see execution log for full output"
+	if msg == "" {
+		return marker
+	}
+	return msg + "\n" + marker
+}
 
 // summarizeStderr collapses runs of "Skipped … unresponsive" diagnostics into a
 // single count line and returns the last n lines of the result — so the error

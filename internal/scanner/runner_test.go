@@ -124,3 +124,14 @@ func TestSummarizeStderr(t *testing.T) {
 		t.Errorf("last-n after summarize = %q, want %q", got, "d\ne")
 	}
 }
+
+func TestSummarizeCapturedStderrMarksTruncatedTail(t *testing.T) {
+	var stderr cappedBuffer
+	input := strings.Repeat("[ERR] noisy diagnostic\n", maxCapturedOutput/len("[ERR] noisy diagnostic\n")+1)
+	_, _ = stderr.Write([]byte(input))
+
+	got := summarizeCapturedStderr(&stderr, 20)
+	if !strings.Contains(got, "stderr tail truncated; see execution log for full output") {
+		t.Fatalf("summary = %q, want truncation marker", got)
+	}
+}

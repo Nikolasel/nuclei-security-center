@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"bytes"
+	"strings"
 	"sync"
 	"testing"
 
@@ -117,7 +118,48 @@ func TestStatsWriterBoundsUnterminatedDiagnosticAndErrorTail(t *testing.T) {
 	if got := len(errOut.String()); got > maxCapturedOutput {
 		t.Fatalf("errOut length = %d, want <= %d", got, maxCapturedOutput)
 	}
-	if !bytes.HasSuffix(errOut.buf.Bytes(), []byte("tail-marker\n")) {
+	if !strings.HasSuffix(errOut.String(), "tail-marker\n") {
 		t.Fatalf("errOut did not retain the diagnostic tail: %q", errOut.String())
+	}
+}
+
+func TestCappedBufferDoesNotAllocatePerOverflowWrite(t *testing.T) {
+	seed := bytes.Repeat([]byte{'s'}, maxCapturedOutput)
+	chunk := bytes.Repeat([]byte{'x'}, 63)
+	const writes = 256
+
+	allocs := testing.AllocsPerRun(3, func() {
+		var buffer cappedBuffer
+		_, _ = buffer.Write(seed)
+		for i := 0; i < writes; i++ {
+			_, _ = buffer.Write(chunk)
+		}
+	})
+	if allocs > 16 {
+		t.Fatalf("cappedBuffer allocations per run = %.0f, want <= 16", allocs)
+	}
+}
+
+func TestCappedBufferRetainsExactTailAcrossWraps(t *testing.T) {
+	chunks := [][]byte{
+		bytes.Repeat([]byte{'a'}, maxCapturedOutput-3),
+		[]byte("0123456789"),
+		[]byte("tail"),
+	}
+	var (
+		buffer cappedBuffer
+		input  []byte
+	)
+	for _, chunk := range chunks {
+		_, _ = buffer.Write(chunk)
+		input = append(input, chunk...)
+	}
+
+	want := input[len(input)-maxCapturedOutput:]
+	if got := buffer.String(); got != string(want) {
+		t.Fatalf("tail mismatch: got suffix %q, want %q", got[len(got)-16:], string(want[len(want)-16:]))
+	}
+	if !buffer.truncated {
+		t.Fatal("truncated = false, want true after ring overflow")
 	}
 }

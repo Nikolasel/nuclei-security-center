@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -84,5 +85,97 @@ func TestRequireAuthNoCookieReturns401(t *testing.T) {
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rr.Code)
+	}
+}
+
+func TestRequireAuthNoCookieAuditsAuthenticationFailure(t *testing.T) {
+	var buf bytes.Buffer
+	s := &Server{
+		auth: &Authenticator{cfg: AuthConfig{CookieName: "nsc_session"}},
+		log:  slog.New(slog.NewJSONHandler(&buf, nil)),
+	}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/findings", nil)
+
+	s.requireAuth(func(http.ResponseWriter, *http.Request) {
+		t.Errorf("handler should not be reached on missing session")
+	})(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+	assertAuthenticationFailureAudit(t, lastAudit(t, &buf), "none", http.MethodGet, "/api/findings")
+}
+
+func TestRequireAuthInvalidBearerAuditsWithoutToken(t *testing.T) {
+	var buf bytes.Buffer
+	s := &Server{
+		auth: &Authenticator{cfg: AuthConfig{CookieName: "nsc_session"}},
+		log:  slog.New(slog.NewJSONHandler(&buf, nil)),
+	}
+	resolver := func(context.Context, string) (store.Identity, error) {
+		return store.Identity{}, store.ErrNotFound
+	}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/findings", nil)
+	req.Header.Set("Authorization", "Bearer nsc_invalid")
+
+	s.requireAuthWithResolver(resolver, func(http.ResponseWriter, *http.Request) {
+		t.Errorf("handler should not be reached on invalid bearer token")
+	})(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+	assertAuthenticationFailureAudit(t, lastAudit(t, &buf), "bearer", http.MethodGet, "/api/findings")
+	if strings.Contains(buf.String(), "nsc_invalid") {
+		t.Fatalf("audit log leaked bearer token: %s", buf.String())
+	}
+}
+
+func TestRequireAuthBackendFaultRemains503WithoutAuditEvent(t *testing.T) {
+	var buf bytes.Buffer
+	s := &Server{
+		auth: &Authenticator{cfg: AuthConfig{CookieName: "nsc_session"}},
+		log:  slog.New(slog.NewJSONHandler(&buf, nil)),
+	}
+	resolver := func(context.Context, string) (store.Identity, error) {
+		return store.Identity{}, errors.New("database unavailable")
+	}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/findings", nil)
+	req.Header.Set("Authorization", "Bearer nsc_valid_shape")
+
+	s.requireAuthWithResolver(resolver, func(http.ResponseWriter, *http.Request) {
+		t.Errorf("handler should not be reached on backend fault")
+	})(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rr.Code)
+	}
+	if strings.Contains(buf.String(), `"event":"audit"`) {
+		t.Fatalf("backend fault emitted an audit authentication failure: %s", buf.String())
+	}
+}
+
+func assertAuthenticationFailureAudit(t *testing.T, event map[string]any, method, wantMethod, wantPath string) {
+	t.Helper()
+	for key, want := range map[string]any{
+		"event":         "audit",
+		"event_id":      eventAccessDenied,
+		"action":        "auth.authenticate",
+		"actor_subject": "unknown",
+		"actor_type":    "unknown",
+		"auth_method":   method,
+		"method":        wantMethod,
+		"path":          wantPath,
+		"status":        float64(http.StatusUnauthorized),
+	} {
+		if event[key] != want {
+			t.Errorf("audit field %q = %v, want %v", key, event[key], want)
+		}
+	}
+	if _, ok := event["duration_ms"]; !ok {
+		t.Error("authentication failure audit missing duration_ms")
 	}
 }

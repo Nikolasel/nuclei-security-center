@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 )
@@ -65,18 +66,27 @@ var devIdentity = store.Identity{Subject: "dev", Roles: []string{RoleAdmin, Role
 // status reflects the real fault so the SPA doesn't bounce the user through
 // login on every request (#82).
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return s.requireAuthWithResolver(s.resolveServiceToken, next)
+}
+
+func (s *Server) requireAuthWithResolver(
+	resolve func(context.Context, string) (store.Identity, error),
+	next http.HandlerFunc,
+) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
 		if s.auth == nil {
 			next(w, r.WithContext(withIdentity(r.Context(), devIdentity)))
 			return
 		}
 		if tok, ok := bearerToken(r); ok {
-			id, err := s.resolveServiceToken(r.Context(), tok)
+			id, err := resolve(r.Context(), tok)
 			if err != nil {
 				if isAuthBackendFault(err) {
 					s.serviceUnavailable(w, "authenticate service token", err)
 					return
 				}
+				s.recordAuthenticationFailure(r, "bearer", start)
 				http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 				return
 			}
@@ -89,6 +99,11 @@ func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if id.Subject == "" {
+			authMethod := "none"
+			if c, cookieErr := r.Cookie(s.auth.cfg.CookieName); cookieErr == nil && c.Value != "" {
+				authMethod = "session"
+			}
+			s.recordAuthenticationFailure(r, authMethod, start)
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
 		}

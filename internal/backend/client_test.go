@@ -147,16 +147,19 @@ func TestScannerClientRejectsOversizedScanStatusCollections(t *testing.T) {
 	}
 
 	tests := []struct {
-		name   string
-		status types.ScanStatus
+		name          string
+		status        types.ScanStatus
+		expectedError string
 	}{
 		{
-			name:   "discovered targets",
-			status: types.ScanStatus{DiscoveredTargets: discovered},
+			name:          "discovered targets",
+			status:        types.ScanStatus{DiscoveredTargets: discovered},
+			expectedError: "scanner status discovered targets exceed",
 		},
 		{
-			name:   "covered endpoints",
-			status: types.ScanStatus{CoveredEndpoints: covered},
+			name:          "covered endpoints",
+			status:        types.ScanStatus{CoveredEndpoints: covered},
+			expectedError: "scanner response body exceeds",
 		},
 	}
 
@@ -173,8 +176,8 @@ func TestScannerClientRejectsOversizedScanStatusCollections(t *testing.T) {
 			defer server.Close()
 
 			client := NewScannerClient(server.URL, "node-token")
-			if _, err := client.Status(context.Background(), "scan-1"); err == nil {
-				t.Fatal("client accepted an oversized scanner status collection")
+			if _, err := client.Status(context.Background(), "scan-1"); err == nil || !strings.Contains(err.Error(), test.expectedError) {
+				t.Fatalf("status error = %v, want %q", err, test.expectedError)
 			}
 		})
 	}

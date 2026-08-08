@@ -89,6 +89,8 @@ func validateScannerString(field, value string) error {
 }
 
 func validateScanStatus(st types.ScanStatus) error {
+	// decodeScannerJSON bounds the response before decoding; these collection
+	// limits are the post-decode backstop before node data reaches callers.
 	if len(st.DiscoveredTargets) > maxScannerStatusCollectionItems {
 		return fmt.Errorf(
 			"scanner status discovered targets exceed %d-item limit",

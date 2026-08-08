@@ -100,10 +100,12 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 		b.buf = make([]byte, maxCapturedOutput)
 	}
 	if original >= maxCapturedOutput {
+		if original > maxCapturedOutput || b.length > 0 {
+			b.truncated = true
+		}
 		copy(b.buf, p[original-maxCapturedOutput:])
 		b.start = 0
 		b.length = maxCapturedOutput
-		b.truncated = true
 		return original, nil
 	}
 	overflow := b.length + original - maxCapturedOutput

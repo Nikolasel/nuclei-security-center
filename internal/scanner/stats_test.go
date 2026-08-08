@@ -163,3 +163,18 @@ func TestCappedBufferRetainsExactTailAcrossWraps(t *testing.T) {
 		t.Fatal("truncated = false, want true after ring overflow")
 	}
 }
+
+func TestCappedBufferExactCapacityIsNotTruncated(t *testing.T) {
+	input := bytes.Repeat([]byte{'x'}, maxCapturedOutput)
+	var buffer cappedBuffer
+
+	if got, err := buffer.Write(input); err != nil || got != len(input) {
+		t.Fatalf("Write = (%d, %v), want (%d, nil)", got, err, len(input))
+	}
+	if buffer.truncated {
+		t.Fatal("truncated = true, want false when the exact-capacity input is retained")
+	}
+	if got := buffer.String(); got != string(input) {
+		t.Fatalf("retained content differs from exact-capacity input")
+	}
+}

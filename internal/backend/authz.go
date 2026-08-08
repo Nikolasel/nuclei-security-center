@@ -66,11 +66,17 @@ var devIdentity = store.Identity{Subject: "dev", Roles: []string{RoleAdmin, Role
 // status reflects the real fault so the SPA doesn't bounce the user through
 // login on every request (#82).
 func (s *Server) requireAuth(next http.HandlerFunc) http.HandlerFunc {
-	return s.requireAuthWithResolver(s.resolveServiceToken, next)
+	return s.requireAuthWithResolvers(s.resolveServiceToken, func(r *http.Request) (store.Identity, error) {
+		return s.auth.identityFromRequest(r)
+	}, next)
 }
 
-func (s *Server) requireAuthWithResolver(
-	resolve func(context.Context, string) (store.Identity, error),
+// requireAuthWithResolvers keeps both credential lookups injectable for
+// deterministic middleware tests. Production passes the real service-token and
+// session resolvers; the auth-disabled branch returns before either is called.
+func (s *Server) requireAuthWithResolvers(
+	resolveBearer func(context.Context, string) (store.Identity, error),
+	resolveSession func(*http.Request) (store.Identity, error),
 	next http.HandlerFunc,
 ) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +86,7 @@ func (s *Server) requireAuthWithResolver(
 			return
 		}
 		if tok, ok := bearerToken(r); ok {
-			id, err := resolve(r.Context(), tok)
+			id, err := resolveBearer(r.Context(), tok)
 			if err != nil {
 				if isAuthBackendFault(err) {
 					s.serviceUnavailable(w, "authenticate service token", err)
@@ -93,7 +99,7 @@ func (s *Server) requireAuthWithResolver(
 			next(w, r.WithContext(withIdentity(r.Context(), id)))
 			return
 		}
-		id, err := s.auth.identityFromRequest(r)
+		id, err := resolveSession(r)
 		if err != nil {
 			s.serviceUnavailable(w, "get session", err)
 			return

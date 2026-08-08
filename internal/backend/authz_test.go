@@ -120,7 +120,9 @@ func TestRequireAuthInvalidBearerAuditsWithoutToken(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/findings", nil)
 	req.Header.Set("Authorization", "Bearer nsc_invalid")
 
-	s.requireAuthWithResolver(resolver, func(http.ResponseWriter, *http.Request) {
+	s.requireAuthWithResolvers(resolver, func(*http.Request) (store.Identity, error) {
+		return store.Identity{}, nil
+	}, func(http.ResponseWriter, *http.Request) {
 		t.Errorf("handler should not be reached on invalid bearer token")
 	})(rr, req)
 
@@ -130,6 +132,35 @@ func TestRequireAuthInvalidBearerAuditsWithoutToken(t *testing.T) {
 	assertAuthenticationFailureAudit(t, lastAudit(t, &buf), "bearer", http.MethodGet, "/api/findings")
 	if strings.Contains(buf.String(), "nsc_invalid") {
 		t.Fatalf("audit log leaked bearer token: %s", buf.String())
+	}
+}
+
+func TestRequireAuthExpiredCookieAuditsAuthenticationFailure(t *testing.T) {
+	var buf bytes.Buffer
+	s := &Server{
+		auth: &Authenticator{cfg: AuthConfig{CookieName: "nsc_session"}},
+		log:  slog.New(slog.NewJSONHandler(&buf, nil)),
+	}
+	sessionResolver := func(*http.Request) (store.Identity, error) {
+		return store.Identity{}, nil
+	}
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/findings", nil)
+	req.AddCookie(&http.Cookie{Name: "nsc_session", Value: "stolen_session"})
+
+	s.requireAuthWithResolvers(func(context.Context, string) (store.Identity, error) {
+		t.Errorf("bearer resolver should not be reached without an Authorization header")
+		return store.Identity{}, nil
+	}, sessionResolver, func(http.ResponseWriter, *http.Request) {
+		t.Errorf("handler should not be reached on expired session")
+	})(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rr.Code)
+	}
+	assertAuthenticationFailureAudit(t, lastAudit(t, &buf), "session", http.MethodGet, "/api/findings")
+	if strings.Contains(buf.String(), "stolen_session") {
+		t.Fatalf("audit log leaked session cookie: %s", buf.String())
 	}
 }
 
@@ -146,7 +177,9 @@ func TestRequireAuthBackendFaultRemains503WithoutAuditEvent(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/findings", nil)
 	req.Header.Set("Authorization", "Bearer nsc_valid_shape")
 
-	s.requireAuthWithResolver(resolver, func(http.ResponseWriter, *http.Request) {
+	s.requireAuthWithResolvers(resolver, func(*http.Request) (store.Identity, error) {
+		return store.Identity{}, nil
+	}, func(http.ResponseWriter, *http.Request) {
 		t.Errorf("handler should not be reached on backend fault")
 	})(rr, req)
 

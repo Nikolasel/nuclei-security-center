@@ -26,7 +26,7 @@ import (
 // which is for forensics). A denied attempt is always access_denied regardless
 // of what it tried to do; a successful mutation gets its semantic category.
 const (
-	eventAccessDenied          = "access_denied"           // authentication/authorization rejected (401/403)
+	eventAccessDenied          = "access_denied"           // authentication or audited authz rejected (401/403)
 	eventConfigChanged         = "config_changed"          // targets / template sets / schedules CUD
 	eventScanDispatched        = "scan_dispatched"         // ad-hoc scan submit or schedule run
 	eventFindingTriaged        = "finding_triaged"         // disposition / severity recast

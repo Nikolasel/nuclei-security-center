@@ -733,7 +733,7 @@ the application database. Cron dispatches identify their actor as `system`.
 
 | `event_id` | emitted when |
 |---|---|
-| `access_denied` | authentication or authorization is rejected (HTTP 401/403) |
+| `access_denied` | authentication is rejected (HTTP 401), or an audited mutation is rejected by authorization (HTTP 403) |
 | `config_changed` | a target, template set, or schedule is created / updated / deleted |
 | `scan_dispatched` | a scan is submitted (ad-hoc) or a schedule is run |
 | `finding_triaged` | a finding's disposition or severity recast changes |

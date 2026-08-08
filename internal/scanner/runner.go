@@ -5,7 +5,6 @@ package scanner
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -286,7 +285,7 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 	// so capturing them here would only duplicate results into the execution log.
 	// Best-effort: a log file we can't open just disables the archive for this
 	// run; the scan itself is unaffected.
-	var stderr bytes.Buffer
+	var stderr cappedBuffer
 	sw := &statsWriter{setProgress: j.setProgress, errOut: &stderr, rawOut: logw}
 	cmd.Stderr = sw
 	cmd.Stdout = io.Discard

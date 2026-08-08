@@ -76,7 +76,7 @@ func numAny(raw json.RawMessage) float64 {
 // mutex so a future multi-stream wiring stays safe.
 type statsWriter struct {
 	setProgress func(types.ScanProgress)
-	errOut      *bytes.Buffer
+	errOut      io.Writer
 	rawOut      io.Writer // nil disables the verbatim log mirror
 
 	mu  sync.Mutex
@@ -86,21 +86,40 @@ type statsWriter struct {
 func (w *statsWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	original := len(p)
 	if w.rawOut != nil {
 		// Best-effort verbatim mirror; a log-file write error must not disrupt
 		// the scan (we still return len(p) so the pipe copy keeps flowing).
 		_, _ = w.rawOut.Write(p)
 	}
-	w.buf = append(w.buf, p...)
-	for {
-		i := bytes.IndexByte(w.buf, '\n')
+	for len(p) > 0 {
+		i := bytes.IndexByte(p, '\n')
 		if i < 0 {
+			w.appendPendingLine(p)
 			break
 		}
-		w.handleLine(w.buf[:i])
-		w.buf = w.buf[i+1:]
+		w.appendPendingLine(p[:i])
+		w.handleLine(w.buf)
+		w.buf = w.buf[:0]
+		p = p[i+1:]
 	}
-	return len(p), nil
+	return original, nil
+}
+
+// appendPendingLine retains only the tail of a partial diagnostic line. A
+// newline-free subprocess write must not turn statsWriter's framing buffer into
+// another unbounded process-output allocation.
+func (w *statsWriter) appendPendingLine(p []byte) {
+	if len(p) >= maxCapturedOutput {
+		w.buf = append(w.buf[:0], p[len(p)-maxCapturedOutput:]...)
+		return
+	}
+	overflow := len(w.buf) + len(p) - maxCapturedOutput
+	if overflow > 0 {
+		copy(w.buf, w.buf[overflow:])
+		w.buf = w.buf[:len(w.buf)-overflow]
+	}
+	w.buf = append(w.buf, p...)
 }
 
 // flush handles any trailing partial line (no terminating newline) at scan end.
@@ -121,7 +140,7 @@ func (w *statsWriter) handleLine(line []byte) {
 		return
 	}
 	if w.errOut != nil {
-		w.errOut.Write(line)
-		w.errOut.WriteByte('\n')
+		_, _ = w.errOut.Write(line)
+		_, _ = w.errOut.Write([]byte{'\n'})
 	}
 }

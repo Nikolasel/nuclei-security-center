@@ -96,3 +96,28 @@ func TestStatsWriterMirrorsRawOut(t *testing.T) {
 		t.Fatalf("errOut = %q", got)
 	}
 }
+
+func TestStatsWriterBoundsUnterminatedDiagnosticAndErrorTail(t *testing.T) {
+	var errOut cappedBuffer
+	var rawOut bytes.Buffer
+	sw := &statsWriter{errOut: &errOut, rawOut: &rawOut}
+
+	input := append(bytes.Repeat([]byte{'x'}, maxCapturedOutput), []byte("tail-marker")...)
+	if _, err := sw.Write(input); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if got := len(sw.buf); got > maxCapturedOutput {
+		t.Fatalf("pending line length = %d, want <= %d", got, maxCapturedOutput)
+	}
+	sw.flush()
+
+	if got := rawOut.Bytes(); !bytes.Equal(got, input) {
+		t.Fatalf("rawOut length = %d, want %d-byte verbatim stream", len(got), len(input))
+	}
+	if got := len(errOut.String()); got > maxCapturedOutput {
+		t.Fatalf("errOut length = %d, want <= %d", got, maxCapturedOutput)
+	}
+	if !bytes.HasSuffix(errOut.buf.Bytes(), []byte("tail-marker\n")) {
+		t.Fatalf("errOut did not retain the diagnostic tail: %q", errOut.String())
+	}
+}

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	maxValidationOutput = 64 << 10 // 64 KiB
+	maxCapturedOutput   = 64 << 10 // 64 KiB retained tail for subprocess diagnostics
 	maxValidationErrors = 20
 	maxValidationLine   = 1024
 )
@@ -90,13 +90,13 @@ type cappedBuffer struct {
 
 func (b *cappedBuffer) Write(p []byte) (int, error) {
 	original := len(p)
-	if original >= maxValidationOutput {
+	if original >= maxCapturedOutput {
 		b.buf.Reset()
-		_, _ = b.buf.Write(p[original-maxValidationOutput:])
+		_, _ = b.buf.Write(p[original-maxCapturedOutput:])
 		b.truncated = true
 		return original, nil
 	}
-	overflow := b.buf.Len() + original - maxValidationOutput
+	overflow := b.buf.Len() + original - maxCapturedOutput
 	if overflow > 0 {
 		kept := append([]byte(nil), b.buf.Bytes()[overflow:]...)
 		b.buf.Reset()

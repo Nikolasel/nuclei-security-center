@@ -110,9 +110,9 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   started_at, finished_at, nuclei_version, templates_commit, skipped_finding_count, triggered_by`.
   The selected target and policy's template set are resolved and recorded on the scan at dispatch
   (so findings keep working and history survives `scan_policy_id` being nulled on policy delete —
-  `ON DELETE SET NULL`). `skipped_finding_count` records only source records proven malformed
-  during backend ingest; database, transaction, schema, and unexpected constraint failures remain
-  scan-fatal.
+  `ON DELETE SET NULL`). `skipped_finding_count` records source records skipped during backend
+  ingest, including records proven malformed and records over the per-record JSONL size limit;
+  database, transaction, schema, and unexpected constraint failures remain scan-fatal.
 
 - **findings** (occurrences) — the immutable per-scan observation log: `id, scan_id,
   target_id, finding_id, dedup_key, result_discriminator, template_id, name, severity,
@@ -284,7 +284,8 @@ so scans survive a busy or briefly-unreachable node.
    from Postgres if the backend restarts. No node → backend inbound path exists.
 6. **Ingest (on backend)** — the backend parses the JSONL, inserts immutable occurrence
    rows, and upserts global lifecycle rows, updating first/last-seen evidence. A malformed source
-   record may be skipped and counted when its failure is proven record-local; database, transaction,
+   record may be skipped and counted when its failure is proven record-local; an oversized JSONL
+   record is likewise skipped after it is drained through its newline. Database, transaction,
    schema, and unexpected constraint failures abort the scan instead of producing silently partial
    results. A completed scan with skipped records cannot provide negative mitigation evidence, while
    exact occurrences it did ingest remain positive evidence. **All dedup/lifecycle lives here** —

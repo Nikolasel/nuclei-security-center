@@ -344,9 +344,9 @@ func (s *Store) SetScanVersions(ctx context.Context, scanID, nucleiVersion, temp
 	return err
 }
 
-// SetScanSkippedFindingCount records how many source records were rejected as
-// malformed during result ingestion. The count is durable even when the scan
-// itself later fails after a partial ingest.
+// SetScanSkippedFindingCount records how many source records were skipped during
+// result ingestion, including malformed and oversized records. The count is
+// durable even when the scan itself later fails after a partial ingest.
 func (s *Store) SetScanSkippedFindingCount(ctx context.Context, scanID string, count int) error {
 	if count < 0 {
 		return fmt.Errorf("skipped finding count cannot be negative: %d", count)
@@ -554,7 +554,7 @@ type ScanRow struct {
 	NucleiVersion   string `json:"nuclei_version,omitempty"`
 	TemplatesCommit string `json:"templates_commit,omitempty"`
 	Error           string `json:"error,omitempty"`
-	// SkippedFindingCount is the number of malformed source records that were
+	// SkippedFindingCount is the number of malformed or oversized source records
 	// safely skipped during result ingestion. Any operational ingest error still
 	// fails the scan rather than being counted here.
 	SkippedFindingCount int        `json:"skipped_finding_count"`

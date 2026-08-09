@@ -309,8 +309,8 @@ Detection state is derived from scan evidence:
 | `previously_mitigated` | Flapped: mitigated, resurfaced, and absent again. |
 
 Closure is evidence-driven; there is no manual “fixed.” Missing/invalid request-trace coverage fails
-closed, and a completed scan that skipped malformed finding records cannot provide negative
-mitigation evidence. Analysts may apply `false_positive` or optionally time-bounded `accepted` dispositions and
+closed, and a completed scan that skipped malformed or oversized finding records cannot provide
+negative mitigation evidence. Analysts may apply `false_positive` or optionally time-bounded `accepted` dispositions and
 recast severity.
 
 The lifecycle list exports as JSON, CSV, SARIF, or raw Nuclei JSONL with the same filters used in the

@@ -213,10 +213,9 @@ func scanFindingLinesWithDetails(
 			details = appendFindingSkipDetail(details, lineNumber, "parse: "+e.Error())
 			continue
 		}
-		// Copy the line: bufio.Scanner reuses its buffer on the next Scan.
-		rawLine := make([]byte, len(line))
-		copy(rawLine, line)
-		if e := emit(f, rawLine); e != nil {
+		// readFindingLine assembles a private copy from the reader fragments, so the
+		// returned line remains stable when the next record is read.
+		if e := emit(f, line); e != nil {
 			var recordErr *store.FindingRecordError
 			if errors.As(e, &recordErr) {
 				skipped++
@@ -567,7 +566,7 @@ func (o *Orchestrator) ingest(ctx context.Context, client *ScannerClient, scanID
 			return o.store.IngestFinding(ctx, scanID, targetID, f, rawLine)
 		})
 	if skipped > 0 {
-		o.log.Warn("skipped malformed finding records", "scan_id", scanID, "skipped", skipped, "samples", skipDetails)
+		o.log.Warn("skipped finding records", "scan_id", scanID, "skipped", skipped, "samples", skipDetails)
 		if persistErr := o.store.SetScanSkippedFindingCount(ctx, scanID, skipped); persistErr != nil {
 			if err == nil {
 				return fmt.Errorf("record skipped finding count: %w", persistErr)

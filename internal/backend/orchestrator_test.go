@@ -1,8 +1,10 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +53,35 @@ func TestScanFindingLinesByteCap(t *testing.T) {
 		func(types.NucleiFinding, []byte) error { return nil })
 	if err == nil || !strings.Contains(err.Error(), "byte cap") {
 		t.Fatalf("err = %v, want byte-cap error", err)
+	}
+}
+
+func TestScanFindingLinesSkipsOversizedRecordAndContinues(t *testing.T) {
+	line := `{"template-id":"t","host":"h"}`
+	oversized := strings.Repeat("x", 8*1024*1024+1)
+	in := line + "\n" + oversized + "\n" + line + "\n"
+	var hosts []string
+	var archived bytes.Buffer
+
+	n, skipped, details, err := scanFindingLinesWithDetails(io.TeeReader(strings.NewReader(in), &archived), int64(len(in)), 100,
+		func(f types.NucleiFinding, _ []byte) error {
+			hosts = append(hosts, f.Host)
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if n != 2 || len(hosts) != 2 {
+		t.Fatalf("ingested = %d, hosts = %v, want two records after skipping the oversized line", n, hosts)
+	}
+	if skipped != 1 {
+		t.Errorf("skipped = %d, want 1", skipped)
+	}
+	if len(details) != 1 || !strings.Contains(details[0], "line 2") || !strings.Contains(details[0], "oversized") {
+		t.Errorf("details = %v, want one bounded oversized-record detail for line 2", details)
+	}
+	if !bytes.Equal(archived.Bytes(), []byte(in)) {
+		t.Errorf("archived stream lost bytes while skipping the oversized record: got %d bytes, want %d", archived.Len(), len(in))
 	}
 }
 

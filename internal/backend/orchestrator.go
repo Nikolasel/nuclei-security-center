@@ -158,12 +158,14 @@ const maxLogBytes = 128 << 20 // 128 MiB execution-log ceiling
 const (
 	maxResultsBytes       = 512 << 20 // 512 MiB total results-stream ceiling
 	maxFindingsPerScan    = 100_000   // per-scan finding-count ceiling
+	maxFindingLineBytes   = 8 << 20   // per-record JSONL ceiling (#193)
 	maxFindingSkipDetails = 8         // bound diagnostic samples in logs
 )
 
 // scanFindingLines reads JSONL findings from r under a byte cap (maxBytes) and a
 // count cap (maxCount), invoking emit for each parsed finding with a private
-// copy of its raw line. Unparseable lines are skipped (counted, not fatal).
+// copy of its raw line. Unparseable and oversized lines are skipped (counted,
+// not fatal).
 // Exceeding either cap returns an error after the work done so far, so a
 // misbehaving stream aborts rather than consuming unbounded resources.
 func scanFindingLines(r io.Reader, maxBytes int64, maxCount int, emit func(types.NucleiFinding, []byte) error) (ingested, skipped int, err error) {
@@ -172,9 +174,9 @@ func scanFindingLines(r io.Reader, maxBytes int64, maxCount int, emit func(types
 }
 
 // scanFindingLinesWithDetails is scanFindingLines plus a bounded set of
-// non-sensitive line/reason samples for operator diagnostics. Only parse
-// failures and store.FindingRecordError values are skipped; every other emit
-// error is returned and remains scan-fatal.
+// non-sensitive line/reason samples for operator diagnostics. Parse failures,
+// oversized records, and store.FindingRecordError values are skipped; every
+// other emit or stream error is returned and remains scan-fatal.
 func scanFindingLinesWithDetails(
 	r io.Reader,
 	maxBytes int64,
@@ -183,17 +185,27 @@ func scanFindingLinesWithDetails(
 ) (ingested, skipped int, details []string, err error) {
 	// +1 so we can distinguish "exactly at the cap" from "over the cap".
 	limited := &io.LimitedReader{R: r, N: maxBytes + 1}
-	sc := bufio.NewScanner(limited)
-	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024) // findings can be large
+	reader := bufio.NewReaderSize(limited, 64*1024)
 	lineNumber := 0
-	for sc.Scan() {
+	for {
+		line, oversized, readErr := readFindingLine(reader, maxFindingLineBytes)
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return ingested, skipped, details, fmt.Errorf("read results stream: %w", readErr)
+		}
 		lineNumber++
-		line := sc.Bytes()
-		if len(line) == 0 {
+		if len(line) == 0 && !oversized {
 			continue
 		}
 		if ingested >= maxCount {
 			return ingested, skipped, details, fmt.Errorf("results exceeded the %d-finding cap", maxCount)
+		}
+		if oversized {
+			skipped++
+			details = appendFindingSkipDetail(details, lineNumber, "oversized record")
+			continue
 		}
 		var f types.NucleiFinding
 		if e := json.Unmarshal(line, &f); e != nil {
@@ -201,10 +213,9 @@ func scanFindingLinesWithDetails(
 			details = appendFindingSkipDetail(details, lineNumber, "parse: "+e.Error())
 			continue
 		}
-		// Copy the line: bufio.Scanner reuses its buffer on the next Scan.
-		rawLine := make([]byte, len(line))
-		copy(rawLine, line)
-		if e := emit(f, rawLine); e != nil {
+		// readFindingLine assembles a private copy from the reader fragments, so the
+		// returned line remains stable when the next record is read.
+		if e := emit(f, line); e != nil {
 			var recordErr *store.FindingRecordError
 			if errors.As(e, &recordErr) {
 				skipped++
@@ -215,13 +226,48 @@ func scanFindingLinesWithDetails(
 		}
 		ingested++
 	}
-	if e := sc.Err(); e != nil {
-		return ingested, skipped, details, fmt.Errorf("read results stream: %w", e)
-	}
 	if limited.N <= 0 {
 		return ingested, skipped, details, fmt.Errorf("results stream exceeded the %d-byte cap", maxBytes)
 	}
 	return ingested, skipped, details, nil
+}
+
+// readFindingLine returns one JSONL record without buffering more than maxBytes
+// of its content. bufio.Reader.ReadLine exposes fragments for long lines, so an
+// oversized record can be drained through its newline and the next record can
+// still be ingested without buffering the attacker's full input.
+func readFindingLine(reader *bufio.Reader, maxBytes int) ([]byte, bool, error) {
+	var line []byte
+	oversized := false
+	for {
+		fragment, prefix, err := reader.ReadLine()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				return nil, false, err
+			}
+			if len(fragment) == 0 && len(line) == 0 {
+				return nil, false, io.EOF
+			}
+			if oversized || len(line)+len(fragment) > maxBytes {
+				return nil, true, nil
+			}
+			return append(line, fragment...), false, nil
+		}
+
+		if !oversized {
+			if len(line)+len(fragment) > maxBytes {
+				oversized = true
+			} else {
+				line = append(line, fragment...)
+			}
+		}
+		if !prefix {
+			if oversized {
+				return nil, true, nil
+			}
+			return line, false, nil
+		}
+	}
 }
 
 func appendFindingSkipDetail(details []string, lineNumber int, reason string) []string {
@@ -520,7 +566,7 @@ func (o *Orchestrator) ingest(ctx context.Context, client *ScannerClient, scanID
 			return o.store.IngestFinding(ctx, scanID, targetID, f, rawLine)
 		})
 	if skipped > 0 {
-		o.log.Warn("skipped malformed finding records", "scan_id", scanID, "skipped", skipped, "samples", skipDetails)
+		o.log.Warn("skipped finding records", "scan_id", scanID, "skipped", skipped, "samples", skipDetails)
 		if persistErr := o.store.SetScanSkippedFindingCount(ctx, scanID, skipped); persistErr != nil {
 			if err == nil {
 				return fmt.Errorf("record skipped finding count: %w", persistErr)

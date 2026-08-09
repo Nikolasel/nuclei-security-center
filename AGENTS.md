@@ -42,18 +42,21 @@ is `S3_ENDPOINT`/`S3_BUCKET`/`S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`/`S3_USE_S
 unset `S3_ENDPOINT` ⇒ archiving disabled (dev). Authentication remains fail-closed unless
 `AUTH_DISABLED=true` is explicitly set.
 
-**Audit log:** every mutating API call emits one structured `slog` event
-(`event=audit`) to **stdout** — no DB table, no in-app UI. The trail lives in the platform's
-log aggregator (CloudWatch / Log Analytics / Cloud Logging / Loki), which owns retention +
-querying; keeping it off the app DB means a DB compromise can't rewrite it. `internal/backend/
-audit.go` wraps every mutating route with `s.mutation(eventID, action, objectType, role, h)`
-(replacing bare `requireRole`): it runs authz then logs actor / `event_id` / `action` /
-object type+id / method / path / status / duration. `event_id` is a small fixed vocabulary
-for detections — `access_denied` (any authz 403), `config_changed` (targets/template-sets/
-schedules CUD), `scan_dispatched` (scan submit or schedule run), `finding_triaged`
-(disposition/recast), `service_account_changed` (API-token create/rotate/revoke) — all at
-INFO (a denial is normal enforcement, not a fault). Each event also carries `actor_type`
-(`user` vs `service_account`) so headless token callers are never conflated with people.
+**Audit log:** every mutating API call and rejected authentication attempt emits one structured
+`slog` event (`event=audit`) to **stdout** — no DB table, no in-app UI. The trail lives in the
+platform's log aggregator (CloudWatch / Log Analytics / Cloud Logging / Loki), which owns
+retention + querying; keeping it off the app DB means a DB compromise can't rewrite it.
+`internal/backend/audit.go` wraps every mutating route with
+`s.mutation(eventID, action, objectType, role, h)` (replacing bare `requireRole`): it runs authz
+then logs actor / `event_id` / `action` / object type+id / method / path / status / duration.
+`event_id` is a small fixed vocabulary for detections — `access_denied` (authentication rejected,
+HTTP 401, or an audited mutation rejected by authorization, HTTP 403), `config_changed`
+(targets/template-sets/schedules CUD), `scan_dispatched` (scan submit or schedule run),
+`finding_triaged` (disposition/recast), `service_account_changed`
+(API-token create/rotate/revoke) — all at INFO (a denial is normal enforcement, not a fault).
+Authenticated events carry `actor_type` (`user` or `service_account`) so headless token callers
+are never conflated with people; rejected authentication events use `actor_type=unknown` and a
+non-secret `auth_method` classification.
 Successful dispatch actions (`scan.create`, manual `schedule.run`, and cron dispatch) additionally
 carry the resolved `scan_policy_id`, `target_id`, and `scan_id`, keeping the selected scope in the
 off-DB trail; unattended cron dispatches use `actor_type=system`.

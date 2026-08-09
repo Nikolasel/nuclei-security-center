@@ -709,7 +709,9 @@ curl -sb jar.txt -X DELETE localhost:8080/api/service-accounts/$ID
 | `DELETE /api/service-accounts/{id}` | admin | revoke (delete) the account |
 
 A bad or expired bearer token is rejected with `401` — it never silently falls through to cookie
-auth. Token calls appear in the [audit log](#audit-log) as `actor_type=service_account`.
+auth. Successful token calls appear in the [audit log](#audit-log) as
+`actor_type=service_account`; rejected bearer or session authentication attempts are logged with
+`actor_type=unknown` and never include the token or cookie value.
 
 ## Audit log
 
@@ -721,8 +723,9 @@ querying, and because the trail lives off the app database a DB compromise can't
 
 Each event carries the actor (`actor_subject` / `actor_email` / `actor_type`), an `event_id`, the
 fine-grained `action`, the object (`object_type` / `object_id`), `method`, `path`, `status`, and
-`duration_ms`. `actor_type` is `service_account` for token callers (their `actor_subject` is
-`svc:<name>`) and `user` for interactive logins, so automation is never conflated with a person.
+`duration_ms`. `actor_type` is `service_account` for authenticated token callers (their
+`actor_subject` is `svc:<name>`), `user` for authenticated interactive logins, and `unknown` for
+authentication failures. Authentication failures also carry only a non-secret `auth_method`.
 Successful `scan.create`, manual `schedule.run`, and cron dispatch actions also carry the resolved
 `scan_policy_id`, `target_id`, and `scan_id`, so the selected scope remains attributable outside
 the application database. Cron dispatches identify their actor as `system`.
@@ -730,14 +733,15 @@ the application database. Cron dispatches identify their actor as `system`.
 
 | `event_id` | emitted when |
 |---|---|
-| `access_denied` | a mutating call is rejected by authorization (HTTP 403) |
+| `access_denied` | authentication is rejected (HTTP 401), or an audited mutation is rejected by authorization (HTTP 403) |
 | `config_changed` | a target, template set, or schedule is created / updated / deleted |
 | `scan_dispatched` | a scan is submitted (ad-hoc) or a schedule is run |
 | `finding_triaged` | a finding's disposition or severity recast changes |
 | `service_account_changed` | a service-account token is created / rotated / revoked |
 
-All audit events log at **INFO** — a denial is authorization working as intended, not a fault —
-so alerting keys off `event_id` / `status`, not the log level. Tail them locally with:
+All audit events log at **INFO** — a denial or authentication failure is an enforcement result, not
+a backend fault — so alerting keys off `event_id` / `status`, not the log level. Tail them locally
+with:
 
 ```sh
 docker compose logs -f backend | grep '"event":"audit"'

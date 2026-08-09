@@ -10,8 +10,9 @@ import (
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 )
 
-// Audit log (Phase 3). Every mutating API call emits one structured log event
-// (event=audit) to stdout — who did what, to which object, with what result.
+// Audit log (Phase 3). Every mutating API call and rejected authentication emits
+// one structured log event (event=audit) to stdout — who did what, to which
+// object, with what result.
 // The audit trail deliberately lives in the platform's log aggregator
 // (CloudWatch / Azure Log Analytics / GCP Cloud Logging / Loki), not in the app
 // database: the aggregator already solves retention, indexing, tamper-evidence,
@@ -25,7 +26,7 @@ import (
 // which is for forensics). A denied attempt is always access_denied regardless
 // of what it tried to do; a successful mutation gets its semantic category.
 const (
-	eventAccessDenied          = "access_denied"           // authz rejected the call (403)
+	eventAccessDenied          = "access_denied"           // authentication or audited authz rejected (401/403)
 	eventConfigChanged         = "config_changed"          // targets / template sets / schedules CUD
 	eventScanDispatched        = "scan_dispatched"         // ad-hoc scan submit or schedule run
 	eventFindingTriaged        = "finding_triaged"         // disposition / severity recast
@@ -134,6 +135,29 @@ func (s *Server) recordAudit(r *http.Request, id store.Identity, eventID, action
 	}
 
 	s.log.LogAttrs(r.Context(), slog.LevelInfo, "audit "+action, attrs...)
+}
+
+// recordAuthenticationFailure emits the same low-cardinality denial event as a
+// 403, but with an unknown actor: authentication did not establish an identity.
+// authMethod is a non-secret classification (none, session, or bearer); token
+// and cookie values are deliberately never included in the audit record.
+func (s *Server) recordAuthenticationFailure(r *http.Request, authMethod string, start time.Time) {
+	if s.log == nil {
+		return
+	}
+	attrs := []slog.Attr{
+		slog.String("event", "audit"),
+		slog.String("event_id", eventAccessDenied),
+		slog.String("action", "auth.authenticate"),
+		slog.String("actor_subject", "unknown"),
+		slog.String("actor_type", "unknown"),
+		slog.String("auth_method", authMethod),
+		slog.String("method", r.Method),
+		slog.String("path", r.URL.Path),
+		slog.Int("status", http.StatusUnauthorized),
+		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+	}
+	s.log.LogAttrs(r.Context(), slog.LevelInfo, "audit auth.authenticate", attrs...)
 }
 
 // logSystemAudit emits an audit event for a mutation the system performs on its

@@ -408,7 +408,8 @@ trade; the native-services path only wins if you're committed to one cloud forev
   TLS-only; mTLS is the upgrade when you want mutual auth.
 - **Secrets:** target auth creds (if any) never in the DB plaintext or templates —
   behind a secrets interface (env/SOPS local, cloud secret manager in prod).
-- **Audit log** — every mutating call is emitted as a structured `event=audit` log line
+- **Audit log** — every mutating call and rejected authentication attempt is emitted as a structured
+  `event=audit` log line
   to stdout, where the platform's log aggregator ingests/retains/queries it. Off-DB by
   design, so a DB compromise can't rewrite the trail; a small `event_id` vocabulary drives
   detections. Successful ad-hoc, manual-schedule, and cron dispatch events include the resolved

@@ -28,9 +28,15 @@ type FindingCondition struct {
 	Values []string `json:"values,omitempty"`
 }
 
-// maxConditions caps the compiled tree so a pathological filter can't build an
-// enormous query (CWE-770). Generous for real use; rejected past that.
-const maxConditions = 60
+// These limits cap every value dimension that can amplify the generated
+// PostgreSQL work (CWE-770). They are generous for the condition-builder UI but
+// keep one viewer request from binding an unbounded text array or ILIKE pattern
+// list.
+const (
+	maxConditions         = 60
+	maxValuesPerCondition = 100
+	maxFilterValueBytes   = 256
+)
 
 // fieldKind classifies how a field is stored, which decides its operator set and
 // SQL shape.
@@ -131,6 +137,9 @@ func compileCondition(c FindingCondition, push func(any) int) (string, error) {
 	if !opsForKind[spec.kind][c.Op] {
 		return "", fmt.Errorf("operator %q not valid for field %q", c.Op, c.Field)
 	}
+	if err := validateFilterValues(c.Values); err != nil {
+		return "", err
+	}
 
 	// is_empty / is_not_empty: no values.
 	switch c.Op {
@@ -198,6 +207,18 @@ func compileCondition(c FindingCondition, push func(any) int) (string, error) {
 		return matches, nil
 	}
 	return "", fmt.Errorf("operator %q not valid for field %q", c.Op, c.Field)
+}
+
+func validateFilterValues(values []string) error {
+	if len(values) > maxValuesPerCondition {
+		return fmt.Errorf("too many filter values (max %d)", maxValuesPerCondition)
+	}
+	for _, value := range values {
+		if len(value) > maxFilterValueBytes {
+			return fmt.Errorf("filter value exceeds %d-byte limit", maxFilterValueBytes)
+		}
+	}
+	return nil
 }
 
 // anyLike builds `col ILIKE ANY($n)` (and the two-column OR for kindTextTwo).

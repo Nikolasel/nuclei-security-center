@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +40,8 @@ type Options struct {
 	PasswordFile string
 }
 
+const defaultStatementTimeout = 30 * time.Second
+
 // Open connects to Postgres and returns a Store. The caller must Close it.
 func Open(ctx context.Context, dsn string) (*Store, error) {
 	return OpenWithOptions(ctx, dsn, Options{})
@@ -50,6 +53,26 @@ func OpenWithOptions(ctx context.Context, dsn string, opts Options) (*Store, err
 	if err != nil {
 		return nil, fmt.Errorf("parse postgres dsn: %w", err)
 	}
+	configurePool(cfg, opts)
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("connect postgres: %w", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping postgres: %w", err)
+	}
+	return &Store{pool: pool}, nil
+}
+
+func configurePool(cfg *pgxpool.Config, opts Options) {
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	// Apply a server-side backstop to every statement issued through this pool.
+	// Request-specific validation remains the first line of defense, while this
+	// prevents an unexpectedly expensive query from running indefinitely.
+	cfg.ConnConfig.RuntimeParams["statement_timeout"] = strconv.FormatInt(defaultStatementTimeout.Milliseconds(), 10)
 	if opts.PasswordFile != "" {
 		// BeforeConnect runs before pgx establishes each new pooled connection,
 		// so re-reading the file here means a rotated password is applied to
@@ -65,15 +88,6 @@ func OpenWithOptions(ctx context.Context, dsn string, opts Options) (*Store, err
 			return nil
 		}
 	}
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("connect postgres: %w", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("ping postgres: %w", err)
-	}
-	return &Store{pool: pool}, nil
 }
 
 // readPasswordFile reads a password from a file, trimming a single trailing

@@ -643,13 +643,19 @@ type findingsPage struct {
 	Offset int                  `json:"offset"`
 }
 
+const maxFindingFilterBytes = 64 << 10
+
 // findingQueryFromRequest parses the shared findings filter (used by both the
 // list and export endpoints, so they stay in lockstep). The structured filter
 // travels as one JSON `filter` param (the condition-builder tree). When absent,
 // it falls back to the legacy flat params (`severity=…&host=…`) compiled into a
 // single AND-group, so old bookmarks and API callers keep working.
 func findingQueryFromRequest(q url.Values) (store.FindingQuery, error) {
-	if raw := strings.TrimSpace(q.Get("filter")); raw != "" {
+	raw := q.Get("filter")
+	if len(raw) > maxFindingFilterBytes {
+		return store.FindingQuery{}, fmt.Errorf("filter exceeds %d-byte limit", maxFindingFilterBytes)
+	}
+	if raw = strings.TrimSpace(raw); raw != "" {
 		var fq store.FindingQuery
 		if err := json.Unmarshal([]byte(raw), &fq); err != nil {
 			return store.FindingQuery{}, fmt.Errorf("invalid filter: %w", err)

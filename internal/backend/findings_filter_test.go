@@ -3,6 +3,7 @@ package backend
 import (
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
@@ -71,5 +72,13 @@ func TestFilterJSONParam(t *testing.T) {
 	// Malformed JSON is a parse error (→ 400 at the handler).
 	if _, err := findingQueryFromRequest(url.Values{"filter": {"{bad json"}}); err == nil {
 		t.Error("malformed filter JSON accepted")
+	}
+}
+
+func TestFilterJSONParamRejectsOversizedFilter(t *testing.T) {
+	raw := `{"groups":[{"conditions":[{"field":"host","op":"contains","values":["` +
+		strings.Repeat("x", 70<<10) + `"]}]}]}`
+	if _, err := findingQueryFromRequest(url.Values{"filter": {raw}}); err == nil || !strings.Contains(err.Error(), "filter exceeds") {
+		t.Fatalf("findingQueryFromRequest error = %v, want oversized-filter error", err)
 	}
 }

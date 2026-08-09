@@ -862,6 +862,26 @@ type FindingFilter struct {
 	Offset     int
 }
 
+// ValidateFindingFilter checks the legacy per-scan occurrence filter before it
+// reaches SQL. It shares the same value bounds as FindingQuery so the scan-detail
+// path cannot bypass the resource limits on the lifecycle findings path.
+func ValidateFindingFilter(f FindingFilter) error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "query", value: f.Query},
+		{name: "host", value: f.Host},
+		{name: "cve", value: f.CVE},
+		{name: "tag", value: f.Tag},
+	} {
+		if field.value != "" && len(field.value) > maxFilterValueBytes {
+			return fmt.Errorf("finding filter %s exceeds %d-byte limit", field.name, maxFilterValueBytes)
+		}
+	}
+	return validateFilterValues(f.Severities)
+}
+
 // severityOrder ranks findings so the most severe sort first, server-side.
 const severityOrder = `CASE lower(severity)
 	WHEN 'critical' THEN 5 WHEN 'high' THEN 4 WHEN 'medium' THEN 3
@@ -870,6 +890,9 @@ const severityOrder = `CASE lower(severity)
 // ListFindings returns a page of findings (severity-sorted, then newest first)
 // plus the total count matching the filter (ignoring Limit/Offset).
 func (s *Store) ListFindings(ctx context.Context, f FindingFilter) ([]FindingRow, int, error) {
+	if err := ValidateFindingFilter(f); err != nil {
+		return nil, 0, err
+	}
 	if f.Limit <= 0 || f.Limit > 500 {
 		f.Limit = 50
 	}

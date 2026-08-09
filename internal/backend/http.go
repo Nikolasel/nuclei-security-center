@@ -651,10 +651,10 @@ const maxFindingFilterBytes = 64 << 10
 // it falls back to the legacy flat params (`severity=…&host=…`) compiled into a
 // single AND-group, so old bookmarks and API callers keep working.
 func findingQueryFromRequest(q url.Values) (store.FindingQuery, error) {
-	raw := q.Get("filter")
-	if len(raw) > maxFindingFilterBytes {
-		return store.FindingQuery{}, fmt.Errorf("filter exceeds %d-byte limit", maxFindingFilterBytes)
+	if err := validateFindingFilterQueryParams(q); err != nil {
+		return store.FindingQuery{}, err
 	}
+	raw := q.Get("filter")
 	if raw = strings.TrimSpace(raw); raw != "" {
 		var fq store.FindingQuery
 		if err := json.Unmarshal([]byte(raw), &fq); err != nil {
@@ -663,6 +663,30 @@ func findingQueryFromRequest(q url.Values) (store.FindingQuery, error) {
 		return fq, nil
 	}
 	return legacyFlatQuery(q), nil
+}
+
+var findingFilterQueryParamKeys = []string{
+	"filter", "q", "severity", "state", "disposition", "target_id", "host", "cve", "tag",
+}
+
+// validateFindingFilterQueryParams bounds the raw values before the legacy
+// query parser can split them into slices. The structured filter is singular;
+// duplicate values are ambiguous and are rejected instead of silently ignoring
+// all but the first one.
+func validateFindingFilterQueryParams(q url.Values) error {
+	if values, ok := q["filter"]; ok && len(values) > 1 {
+		return errors.New("only one filter parameter is allowed")
+	}
+	total := 0
+	for _, key := range findingFilterQueryParamKeys {
+		for _, value := range q[key] {
+			total += len(value)
+			if total > maxFindingFilterBytes {
+				return fmt.Errorf("filter exceeds %d-byte limit", maxFindingFilterBytes)
+			}
+		}
+	}
+	return nil
 }
 
 // legacyFlatQuery compiles the pre-condition-builder query params into a single
@@ -826,6 +850,10 @@ func (s *Server) writeFinding(w http.ResponseWriter, r *http.Request, id int64) 
 // one scan (the scan-detail view), paginated + filterable like the main list.
 func (s *Server) handleListScanFindings(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	if err := validateFindingFilterQueryParams(q); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	limit, offset := pageParams(q)
 	filter := store.FindingFilter{
 		ScanID:     r.PathValue("id"),
@@ -836,6 +864,10 @@ func (s *Server) handleListScanFindings(w http.ResponseWriter, r *http.Request) 
 		Tag:        strings.TrimSpace(q.Get("tag")),
 		Limit:      limit,
 		Offset:     offset,
+	}
+	if err := store.ValidateFindingFilter(filter); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	rows, total, err := s.store.ListFindings(r.Context(), filter)
 	if err != nil {

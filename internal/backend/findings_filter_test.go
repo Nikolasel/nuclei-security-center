@@ -82,3 +82,17 @@ func TestFilterJSONParamRejectsOversizedFilter(t *testing.T) {
 		t.Fatalf("findingQueryFromRequest error = %v, want oversized-filter error", err)
 	}
 }
+
+func TestFindingFilterQueryParamsRejectsOversizedLegacyFilter(t *testing.T) {
+	q := url.Values{"host": {strings.Repeat("x", maxFindingFilterBytes+1)}}
+	if err := validateFindingFilterQueryParams(q); err == nil || !strings.Contains(err.Error(), "filter exceeds") {
+		t.Fatalf("validateFindingFilterQueryParams error = %v, want oversized-filter error", err)
+	}
+}
+
+func TestFindingFilterQueryParamsRejectsDuplicateStructuredFilters(t *testing.T) {
+	q := url.Values{"filter": {`{}`, `{}`}}
+	if err := validateFindingFilterQueryParams(q); err == nil || !strings.Contains(err.Error(), "one filter") {
+		t.Fatalf("validateFindingFilterQueryParams error = %v, want duplicate-filter error", err)
+	}
+}

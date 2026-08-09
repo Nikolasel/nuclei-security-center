@@ -253,6 +253,11 @@ func readFindingLine(reader *bufio.Reader, maxBytes int) ([]byte, bool, error) {
 			}
 			return append(line, fragment...), false, nil
 		}
+		// ReadLine strips CRLF, but a final unterminated CR is returned as
+		// content. Match bufio.ScanLines by stripping that lone terminator too.
+		if !prefix && len(fragment) > 0 && fragment[len(fragment)-1] == '\r' {
+			fragment = fragment[:len(fragment)-1]
+		}
 
 		if !oversized {
 			if len(line)+len(fragment) > maxBytes {

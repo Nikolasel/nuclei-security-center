@@ -144,16 +144,16 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return fmt.Errorf("begin migration transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `
-		SELECT pg_advisory_xact_lock(hashtext(current_database()), hashtext(current_schema()))
-	`); err != nil {
-		return fmt.Errorf("lock migrations: %w", err)
-	}
 	// Migrations may build indexes or rewrite populated tables and legitimately
 	// outlive the request-query timeout. Keep the longer-running work scoped to
 	// this transaction; pooled request connections retain the 30-second backstop.
 	if _, err := tx.Exec(ctx, `SET LOCAL statement_timeout = 0`); err != nil {
 		return fmt.Errorf("disable statement timeout for migrations: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		SELECT pg_advisory_xact_lock(hashtext(current_database()), hashtext(current_schema()))
+	`); err != nil {
+		return fmt.Errorf("lock migrations: %w", err)
 	}
 
 	if _, err := tx.Exec(ctx, `

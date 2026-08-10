@@ -205,8 +205,14 @@ func TestMigrateRejectsChecksumMismatchPostgres(t *testing.T) {
 		t.Fatal("Migrate accepted a changed applied migration")
 	}
 	if !strings.Contains(err.Error(), "checksum mismatch") ||
-		!strings.Contains(err.Error(), "applied migrations are immutable") {
-		t.Fatalf("Migrate error = %q, want checksum-mismatch immutability guidance", err)
+		!strings.Contains(err.Error(), "changed since this database was created") ||
+		!strings.Contains(err.Error(), "current fresh-deployment baseline") ||
+		!strings.Contains(err.Error(), "new empty database") ||
+		!strings.Contains(err.Error(), "recorded tampered") {
+		t.Fatalf("Migrate error = %q, want checksum-mismatch and fresh-deploy guidance", err)
+	}
+	if strings.Contains(err.Error(), "applied migrations are immutable") {
+		t.Fatalf("Migrate error = %q, want alpha baseline-change guidance instead of post-beta immutability guidance", err)
 	}
 }
 

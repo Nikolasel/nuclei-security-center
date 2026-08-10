@@ -242,8 +242,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 			)
 		case *recordedChecksum != migration.checksum:
 			return fmt.Errorf(
-				"migration %s checksum mismatch: applied migrations are immutable (recorded %s, embedded %s)",
-				migration.name, *recordedChecksum, migration.checksum,
+				"migration %s checksum mismatch: %s (changed since this database was created; recorded %s, embedded %s)",
+				migration.name, unsupportedMigrationHistory, *recordedChecksum, migration.checksum,
 			)
 		}
 	}

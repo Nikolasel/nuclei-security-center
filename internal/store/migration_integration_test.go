@@ -225,6 +225,63 @@ func TestBaselineSeedsAppSettingsPostgres(t *testing.T) {
 	}
 }
 
+func TestSessionHashMigrationRewritesExistingCookieValuesPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st, _ := openEmptyIsolatedPostgres(t, ctx, dsn)
+
+	baselineSQL, err := migrationsFS.ReadFile("migrations/0001_init.sql")
+	if err != nil {
+		t.Fatalf("read baseline migration: %v", err)
+	}
+	if _, err := st.pool.Exec(ctx, string(baselineSQL)); err != nil {
+		t.Fatalf("apply baseline migration: %v", err)
+	}
+	baselineChecksum := sha256.Sum256(baselineSQL)
+	if _, err := st.pool.Exec(ctx, `
+		CREATE TABLE schema_migrations (
+			version TEXT PRIMARY KEY,
+			checksum_sha256 TEXT,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`); err != nil {
+		t.Fatalf("record baseline migration: %v", err)
+	}
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO schema_migrations (version, checksum_sha256) VALUES ('0001_init.sql', $1)`,
+		fmt.Sprintf("%x", baselineChecksum)); err != nil {
+		t.Fatalf("record baseline migration checksum: %v", err)
+	}
+
+	const cookieValue = "legacy-session-cookie"
+	const subject = "legacy-session-user"
+	if _, err := st.pool.Exec(ctx, `
+		INSERT INTO sessions (id, subject, roles, expires_at)
+		VALUES ($1, $2, '{}', now() + interval '1 hour')
+	`, cookieValue, subject); err != nil {
+		t.Fatalf("insert legacy session: %v", err)
+	}
+
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("apply forward migrations: %v", err)
+	}
+
+	var storedID string
+	if err := st.pool.QueryRow(ctx, `SELECT id FROM sessions WHERE subject = $1`, subject).Scan(&storedID); err != nil {
+		t.Fatalf("read migrated session id: %v", err)
+	}
+	if storedID == cookieValue {
+		t.Fatal("session hash migration left the bearer-equivalent cookie value at rest")
+	}
+	if storedID != hashSessionID(cookieValue) {
+		t.Fatalf("migrated sessions.id = %q, want hash %q", storedID, hashSessionID(cookieValue))
+	}
+}
+
 func TestScannerNodeCapacityDefaultsAndPersistsPostgres(t *testing.T) {
 	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
 	if dsn == "" {

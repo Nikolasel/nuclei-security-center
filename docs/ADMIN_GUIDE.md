@@ -53,9 +53,9 @@ and the backend/SPA. Demo users use their username as the password:
 Keycloak's local admin console is at <http://localhost:8082> (`admin` / `admin`). These seeded
 credentials and the compose defaults are for local development only.
 
-A fresh backend creates `schema_migrations`, applies the single beta baseline, seeds the configured
-default scanner node, and starts the scheduler, template sync/distribution, node-health monitor,
-and retention sweeper.
+A fresh backend creates `schema_migrations`, applies the beta baseline and forward migrations, seeds
+the configured default scanner node, and starts the scheduler, template sync/distribution,
+node-health monitor, and retention sweeper.
 
 ### Production deployment
 
@@ -121,8 +121,14 @@ are insert-only by node name; PostgreSQL and subsequent API/UI edits are authori
 | `OIDC_OPERATOR_GROUP` | `operator` | Group mapped to NSC operator. |
 | `OIDC_VIEWER_GROUP` | `viewer` | Group mapped to NSC viewer. |
 | `SESSION_TTL` | `12h` | Server-side session lifetime. |
-| `SESSION_COOKIE_NAME` | `nsc_session` | Session cookie name. |
+| `SESSION_COOKIE_NAME` | `__Host-nsc_session` when `COOKIE_SECURE=true`; `nsc_session` otherwise | Session cookie name. Secure deployments enforce the `__Host-` prefix. |
 | `COOKIE_SECURE` | `true` | Secure-cookie flag. Set `false` only for local plaintext HTTP. |
+
+When `COOKIE_SECURE=true`, the session cookie is host-locked: it uses the `__Host-` prefix, `Path=/`,
+`Secure`, and no `Domain` attribute. This prevents a sibling subdomain from setting a competing
+session cookie for the backend. Existing sessions remain valid across the migration, but their
+database identifiers are stored only as SHA-256 hashes. Set `COOKIE_SECURE=false` only for local
+plaintext HTTP, where browsers reject `__Host-` cookies.
 
 ### Object storage
 

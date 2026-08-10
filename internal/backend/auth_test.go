@@ -200,6 +200,51 @@ func TestAuthStateCookieAttributes(t *testing.T) {
 	}
 }
 
+func TestSessionCookieUsesHostPrefixWhenSecure(t *testing.T) {
+	a := &Authenticator{cfg: AuthConfig{
+		CookieName:   "nsc_session",
+		SecureCookie: true,
+	}}
+	rr := httptest.NewRecorder()
+	a.setSessionCookie(rr, "session-token", time.Now().Add(time.Hour))
+
+	cookies := rr.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("Set-Cookie count = %d, want 1", len(cookies))
+	}
+	cookie := cookies[0]
+	if cookie.Name != "__Host-nsc_session" {
+		t.Fatalf("session cookie name = %q, want __Host-nsc_session", cookie.Name)
+	}
+	if cookie.Path != "/" || cookie.Domain != "" || !cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode {
+		t.Fatalf("session cookie attributes = %#v, want Secure HttpOnly SameSite=Lax Path=/ without Domain", cookie)
+	}
+
+	clear := httptest.NewRecorder()
+	a.clearSessionCookie(clear)
+	cleared := clear.Result().Cookies()
+	if len(cleared) != 1 {
+		t.Fatalf("clear Set-Cookie count = %d, want 1", len(cleared))
+	}
+	if cleared[0].Name != cookie.Name || cleared[0].Path != "/" || cleared[0].Domain != "" || cleared[0].MaxAge != -1 || !cleared[0].Secure {
+		t.Fatalf("cleared session cookie = %#v, want matching host-only cookie", cleared[0])
+	}
+}
+
+func TestSessionCookieKeepsLocalDevelopmentNameWithoutSecure(t *testing.T) {
+	a := &Authenticator{cfg: AuthConfig{SecureCookie: false}}
+	rr := httptest.NewRecorder()
+	a.setSessionCookie(rr, "session-token", time.Now().Add(time.Hour))
+
+	cookies := rr.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("Set-Cookie count = %d, want 1", len(cookies))
+	}
+	if cookies[0].Name != "nsc_session" || cookies[0].Secure {
+		t.Fatalf("local session cookie = %#v, want nsc_session without Secure", cookies[0])
+	}
+}
+
 func TestHandleLoginBindsCookieToRedirectStatePostgres(t *testing.T) {
 	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
 	if dsn == "" {

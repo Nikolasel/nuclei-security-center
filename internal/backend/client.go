@@ -203,6 +203,9 @@ func (c *ScannerClient) StartScan(ctx context.Context, spec types.ScanSpec) (str
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
+		if resp.StatusCode == http.StatusTooManyRequests {
+			return "", fmt.Errorf("%w: start scan: %s", ErrScanCapacity, statusErr(resp))
+		}
 		return "", fmt.Errorf("start scan: %s", statusErr(resp))
 	}
 	var out types.StartScanResponse

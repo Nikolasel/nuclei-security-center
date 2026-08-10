@@ -362,7 +362,8 @@ schedules, or the database — only how to run one scan and hand back results.
   CIDRs are non-overlapping, so a target's IP maps to exactly one node — no load-balancing. Each
   node also owns an independently configured `max_concurrent_scans` admission limit in the registry;
   the backend uses it for per-node polling admission and sends it with dispatch so the node enforces
-  the same local budget. `SCANNER_MAX_CONCURRENT_SCANS` is only the standalone-node fallback.
+  the same local budget. If the node gate is temporarily ahead of the backend's in-memory view, the
+  admitted dispatch retries rather than recording a permanent capacity failure. `SCANNER_MAX_CONCURRENT_SCANS` is only the standalone-node fallback.
   **Not** self-registration: nodes never call the backend (see the invariant below). The backend
   polls each node's `GET /v1/capabilities` for liveness (#98), and dispatch fails fast to a
   known-unhealthy node.

@@ -293,8 +293,11 @@ that do not exist; they never overwrite admin edits or delete nodes.
 - All IP targets in one scan must map to the same node.
 - Deleting the last catch-all is refused.
 - `max_concurrent_scans` is configured independently per node in **Scanner Nodes**. It bounds both
-  backend polling goroutines and node-side scan admission; a capacity rejection returns HTTP `429`
-  and does not create a scan row. The default is `20`, with a hard range of `1`–`100`.
+  backend polling goroutines and node-side scan admission. If the backend's local view is full,
+  `POST /api/scans` returns HTTP `429` without creating a scan row. If the node's independent gate
+  is full, the already-admitted backend dispatch retries without marking the scan failed; the backend
+  admission still bounds the number of waiting dispatches. The default is `20`, with a hard range of
+  `1`–`100`.
 - Dispatch fails fast when the selected node is known unhealthy.
 - Bundle distribution targets only stale, idle nodes; a busy node may return `409` until its scan
   releases the active template tree.

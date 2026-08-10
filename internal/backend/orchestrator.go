@@ -327,6 +327,31 @@ func (o *Orchestrator) Submit(ctx context.Context, spec types.ScanSpec, link sto
 	return scanID, nil
 }
 
+const scannerCapacityRetryDelay = time.Second
+
+// startScanWithRetry keeps an admitted scan queued in its bounded backend
+// admission slot when the node is temporarily fuller than the backend's local
+// view. The backend admission still bounds the number of waiting goroutines;
+// the run context bounds how long a node-capacity divergence can persist.
+func startScanWithRetry(ctx context.Context, client *ScannerClient, spec types.ScanSpec) (string, error) {
+	for {
+		nodeScanID, err := client.StartScan(ctx, spec)
+		if !errors.Is(err, ErrScanCapacity) {
+			return nodeScanID, err
+		}
+
+		timer := time.NewTimer(scannerCapacityRetryDelay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return "", ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
 func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec, node store.ScannerNode) {
 	// Detached from the request context. The ceiling is derived from THIS scan's
 	// timeouts (discovery + Nuclei run sequentially on the node), not a fixed value:
@@ -363,7 +388,7 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec, node st
 		return
 	}
 
-	nodeScanID, err := client.StartScan(ctx, spec)
+	nodeScanID, err := startScanWithRetry(ctx, client, spec)
 	if err != nil {
 		// No status response yet at this point -- nothing to record.
 		o.failScan(ctx, scanID, "dispatch: "+err.Error(), "", "")

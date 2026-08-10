@@ -75,3 +75,16 @@ func TestAdmissionOmittedLimitRestoresLocalFallback(t *testing.T) {
 	admission.release()
 	admission.release()
 }
+
+func TestAdmissionReleaseDoesNotUnderflow(t *testing.T) {
+	admission := newScanAdmission(1)
+	admission.release()
+
+	if err := admission.acquire(0); err != nil {
+		t.Fatalf("first acquire after unmatched release: %v", err)
+	}
+	if err := admission.acquire(0); !errors.Is(err, ErrScanCapacity) {
+		t.Fatalf("second acquire after unmatched release = %v, want ErrScanCapacity", err)
+	}
+	admission.release()
+}

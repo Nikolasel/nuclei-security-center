@@ -64,6 +64,8 @@ func (a *scanAdmission) acquire(requestedLimit int) error {
 
 func (a *scanAdmission) release() {
 	a.mu.Lock()
-	a.active--
+	if a.active > 0 {
+		a.active--
+	}
 	a.mu.Unlock()
 }

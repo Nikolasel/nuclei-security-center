@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -39,6 +40,8 @@ type Options struct {
 	PasswordFile string
 }
 
+const defaultStatementTimeout = 30 * time.Second
+
 // Open connects to Postgres and returns a Store. The caller must Close it.
 func Open(ctx context.Context, dsn string) (*Store, error) {
 	return OpenWithOptions(ctx, dsn, Options{})
@@ -50,6 +53,26 @@ func OpenWithOptions(ctx context.Context, dsn string, opts Options) (*Store, err
 	if err != nil {
 		return nil, fmt.Errorf("parse postgres dsn: %w", err)
 	}
+	configurePool(cfg, opts)
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("connect postgres: %w", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("ping postgres: %w", err)
+	}
+	return &Store{pool: pool}, nil
+}
+
+func configurePool(cfg *pgxpool.Config, opts Options) {
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	// Apply a server-side backstop to every statement issued through this pool.
+	// Request-specific validation remains the first line of defense, while this
+	// prevents an unexpectedly expensive query from running indefinitely.
+	cfg.ConnConfig.RuntimeParams["statement_timeout"] = strconv.FormatInt(defaultStatementTimeout.Milliseconds(), 10)
 	if opts.PasswordFile != "" {
 		// BeforeConnect runs before pgx establishes each new pooled connection,
 		// so re-reading the file here means a rotated password is applied to
@@ -65,15 +88,6 @@ func OpenWithOptions(ctx context.Context, dsn string, opts Options) (*Store, err
 			return nil
 		}
 	}
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("connect postgres: %w", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("ping postgres: %w", err)
-	}
-	return &Store{pool: pool}, nil
 }
 
 // readPasswordFile reads a password from a file, trimming a single trailing
@@ -130,6 +144,12 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return fmt.Errorf("begin migration transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// Migrations may build indexes or rewrite populated tables and legitimately
+	// outlive the request-query timeout. Keep the longer-running work scoped to
+	// this transaction; pooled request connections retain the 30-second backstop.
+	if _, err := tx.Exec(ctx, `SET LOCAL statement_timeout = 0`); err != nil {
+		return fmt.Errorf("disable statement timeout for migrations: %w", err)
+	}
 	if _, err := tx.Exec(ctx, `
 		SELECT pg_advisory_xact_lock(hashtext(current_database()), hashtext(current_schema()))
 	`); err != nil {
@@ -848,6 +868,26 @@ type FindingFilter struct {
 	Offset     int
 }
 
+// ValidateFindingFilter checks the legacy per-scan occurrence filter before it
+// reaches SQL. It shares the same value bounds as FindingQuery so the scan-detail
+// path cannot bypass the resource limits on the lifecycle findings path.
+func ValidateFindingFilter(f FindingFilter) error {
+	for _, field := range []struct {
+		name  string
+		value string
+	}{
+		{name: "query", value: f.Query},
+		{name: "host", value: f.Host},
+		{name: "cve", value: f.CVE},
+		{name: "tag", value: f.Tag},
+	} {
+		if field.value != "" && len(field.value) > maxFilterValueBytes {
+			return fmt.Errorf("finding filter %s exceeds %d-byte limit", field.name, maxFilterValueBytes)
+		}
+	}
+	return validateFilterValues(f.Severities)
+}
+
 // severityOrder ranks findings so the most severe sort first, server-side.
 const severityOrder = `CASE lower(severity)
 	WHEN 'critical' THEN 5 WHEN 'high' THEN 4 WHEN 'medium' THEN 3
@@ -856,6 +896,9 @@ const severityOrder = `CASE lower(severity)
 // ListFindings returns a page of findings (severity-sorted, then newest first)
 // plus the total count matching the filter (ignoring Limit/Offset).
 func (s *Store) ListFindings(ctx context.Context, f FindingFilter) ([]FindingRow, int, error) {
+	if err := ValidateFindingFilter(f); err != nil {
+		return nil, 0, err
+	}
 	if f.Limit <= 0 || f.Limit > 500 {
 		f.Limit = 50
 	}

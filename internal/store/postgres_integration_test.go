@@ -22,6 +22,10 @@ func openIsolatedPostgres(t *testing.T, ctx context.Context, dsn string) *Store 
 }
 
 func openEmptyIsolatedPostgres(t *testing.T, ctx context.Context, dsn string) (*Store, string) {
+	return openEmptyIsolatedPostgresWithRuntimeParams(t, ctx, dsn, nil)
+}
+
+func openEmptyIsolatedPostgresWithRuntimeParams(t *testing.T, ctx context.Context, dsn string, runtimeParams map[string]string) (*Store, string) {
 	t.Helper()
 	admin, err := Open(ctx, dsn)
 	if err != nil {
@@ -46,7 +50,13 @@ func openEmptyIsolatedPostgres(t *testing.T, ctx context.Context, dsn string) (*
 	if err != nil {
 		t.Fatalf("parse test database URL: %v", err)
 	}
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = make(map[string]string)
+	}
 	cfg.ConnConfig.RuntimeParams["search_path"] = schema
+	for key, value := range runtimeParams {
+		cfg.ConnConfig.RuntimeParams[key] = value
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		t.Fatalf("open isolated schema pool: %v", err)

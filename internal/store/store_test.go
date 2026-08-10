@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestReadPasswordFile(t *testing.T) {
@@ -48,5 +50,17 @@ func TestReadPasswordFileMissing(t *testing.T) {
 func TestOpenWithOptionsBadDSN(t *testing.T) {
 	if _, err := OpenWithOptions(context.Background(), "://not a dsn", Options{}); err == nil {
 		t.Fatal("expected parse error for malformed DSN, got nil")
+	}
+}
+
+func TestConfigurePoolSetsStatementTimeout(t *testing.T) {
+	cfg, err := pgxpool.ParseConfig("postgres://localhost/nsc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configurePool(cfg, Options{})
+
+	if got := cfg.ConnConfig.RuntimeParams["statement_timeout"]; got != "30000" {
+		t.Fatalf("statement_timeout = %q, want 30000 milliseconds", got)
 	}
 }

@@ -306,6 +306,111 @@ func TestMigrateRollsBackSQLWhenHistoryRecordFailsPostgres(t *testing.T) {
 	}
 }
 
+func TestMigrateLiftsPoolStatementTimeoutForTransactionPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st, _ := openEmptyIsolatedPostgresWithRuntimeParams(t, ctx, dsn, map[string]string{
+		"statement_timeout": "100ms",
+	})
+	if _, err := st.pool.Exec(ctx, `
+		CREATE TABLE schema_migrations (
+			version TEXT PRIMARY KEY,
+			checksum_sha256 TEXT,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE FUNCTION delay_migration_record_for_timeout() RETURNS trigger
+		LANGUAGE plpgsql AS $$
+		BEGIN
+			PERFORM pg_sleep(0.25);
+			RETURN NEW;
+		END;
+		$$;
+		CREATE TRIGGER delay_migration_record_for_timeout
+			BEFORE INSERT ON schema_migrations
+			FOR EACH ROW EXECUTE FUNCTION delay_migration_record_for_timeout();
+	`); err != nil {
+		t.Fatalf("install delayed migration history trigger: %v", err)
+	}
+
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate with a delayed history record = %v, want timeout lifted locally", err)
+	}
+
+	var timeout string
+	if err := st.pool.QueryRow(ctx, `SHOW statement_timeout`).Scan(&timeout); err != nil {
+		t.Fatalf("read pool statement_timeout after migration: %v", err)
+	}
+	if timeout != "100ms" {
+		t.Fatalf("pool statement_timeout after migration = %q, want 100ms", timeout)
+	}
+}
+
+func TestMigrateWaitsForAdvisoryLockBeyondPoolStatementTimeoutPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	st, _ := openEmptyIsolatedPostgresWithRuntimeParams(t, ctx, dsn, map[string]string{
+		"statement_timeout": "500ms",
+	})
+	lockTx, err := st.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin lock holder transaction: %v", err)
+	}
+	defer func() { _ = lockTx.Rollback(ctx) }()
+	if _, err := lockTx.Exec(ctx, `
+		SELECT pg_advisory_xact_lock(hashtext(current_database()), hashtext(current_schema()))
+	`); err != nil {
+		t.Fatalf("acquire migration advisory lock: %v", err)
+	}
+
+	migrateErr := make(chan error, 1)
+	go func() { migrateErr <- st.Migrate(ctx) }()
+
+	waitCtx, waitCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer waitCancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var waiting bool
+		if err := st.pool.QueryRow(waitCtx, `
+			SELECT EXISTS (
+				SELECT 1
+				  FROM pg_locks
+				 WHERE locktype = 'advisory' AND NOT granted
+			)
+		`).Scan(&waiting); err != nil {
+			t.Fatalf("inspect migration lock wait: %v", err)
+		}
+		if waiting {
+			break
+		}
+		select {
+		case <-waitCtx.Done():
+			t.Fatalf("Migrate did not reach the advisory lock wait: %v", waitCtx.Err())
+		case <-ticker.C:
+		}
+	}
+
+	// Keep the lock held beyond the pool timeout so the regression fails when
+	// SET LOCAL is still placed after the advisory-lock statement.
+	time.Sleep(750 * time.Millisecond)
+	if err := lockTx.Commit(ctx); err != nil {
+		t.Fatalf("release migration advisory lock: %v", err)
+	}
+	if err := <-migrateErr; err != nil {
+		t.Fatalf("Migrate after waiting for the advisory lock = %v, want success", err)
+	}
+}
+
 func TestMigrateSerializesConcurrentStartsPostgres(t *testing.T) {
 	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
 	if dsn == "" {

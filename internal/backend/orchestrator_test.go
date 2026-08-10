@@ -88,6 +88,7 @@ func TestScanFindingLinesSkipsOversizedRecordAndContinues(t *testing.T) {
 
 func TestReadFindingLineMatchesScanLineEndingsAndLimits(t *testing.T) {
 	payload := strings.Repeat("x", maxFindingLineBytes)
+	jsonLine := `{"template-id":"t","host":"h"}`
 	cases := []struct {
 		name         string
 		input        string
@@ -112,6 +113,18 @@ func TestReadFindingLineMatchesScanLineEndingsAndLimits(t *testing.T) {
 			input:    "\r\n",
 			maxBytes: maxFindingLineBytes,
 			want:     "",
+		},
+		{
+			name:     "content CR before CRLF",
+			input:    "content\r\r\n",
+			maxBytes: len("content\r"),
+			want:     "content\r",
+		},
+		{
+			name:     "JSON content CR before CRLF",
+			input:    jsonLine + "\r\r\n",
+			maxBytes: len(jsonLine) + 1,
+			want:     jsonLine + "\r",
 		},
 		{
 			name:     "CRLF split at reader boundary",

@@ -613,11 +613,15 @@ for hostname targets and IPs matching no other node. Reads need `viewer`; create
 curl -sb jar.txt localhost:8080/api/nodes
 # add a node serving a CIDR range
 curl -sb jar.txt -X POST localhost:8080/api/nodes \
-  -d '{"name":"corp","endpoint":"http://scanner-corp:8081","token":"<bearer>","cidrs":["10.0.0.0/8"],"tags":["corp"]}'
+  -d '{"name":"corp","endpoint":"http://scanner-corp:8081","token":"<bearer>","cidrs":["10.0.0.0/8"],"tags":["corp"],"max_concurrent_scans":4}'
 ```
 
 - `token` is **write-only** — required on create, never returned by `GET`. On update, **leave it
   blank to keep the stored one** (so other fields can be edited without re-supplying the secret).
+- `max_concurrent_scans` is the per-node admission limit for both backend polling work and the
+  scanner process. It defaults to `20` and accepts `1`–`100`; configure smaller values for constrained
+  nodes and larger values only when that node's CPU, memory, raw-socket, and egress budget supports it.
+  The value is independently editable for every node in the Scanner Nodes admin page.
 - CIDRs must **not overlap** another node (`400`), so a target's IP maps to exactly one node. A scan
   whose targets span two nodes is rejected. Deleting the **last** catch-all node is refused (`409`),
   so hostname targets always have somewhere to dispatch.

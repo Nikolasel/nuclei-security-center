@@ -145,7 +145,7 @@ func TestValidationDiagnosticsTruncatesAtUTF8Boundary(t *testing.T) {
 
 func newTestRunner(t *testing.T, nuclei string) *Runner {
 	t.Helper()
-	runner, err := NewRunner(nuclei, "/unused/naabu", "connect", t.TempDir())
+	runner, err := NewRunner(nuclei, "/unused/naabu", "connect", t.TempDir(), 1)
 	if err != nil {
 		t.Fatal(err)
 	}

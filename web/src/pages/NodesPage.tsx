@@ -5,6 +5,9 @@ import { hasRole, useMe } from "../auth";
 import { Button, Card, ErrorText, Field, Input, Modal, Pill, Spinner } from "../components/ui";
 import { parseList } from "../util";
 
+const defaultMaxConcurrentScans = 20;
+const maxConcurrentScansCeiling = 100;
+
 function fmtTime(s?: string) {
   return s ? new Date(s).toLocaleString() : "—";
 }
@@ -36,6 +39,9 @@ function NodeModal({ existing, onClose }: { existing?: ScannerNode; onClose: () 
   const [token, setToken] = useState("");
   const [cidrs, setCidrs] = useState((existing?.cidrs ?? []).join("\n"));
   const [tags, setTags] = useState((existing?.tags ?? []).join(", "));
+  const [maxConcurrentScans, setMaxConcurrentScans] = useState(
+    String(existing?.max_concurrent_scans ?? defaultMaxConcurrentScans),
+  );
   // Per-node mTLS (#26). The server CA and client cert are public, so they are
   // returned and pre-filled; the client key is write-only, so it starts blank and
   // a blank value on edit keeps the stored key (like the token).
@@ -44,6 +50,13 @@ function NodeModal({ existing, onClose }: { existing?: ScannerNode; onClose: () 
   const [serverCA, setServerCA] = useState(existing?.tls_server_ca ?? "");
   const [clientCert, setClientCert] = useState(existing?.tls_client_cert ?? "");
   const [clientKey, setClientKey] = useState("");
+
+  const maxConcurrentScansNum = Number(maxConcurrentScans);
+  const maxConcurrentScansValid =
+    maxConcurrentScans.trim() !== "" &&
+    Number.isInteger(maxConcurrentScansNum) &&
+    maxConcurrentScansNum >= 1 &&
+    maxConcurrentScansNum <= maxConcurrentScansCeiling;
 
   const save = useMutation({
     mutationFn: () => {
@@ -54,6 +67,7 @@ function NodeModal({ existing, onClose }: { existing?: ScannerNode; onClose: () 
         token: token.trim() || undefined,
         cidrs: parseList(cidrs),
         tags: parseList(tags),
+        max_concurrent_scans: maxConcurrentScansNum,
         tls_server_ca: serverCA.trim(),
         tls_client_cert: clientCert.trim(),
         // Blank client key on edit keeps the stored one (write-only secret).
@@ -104,6 +118,22 @@ function NodeModal({ existing, onClose }: { existing?: ScannerNode; onClose: () 
           A node with no CIDRs is a catch-all for hostname targets and IPs matching no other node.
           CIDRs must not overlap another node.
         </p>
+        <Field label="Maximum concurrent scans">
+          <Input
+            type="number"
+            min={1}
+            max={maxConcurrentScansCeiling}
+            value={maxConcurrentScans}
+            onChange={(e) => setMaxConcurrentScans(e.target.value)}
+            className="max-w-[12rem]"
+          />
+        </Field>
+        {!maxConcurrentScansValid && (
+          <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
+            Enter a whole number from 1 to {maxConcurrentScansCeiling}. This limit protects this
+            node&apos;s process, memory, and outbound scan budget.
+          </p>
+        )}
         <Field label="Tags (comma separated)">
           <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="corp, internal" />
         </Field>
@@ -167,7 +197,7 @@ function NodeModal({ existing, onClose }: { existing?: ScannerNode; onClose: () 
           <Button onClick={onClose}>Cancel</Button>
           <Button
             variant="primary"
-            disabled={save.isPending || !name.trim() || !endpoint.trim() || tokenMissing}
+            disabled={save.isPending || !name.trim() || !endpoint.trim() || tokenMissing || !maxConcurrentScansValid}
             onClick={() => save.mutate()}
           >
             {save.isPending ? "Saving…" : "Save"}
@@ -239,6 +269,7 @@ export function NodesPage() {
                   <th className="px-3 py-2 font-medium">Health</th>
                   <th className="px-3 py-2 font-medium">Endpoint</th>
                   <th className="px-3 py-2 font-medium">CIDRs</th>
+                  <th className="px-3 py-2 font-medium">Capacity</th>
                   <th className="px-3 py-2 font-medium">Nuclei</th>
                   <th className="px-3 py-2 font-medium">Catalog bundle</th>
                   <th className="px-3 py-2 font-medium">Last seen</th>
@@ -269,6 +300,7 @@ export function NodesPage() {
                     <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">
                       {n.cidrs.length ? n.cidrs.join(", ") : <span className="text-neutral-400">catch-all</span>}
                     </td>
+                    <td className="px-3 py-2 text-neutral-500">{n.max_concurrent_scans}</td>
                     <td className="px-3 py-2 text-neutral-500">{n.nuclei_version || "—"}</td>
                     <td className="px-3 py-2 text-neutral-500">
                       <div className="font-mono text-xs" title={n.templates_commit}>
@@ -312,7 +344,7 @@ export function NodesPage() {
                 ))}
                 {(q.data ?? []).length === 0 && (
                   <tr>
-                    <td colSpan={isAdmin ? 9 : 8} className="px-3 py-8 text-center text-neutral-400">
+                    <td colSpan={isAdmin ? 10 : 9} className="px-3 py-8 text-center text-neutral-400">
                       No scanner nodes.
                     </td>
                   </tr>

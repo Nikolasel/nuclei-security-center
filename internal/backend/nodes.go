@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
 // Scanner node config seeding (#22). The DB (scanner_nodes) is the system of
@@ -25,13 +26,14 @@ import (
 // optional TLS fields seed per-node mTLS (#26) so a segmented node can be brought
 // up over mTLS straight from config; thereafter the DB is the source of truth.
 type ScanZoneConfig struct {
-	Name          string   `json:"name"`
-	CIDRs         []string `json:"cidrs"`
-	URL           string   `json:"url"`
-	Token         string   `json:"token"`
-	TLSServerCA   string   `json:"tls_server_ca"`
-	TLSClientCert string   `json:"tls_client_cert"`
-	TLSClientKey  string   `json:"tls_client_key"`
+	Name               string   `json:"name"`
+	CIDRs              []string `json:"cidrs"`
+	URL                string   `json:"url"`
+	Token              string   `json:"token"`
+	MaxConcurrentScans int      `json:"max_concurrent_scans"`
+	TLSServerCA        string   `json:"tls_server_ca"`
+	TLSClientCert      string   `json:"tls_client_cert"`
+	TLSClientKey       string   `json:"tls_client_key"`
 }
 
 // SeedScannerNodes seeds the scanner_nodes table from config on startup. The
@@ -85,10 +87,11 @@ func SeedScannerNodes(ctx context.Context, st *store.Store, defaultURL, defaultT
 // contract mirroring the old BuildDispatcher.
 func parseNodeConfig(defaultURL, defaultToken, zonesJSON string) ([]store.ScannerNode, error) {
 	nodes := []store.ScannerNode{{
-		Name:     "default",
-		Endpoint: defaultURL,
-		Token:    defaultToken,
-		CIDRs:    []string{},
+		Name:               "default",
+		Endpoint:           defaultURL,
+		Token:              defaultToken,
+		CIDRs:              []string{},
+		MaxConcurrentScans: types.DefaultMaxConcurrentScans,
 	}}
 	if err := validateNodeEndpoint(strings.TrimSpace(defaultURL)); err != nil {
 		return nil, fmt.Errorf("SCANNER_URL: %w", err)
@@ -115,13 +118,14 @@ func parseNodeConfig(defaultURL, defaultToken, zonesJSON string) ([]store.Scanne
 				cidrs = append(cidrs, strings.TrimSpace(cidr))
 			}
 			nodes = append(nodes, store.ScannerNode{
-				Name:          name,
-				Endpoint:      c.URL,
-				Token:         c.Token,
-				CIDRs:         cidrs,
-				TLSServerCA:   c.TLSServerCA,
-				TLSClientCert: c.TLSClientCert,
-				TLSClientKey:  c.TLSClientKey,
+				Name:               name,
+				Endpoint:           c.URL,
+				Token:              c.Token,
+				CIDRs:              cidrs,
+				MaxConcurrentScans: effectiveMaxConcurrentScans(c.MaxConcurrentScans),
+				TLSServerCA:        c.TLSServerCA,
+				TLSClientCert:      c.TLSClientCert,
+				TLSClientKey:       c.TLSClientKey,
 			})
 		}
 	}
@@ -144,6 +148,9 @@ func validateNodeConfig(nodes []store.ScannerNode) error {
 		seen[n.Name] = true
 		if err := validateNodeEndpoint(strings.TrimSpace(n.Endpoint)); err != nil {
 			return fmt.Errorf("SCAN_ZONES: zone %q: %w", n.Name, err)
+		}
+		if n.MaxConcurrentScans < 1 || n.MaxConcurrentScans > types.MaxConcurrentScansCeiling {
+			return fmt.Errorf("SCAN_ZONES: zone %q: max_concurrent_scans must be between 1 and %d", n.Name, types.MaxConcurrentScansCeiling)
 		}
 		for _, cidr := range n.CIDRs {
 			_, ipnet, err := net.ParseCIDR(cidr)
@@ -173,9 +180,17 @@ func nodeDiffersFromConfig(stored store.ScannerNode, cfg store.ScannerNode) bool
 	return stored.Endpoint != cfg.Endpoint ||
 		stored.Token != cfg.Token ||
 		!sameStringSet(stored.CIDRs, cfg.CIDRs) ||
+		stored.MaxConcurrentScans != effectiveMaxConcurrentScans(cfg.MaxConcurrentScans) ||
 		stored.TLSServerCA != cfg.TLSServerCA ||
 		stored.TLSClientCert != cfg.TLSClientCert ||
 		stored.TLSClientKey != cfg.TLSClientKey
+}
+
+func effectiveMaxConcurrentScans(value int) int {
+	if value == 0 {
+		return types.DefaultMaxConcurrentScans
+	}
+	return value
 }
 
 func sameStringSet(a, b []string) bool {

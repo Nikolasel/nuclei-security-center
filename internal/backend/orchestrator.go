@@ -27,6 +27,7 @@ type Orchestrator struct {
 	health      *HealthMonitor       // nil disables health-aware dispatch
 	distributor *TemplateDistributor // pre-dispatch catalog top-up (#85)
 	log         *slog.Logger
+	admission   *scanAdmission
 
 	pollInterval time.Duration
 
@@ -52,6 +53,7 @@ func NewOrchestrator(st *store.Store, archiver ObjectStore, health *HealthMonito
 		archiver:     archiver,
 		health:       health,
 		log:          log,
+		admission:    newScanAdmission(),
 		pollInterval: 3 * time.Second,
 		progress:     make(map[string]*types.ScanProgress),
 		discovered:   make(map[string][]string),
@@ -73,20 +75,28 @@ func (o *Orchestrator) Health() *HealthMonitor { return o.health }
 // error rather than dispatching into a black hole; a not-yet-polled node
 // dispatches optimistically.
 func (o *Orchestrator) clientForScan(ctx context.Context, targets []string) (*ScannerClient, store.ScannerNode, error) {
-	node, err := o.store.SelectScannerNode(ctx, targets)
+	node, err := o.selectScanNode(ctx, targets)
 	if err != nil {
 		return nil, store.ScannerNode{}, err
-	}
-	if o.health != nil {
-		if h, known := o.health.Get(node.ID); known && !h.Healthy {
-			return nil, store.ScannerNode{}, fmt.Errorf("matching scanner node %q is unhealthy (last seen %s)", node.Name, lastSeenText(h.LastSeen))
-		}
 	}
 	client, err := clientForNode(node)
 	if err != nil {
 		return nil, store.ScannerNode{}, err
 	}
 	return client, node, nil
+}
+
+func (o *Orchestrator) selectScanNode(ctx context.Context, targets []string) (store.ScannerNode, error) {
+	node, err := o.store.SelectScannerNode(ctx, targets)
+	if err != nil {
+		return store.ScannerNode{}, err
+	}
+	if o.health != nil {
+		if h, known := o.health.Get(node.ID); known && !h.Healthy {
+			return store.ScannerNode{}, fmt.Errorf("matching scanner node %q is unhealthy (last seen %s)", node.Name, lastSeenText(h.LastSeen))
+		}
+	}
+	return node, nil
 }
 
 // lastSeenText renders a node's last-successful-poll time for an error message,
@@ -288,15 +298,36 @@ func appendFindingSkipDetail(details []string, lineNumber int, reason string) []
 // runs the dispatch/poll/ingest loop in the background. It returns the backend
 // scan id immediately.
 func (o *Orchestrator) Submit(ctx context.Context, spec types.ScanSpec, link store.ScanLink) (string, error) {
-	scanID, err := o.store.CreateScan(ctx, spec, link)
+	node, err := o.selectScanNode(ctx, spec.Targets)
 	if err != nil {
 		return "", err
 	}
-	go o.run(scanID, link.TargetID, spec)
+	limit := effectiveMaxConcurrentScans(node.MaxConcurrentScans)
+	if o.admission != nil {
+		if err := o.admission.acquire(node.ID, limit); err != nil {
+			return "", err
+		}
+	}
+	spec.MaxConcurrentScans = limit
+	scanID, err := o.store.CreateScan(ctx, spec, link)
+	if err != nil {
+		if o.admission != nil {
+			o.admission.release(node.ID)
+		}
+		return "", err
+	}
+	go func() {
+		defer func() {
+			if o.admission != nil {
+				o.admission.release(node.ID)
+			}
+		}()
+		o.run(scanID, link.TargetID, spec, node)
+	}()
 	return scanID, nil
 }
 
-func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
+func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec, node store.ScannerNode) {
 	// Detached from the request context. The ceiling is derived from THIS scan's
 	// timeouts (discovery + Nuclei run sequentially on the node), not a fixed value:
 	// #86's discovery pre-pass adds its own budget on top of the Nuclei timeout, so a
@@ -311,8 +342,10 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec) {
 
 	log := o.log.With("scan_id", scanID)
 
-	// Resolve the scanner node serving the scan's targets from the registry (#22).
-	client, node, err := o.clientForScan(ctx, spec.Targets)
+	// Submit selected and admitted this node before creating the scan row. Keep the
+	// same snapshot through dispatch so a registry edit cannot move an admitted
+	// backend goroutine to a different node's capacity bucket.
+	client, err := clientForNode(node)
 	if err != nil {
 		// No node was contacted yet, so no version is known to record.
 		o.failScan(ctx, scanID, "dispatch: "+err.Error(), "", "")

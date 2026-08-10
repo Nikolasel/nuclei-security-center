@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -39,7 +40,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	runner, err := scanner.NewRunner(nucleiPath, naabuPath, naabuScanType, workRoot)
+	runner, err := scanner.NewRunner(nucleiPath, naabuPath, naabuScanType, workRoot, scannerMaxConcurrentScans())
 	if err != nil {
 		log.Error("init runner", "err", err)
 		os.Exit(1)
@@ -96,6 +97,15 @@ const minScannerTokenLen = 32
 
 func scannerTokenOK(token string) bool {
 	return len(token) >= minScannerTokenLen
+}
+
+func scannerMaxConcurrentScans() int {
+	if value := os.Getenv("SCANNER_MAX_CONCURRENT_SCANS"); value != "" {
+		if n, err := strconv.Atoi(value); err == nil && n >= 1 && n <= scanner.MaxConcurrentScansCeiling {
+			return n
+		}
+	}
+	return scanner.DefaultMaxConcurrentScans
 }
 
 // resolveWorkDir returns the per-scan work root. An explicit SCANNER_WORK_DIR is

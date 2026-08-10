@@ -35,6 +35,8 @@ export interface ScannerNode {
   endpoint: string;
   cidrs: string[];
   tags: string[];
+  /** maximum scans admitted concurrently on this node; configured by an admin */
+  max_concurrent_scans: number;
   /** optional per-node mTLS (#26). `tls_server_ca` pins the node's server cert and
    *  `tls_client_cert` is the cert the backend presents — both public, returned
    *  here. The client key is a write-only secret and is never returned. */
@@ -62,6 +64,7 @@ export interface ScannerNodeInput {
   token?: string;
   cidrs: string[];
   tags: string[];
+  max_concurrent_scans: number;
   tls_server_ca?: string;
   tls_client_cert?: string;
   tls_client_key?: string;

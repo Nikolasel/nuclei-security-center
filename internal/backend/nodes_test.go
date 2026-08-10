@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
 func TestParseNodeConfigDefaultOnly(t *testing.T) {
@@ -19,7 +20,7 @@ func TestParseNodeConfigDefaultOnly(t *testing.T) {
 
 func TestParseNodeConfigValid(t *testing.T) {
 	nodes, err := parseNodeConfig("http://d", "t", `[
-		{"name":"corp","cidrs":["10.0.0.0/8"],"url":"http://corp:8081","token":"c"},
+		{"name":"corp","cidrs":["10.0.0.0/8"],"url":"http://corp:8081","token":"c","max_concurrent_scans":3},
 		{"name":"dmz","cidrs":["192.168.1.0/24"],"url":"http://dmz:8081","token":"d"}
 	]`)
 	if err != nil {
@@ -27,6 +28,9 @@ func TestParseNodeConfigValid(t *testing.T) {
 	}
 	if len(nodes) != 3 { // default + corp + dmz
 		t.Fatalf("want 3 nodes, got %d", len(nodes))
+	}
+	if nodes[1].MaxConcurrentScans != 3 || nodes[2].MaxConcurrentScans != types.DefaultMaxConcurrentScans {
+		t.Fatalf("node capacities = %d/%d, want 3/%d", nodes[1].MaxConcurrentScans, nodes[2].MaxConcurrentScans, types.DefaultMaxConcurrentScans)
 	}
 }
 
@@ -43,6 +47,8 @@ func TestParseNodeConfigInvalid(t *testing.T) {
 		{"dup name", `[{"name":"a","url":"http://u","token":"t"},{"name":"a","url":"http://u2","token":"t2"}]`, "duplicate zone name"},
 		{"overlap identical", `[{"name":"a","cidrs":["10.0.0.0/8"],"url":"http://u","token":"t"},{"name":"b","cidrs":["10.0.0.0/8"],"url":"http://u2","token":"t2"}]`, "overlapping CIDRs"},
 		{"overlap nested", `[{"name":"a","cidrs":["10.0.0.0/8"],"url":"http://u","token":"t"},{"name":"b","cidrs":["10.1.2.0/24"],"url":"http://u2","token":"t2"}]`, "overlapping CIDRs"},
+		{"capacity below zero", `[{"name":"a","url":"http://u","token":"t","max_concurrent_scans":-1}]`, "max_concurrent_scans must be between 1 and 100"},
+		{"capacity too high", `[{"name":"a","url":"http://u","token":"t","max_concurrent_scans":101}]`, "max_concurrent_scans must be between 1 and 100"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -87,14 +93,48 @@ func TestValidateNodeEndpoint(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateNode(&store.ScannerNode{
-				Name:     "node",
-				Endpoint: tc.endpoint,
-				Token:    "token",
+				Name:               "node",
+				Endpoint:           tc.endpoint,
+				Token:              "token",
+				MaxConcurrentScans: types.DefaultMaxConcurrentScans,
 			}, true)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("validateNode(%q) error = %v, wantErr %t", tc.endpoint, err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestValidateNodeConcurrency(t *testing.T) {
+	valid := store.ScannerNode{Name: "node", Endpoint: "http://scanner", Token: "token", MaxConcurrentScans: types.DefaultMaxConcurrentScans}
+	if err := validateNode(&valid, true); err != nil {
+		t.Fatalf("valid capacity rejected: %v", err)
+	}
+
+	for _, value := range []int{0, -1, types.MaxConcurrentScansCeiling + 1} {
+		invalid := store.ScannerNode{Name: "node", Endpoint: "http://scanner", Token: "token", MaxConcurrentScans: value}
+		if err := validateNode(&invalid, true); err == nil {
+			t.Errorf("capacity %d accepted, want validation error", value)
+		}
+	}
+}
+
+func TestScannerNodeInputCapacityPresence(t *testing.T) {
+	existingCapacity := 3
+	omitted := scannerNodeInput{Name: "node", Endpoint: "http://scanner", Token: "token"}
+	if got := omitted.storeNode(existingCapacity).MaxConcurrentScans; got != existingCapacity {
+		t.Fatalf("omitted capacity = %d, want existing capacity %d", got, existingCapacity)
+	}
+
+	explicitZero := 0
+	explicit := scannerNodeInput{
+		Name:               "node",
+		Endpoint:           "http://scanner",
+		Token:              "token",
+		MaxConcurrentScans: &explicitZero,
+	}
+	if got := explicit.storeNode(types.DefaultMaxConcurrentScans).MaxConcurrentScans; got != 0 {
+		t.Fatalf("explicit zero capacity = %d, want 0 for validation to reject", got)
 	}
 }
 

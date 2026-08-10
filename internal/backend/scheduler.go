@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -138,6 +139,12 @@ func (s *Scheduler) dispatch(ctx context.Context, sc store.Schedule, now time.Ti
 		link.ScheduleID = sc.ID
 		scanID, err = s.srv.orch.Submit(ctx, spec, link)
 		if err != nil {
+			if errors.Is(err, ErrScanCapacity) {
+				// Keep next_run_at unchanged so the due schedule is retried once
+				// backend capacity becomes available instead of losing a run.
+				log.Warn("scan admission capacity exhausted; deferring scheduled scan")
+				return
+			}
 			log.Error("dispatch scheduled scan", "err", err)
 		} else {
 			logSystemAudit(ctx, log, eventScanDispatched, "schedule.run", "scan", scanID,

@@ -169,6 +169,10 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := s.runner.Start(spec)
 	if err != nil {
+		if errors.Is(err, ErrScanCapacity) {
+			http.Error(w, err.Error(), http.StatusTooManyRequests)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

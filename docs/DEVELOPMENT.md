@@ -17,8 +17,9 @@ handlers return plain-text errors plus an appropriate status.
 
 ### Database migrations
 
-`internal/store/migrations/0001_init.sql` is the beta baseline for fresh deployments. Alpha
-databases are intentionally rejected; do not add compatibility or upgrade logic for them.
+`internal/store/migrations/0001_init.sql` is the consolidated fresh-deployment baseline, including
+the final alpha schema. Alpha databases are intentionally rejected; do not add compatibility or
+upgrade logic for them.
 
 After beta, each schema change goes in a new numbered SQL file. The runner serializes startup
 migration work per database/schema, validates the complete recorded history, and applies unseen files
@@ -37,9 +38,9 @@ NSC_TEST_DATABASE_URL='postgres://nuclei:***@localhost:5432/nuclei?sslmode=disab
   go test ./internal/store -count=1 -v
 ```
 
-`TestBaselineMatchesAlphaChainPostgres` applies the preserved historical chain and the beta baseline
-to separate schemas, dumps both with `pg_dump --schema-only`, and requires identical normalized
-DDL. Install `pg_dump`, put it on `PATH`, or set `NSC_TEST_PG_DUMP=/path/to/pg_dump`.
+`TestBaselineMatchesAlphaChainPostgres` applies the preserved historical chain and the consolidated
+baseline to separate schemas, dumps both with `pg_dump --schema-only`, and requires identical
+normalized DDL. Install `pg_dump`, put it on `PATH`, or set `NSC_TEST_PG_DUMP=/path/to/pg_dump`.
 
 ## Frontend
 

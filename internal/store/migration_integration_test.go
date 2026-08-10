@@ -38,8 +38,8 @@ func TestAlphaMigrationFixtureIntegrity(t *testing.T) {
 		t.Fatalf("list alpha migration fixtures: %v", err)
 	}
 	sort.Strings(names)
-	if len(names) != 42 {
-		t.Fatalf("alpha migration fixture count = %d, want 42", len(names))
+	if len(names) != 43 {
+		t.Fatalf("alpha migration fixture count = %d, want 43", len(names))
 	}
 
 	digest := sha256.New()
@@ -55,7 +55,7 @@ func TestAlphaMigrationFixtureIntegrity(t *testing.T) {
 		_, _ = digest.Write([]byte{0})
 	}
 
-	const want = "aaa660a110ba8bc210e1f8919a28b6f74baaad200395d875465ccf20a1776ddf"
+	const want = "dea2512dd88c4dd89e1c99136622114e0a799ee324a7e650fbf487e03d6e7273"
 	if got := fmt.Sprintf("%x", digest.Sum(nil)); got != want {
 		t.Fatalf("alpha migration fixture digest = %s, want %s; update the pin only for an intentional pre-beta reference-chain change", got, want)
 	}
@@ -535,21 +535,21 @@ func TestBaselineMatchesAlphaChainPostgres(t *testing.T) {
 	applySQLFiles(t, ctx, alpha, alphaMigrationsFS, "testdata/alpha_migrations")
 	baselineSQL, err := migrationsFS.ReadFile("migrations/0001_init.sql")
 	if err != nil {
-		t.Fatalf("read beta baseline: %v", err)
+		t.Fatalf("read consolidated baseline: %v", err)
 	}
 	if _, err := baseline.pool.Exec(ctx, string(baselineSQL)); err != nil {
-		t.Fatalf("apply beta baseline: %v", err)
+		t.Fatalf("apply consolidated baseline: %v", err)
 	}
 
 	alphaDump := normalizedSchemaDump(t, ctx, pgDump, dsn, alphaSchema)
 	baselineDump := normalizedSchemaDump(t, ctx, pgDump, dsn, baselineSchema)
 	if alphaDump != baselineDump {
-		t.Fatalf("beta baseline differs from the alpha migration chain: %s", firstSchemaDifference(alphaDump, baselineDump))
+		t.Fatalf("consolidated baseline differs from the alpha migration chain: %s", firstSchemaDifference(alphaDump, baselineDump))
 	}
 	alphaState := readInitialApplicationState(t, ctx, alpha)
 	baselineState := readInitialApplicationState(t, ctx, baseline)
 	if fmt.Sprint(alphaState) != fmt.Sprint(baselineState) {
-		t.Fatalf("beta baseline initial state = %#v, want alpha-chain state %#v", baselineState, alphaState)
+		t.Fatalf("consolidated baseline initial state = %#v, want alpha-chain state %#v", baselineState, alphaState)
 	}
 }
 

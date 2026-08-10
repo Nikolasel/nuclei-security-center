@@ -1,4 +1,4 @@
--- Nuclei Security Center beta baseline.
+-- Nuclei Security Center fresh-deployment baseline.
 -- Fresh deployments only: alpha databases are intentionally not upgradeable.
 -- This schema is the lossless final state of the alpha migration chain.
 
@@ -139,7 +139,9 @@ CREATE TABLE scanner_nodes (
     tls_server_ca text DEFAULT ''::text NOT NULL,
     tls_client_cert text DEFAULT ''::text NOT NULL,
     tls_client_key text DEFAULT ''::text NOT NULL,
-    templates_synced_at timestamp with time zone
+    templates_synced_at timestamp with time zone,
+    max_concurrent_scans integer DEFAULT 20 NOT NULL,
+    CONSTRAINT scanner_nodes_max_concurrent_scans_check CHECK ((max_concurrent_scans > 0 AND max_concurrent_scans <= 100))
 );
 
 CREATE TABLE scans (

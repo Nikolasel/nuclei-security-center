@@ -306,6 +306,50 @@ func TestMigrateRollsBackSQLWhenHistoryRecordFailsPostgres(t *testing.T) {
 	}
 }
 
+func TestMigrateLiftsPoolStatementTimeoutForTransactionPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st, _ := openEmptyIsolatedPostgresWithRuntimeParams(t, ctx, dsn, map[string]string{
+		"statement_timeout": "100ms",
+	})
+	if _, err := st.pool.Exec(ctx, `
+		CREATE TABLE schema_migrations (
+			version TEXT PRIMARY KEY,
+			checksum_sha256 TEXT,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE FUNCTION delay_migration_record_for_timeout() RETURNS trigger
+		LANGUAGE plpgsql AS $$
+		BEGIN
+			PERFORM pg_sleep(0.25);
+			RETURN NEW;
+		END;
+		$$;
+		CREATE TRIGGER delay_migration_record_for_timeout
+			BEFORE INSERT ON schema_migrations
+			FOR EACH ROW EXECUTE FUNCTION delay_migration_record_for_timeout();
+	`); err != nil {
+		t.Fatalf("install delayed migration history trigger: %v", err)
+	}
+
+	if err := st.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate with a delayed history record = %v, want timeout lifted locally", err)
+	}
+
+	var timeout string
+	if err := st.pool.QueryRow(ctx, `SHOW statement_timeout`).Scan(&timeout); err != nil {
+		t.Fatalf("read pool statement_timeout after migration: %v", err)
+	}
+	if timeout != "100ms" {
+		t.Fatalf("pool statement_timeout after migration = %q, want 100ms", timeout)
+	}
+}
+
 func TestMigrateSerializesConcurrentStartsPostgres(t *testing.T) {
 	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
 	if dsn == "" {

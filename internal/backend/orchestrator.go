@@ -233,40 +233,47 @@ func scanFindingLinesWithDetails(
 }
 
 // readFindingLine returns one JSONL record without buffering more than maxBytes
-// of its content. bufio.Reader.ReadLine exposes fragments for long lines, so an
-// oversized record can be drained through its newline and the next record can
-// still be ingested without buffering the attacker's full input.
+// of its content (plus the two possible line-terminator bytes). bufio.Reader's
+// ReadSlice exposes fragments for long lines, so an oversized record can be
+// drained through its newline and the next record can still be ingested without
+// buffering the attacker's full input.
 func readFindingLine(reader *bufio.Reader, maxBytes int) ([]byte, bool, error) {
 	var line []byte
 	oversized := false
+	lineLimit := maxBytes + 2 // tolerate a trailing CRLF before checking content size
 	for {
-		fragment, prefix, err := reader.ReadLine()
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				return nil, false, err
-			}
-			if len(fragment) == 0 && len(line) == 0 {
-				return nil, false, io.EOF
-			}
-			if oversized || len(line)+len(fragment) > maxBytes {
-				return nil, true, nil
-			}
-			return append(line, fragment...), false, nil
+		fragment, err := reader.ReadSlice('\n')
+		if err != nil && !errors.Is(err, bufio.ErrBufferFull) && !errors.Is(err, io.EOF) {
+			return nil, false, err
 		}
-
 		if !oversized {
-			if len(line)+len(fragment) > maxBytes {
+			if len(line)+len(fragment) > lineLimit {
 				oversized = true
 			} else {
 				line = append(line, fragment...)
 			}
 		}
-		if !prefix {
-			if oversized {
-				return nil, true, nil
-			}
-			return line, false, nil
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
 		}
+		if oversized {
+			return nil, true, nil
+		}
+		if len(line) == 0 && errors.Is(err, io.EOF) {
+			return nil, false, io.EOF
+		}
+		// Match bufio.ScanLines: remove the newline, then exactly one CR if it
+		// directly preceded that newline (or was the final unterminated byte).
+		if n := len(line); n > 0 && line[n-1] == '\n' {
+			line = line[:n-1]
+		}
+		if n := len(line); n > 0 && line[n-1] == '\r' {
+			line = line[:n-1]
+		}
+		if len(line) > maxBytes {
+			return nil, true, nil
+		}
+		return line, false, nil
 	}
 }
 

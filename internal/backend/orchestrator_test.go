@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -82,6 +83,78 @@ func TestScanFindingLinesSkipsOversizedRecordAndContinues(t *testing.T) {
 	}
 	if !bytes.Equal(archived.Bytes(), []byte(in)) {
 		t.Errorf("archived stream lost bytes while skipping the oversized record: got %d bytes, want %d", archived.Len(), len(in))
+	}
+}
+
+func TestReadFindingLineMatchesScanLineEndingsAndLimits(t *testing.T) {
+	payload := strings.Repeat("x", maxFindingLineBytes)
+	jsonLine := `{"template-id":"t","host":"h"}`
+	cases := []struct {
+		name         string
+		input        string
+		maxBytes     int
+		want         string
+		wantOversize bool
+	}{
+		{
+			name:     "exact cap with CRLF",
+			input:    payload + "\r\n",
+			maxBytes: maxFindingLineBytes,
+			want:     payload,
+		},
+		{
+			name:     "exact cap with final CR",
+			input:    payload + "\r",
+			maxBytes: maxFindingLineBytes,
+			want:     payload,
+		},
+		{
+			name:     "empty CRLF",
+			input:    "\r\n",
+			maxBytes: maxFindingLineBytes,
+			want:     "",
+		},
+		{
+			name:     "content CR before CRLF",
+			input:    "content\r\r\n",
+			maxBytes: len("content\r"),
+			want:     "content\r",
+		},
+		{
+			name:     "JSON content CR before CRLF",
+			input:    jsonLine + "\r\r\n",
+			maxBytes: len(jsonLine) + 1,
+			want:     jsonLine + "\r",
+		},
+		{
+			name:     "CRLF split at reader boundary",
+			input:    strings.Repeat("x", 64*1024-1) + "\r\n",
+			maxBytes: 64*1024 - 1,
+			want:     strings.Repeat("x", 64*1024-1),
+		},
+		{
+			name:         "one byte over cap",
+			input:        payload + "x\r\n",
+			maxBytes:     maxFindingLineBytes,
+			wantOversize: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			line, oversized, err := readFindingLine(
+				bufio.NewReaderSize(strings.NewReader(tc.input), 64*1024),
+				tc.maxBytes,
+			)
+			if err != nil {
+				t.Fatalf("readFindingLine: %v", err)
+			}
+			if oversized != tc.wantOversize {
+				t.Fatalf("oversized = %v, want %v", oversized, tc.wantOversize)
+			}
+			if !bytes.Equal(line, []byte(tc.want)) {
+				t.Fatalf("line length/content = %d/%q, want %d/%q", len(line), line, len(tc.want), tc.want)
+			}
+		})
 	}
 }
 

@@ -38,8 +38,8 @@ func TestAlphaMigrationFixtureIntegrity(t *testing.T) {
 		t.Fatalf("list alpha migration fixtures: %v", err)
 	}
 	sort.Strings(names)
-	if len(names) != 42 {
-		t.Fatalf("alpha migration fixture count = %d, want 42", len(names))
+	if len(names) != 43 {
+		t.Fatalf("alpha migration fixture count = %d, want 43", len(names))
 	}
 
 	digest := sha256.New()
@@ -55,7 +55,7 @@ func TestAlphaMigrationFixtureIntegrity(t *testing.T) {
 		_, _ = digest.Write([]byte{0})
 	}
 
-	const want = "aaa660a110ba8bc210e1f8919a28b6f74baaad200395d875465ccf20a1776ddf"
+	const want = "dea2512dd88c4dd89e1c99136622114e0a799ee324a7e650fbf487e03d6e7273"
 	if got := fmt.Sprintf("%x", digest.Sum(nil)); got != want {
 		t.Fatalf("alpha migration fixture digest = %s, want %s; update the pin only for an intentional pre-beta reference-chain change", got, want)
 	}
@@ -71,25 +71,26 @@ func TestMigrateRejectsUnknownAppliedVersionPostgres(t *testing.T) {
 	defer cancel()
 	st, _ := openEmptyIsolatedPostgres(t, ctx, dsn)
 
-	const legacyVersion = "0008_alpha_only.sql"
+	const legacyVersion = "0002_scanner_node_capacity.sql"
 	if _, err := st.pool.Exec(ctx, `
 		CREATE TABLE schema_migrations (
 			version TEXT PRIMARY KEY,
 			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`); err != nil {
-		t.Fatalf("create alpha migration history: %v", err)
+		t.Fatalf("create unsupported migration history: %v", err)
 	}
 	if _, err := st.pool.Exec(ctx,
 		`INSERT INTO schema_migrations (version) VALUES ($1)`, legacyVersion); err != nil {
-		t.Fatalf("record legacy migration: %v", err)
+		t.Fatalf("record unsupported migration: %v", err)
 	}
 
 	err := st.Migrate(ctx)
 	if err == nil {
-		t.Fatal("Migrate accepted an alpha database with an unknown applied migration")
+		t.Fatal("Migrate accepted a database with an unsupported applied migration")
 	}
 	if !strings.Contains(err.Error(), legacyVersion) ||
-		!strings.Contains(err.Error(), "alpha databases are not upgradeable; deploy fresh for beta") {
+		!strings.Contains(err.Error(), "current fresh-deployment baseline") ||
+		!strings.Contains(err.Error(), "new empty database") {
 		t.Fatalf("Migrate error = %q, want legacy version and fresh-deploy guidance", err)
 	}
 	var checksumColumnAdded bool
@@ -101,17 +102,17 @@ func TestMigrateRejectsUnknownAppliedVersionPostgres(t *testing.T) {
 			   AND table_name = 'schema_migrations'
 			   AND column_name = 'checksum_sha256'
 		)`).Scan(&checksumColumnAdded); err != nil {
-		t.Fatalf("inspect rejected alpha migration history: %v", err)
+		t.Fatalf("inspect rejected migration history: %v", err)
 	}
 	if checksumColumnAdded {
-		t.Fatal("Migrate altered alpha migration history before rejecting it")
+		t.Fatal("Migrate altered migration history before rejecting it")
 	}
 	var baselineApplied bool
 	if err := st.pool.QueryRow(ctx, `SELECT to_regclass('app_settings') IS NOT NULL`).Scan(&baselineApplied); err != nil {
 		t.Fatalf("check for partially applied baseline: %v", err)
 	}
 	if baselineApplied {
-		t.Fatal("Migrate partially applied the beta baseline before rejecting alpha history")
+		t.Fatal("Migrate partially applied the baseline before rejecting unsupported history")
 	}
 }
 
@@ -134,7 +135,8 @@ func TestMigrateRejectsMissingChecksumPostgres(t *testing.T) {
 		t.Fatal("Migrate accepted an applied migration without a checksum")
 	}
 	if !strings.Contains(err.Error(), "has no recorded checksum") ||
-		!strings.Contains(err.Error(), "deploy fresh for beta") {
+		!strings.Contains(err.Error(), "current fresh-deployment baseline") ||
+		!strings.Contains(err.Error(), "new empty database") {
 		t.Fatalf("Migrate error = %q, want missing-checksum and fresh-deploy guidance", err)
 	}
 }
@@ -178,7 +180,8 @@ func TestMigrateRejectsLegacyHistoryWithoutChecksumColumnBeforeMutationPostgres(
 		t.Fatal("Migrate altered legacy migration history before rejecting it")
 	}
 	if !strings.Contains(err.Error(), "has no checksum column") ||
-		!strings.Contains(err.Error(), "deploy fresh for beta") {
+		!strings.Contains(err.Error(), "current fresh-deployment baseline") ||
+		!strings.Contains(err.Error(), "new empty database") {
 		t.Fatalf("Migrate error = %q, want missing-column and fresh-deploy guidance", err)
 	}
 }
@@ -202,8 +205,14 @@ func TestMigrateRejectsChecksumMismatchPostgres(t *testing.T) {
 		t.Fatal("Migrate accepted a changed applied migration")
 	}
 	if !strings.Contains(err.Error(), "checksum mismatch") ||
-		!strings.Contains(err.Error(), "applied migrations are immutable") {
-		t.Fatalf("Migrate error = %q, want checksum-mismatch immutability guidance", err)
+		!strings.Contains(err.Error(), "changed since this database was created") ||
+		!strings.Contains(err.Error(), "current fresh-deployment baseline") ||
+		!strings.Contains(err.Error(), "new empty database") ||
+		!strings.Contains(err.Error(), "recorded tampered") {
+		t.Fatalf("Migrate error = %q, want checksum-mismatch and fresh-deploy guidance", err)
+	}
+	if strings.Contains(err.Error(), "applied migrations are immutable") {
+		t.Fatalf("Migrate error = %q, want alpha baseline-change guidance instead of post-beta immutability guidance", err)
 	}
 }
 
@@ -535,21 +544,21 @@ func TestBaselineMatchesAlphaChainPostgres(t *testing.T) {
 	applySQLFiles(t, ctx, alpha, alphaMigrationsFS, "testdata/alpha_migrations")
 	baselineSQL, err := migrationsFS.ReadFile("migrations/0001_init.sql")
 	if err != nil {
-		t.Fatalf("read beta baseline: %v", err)
+		t.Fatalf("read consolidated baseline: %v", err)
 	}
 	if _, err := baseline.pool.Exec(ctx, string(baselineSQL)); err != nil {
-		t.Fatalf("apply beta baseline: %v", err)
+		t.Fatalf("apply consolidated baseline: %v", err)
 	}
 
 	alphaDump := normalizedSchemaDump(t, ctx, pgDump, dsn, alphaSchema)
 	baselineDump := normalizedSchemaDump(t, ctx, pgDump, dsn, baselineSchema)
 	if alphaDump != baselineDump {
-		t.Fatalf("beta baseline differs from the alpha migration chain: %s", firstSchemaDifference(alphaDump, baselineDump))
+		t.Fatalf("consolidated baseline differs from the alpha migration chain: %s", firstSchemaDifference(alphaDump, baselineDump))
 	}
 	alphaState := readInitialApplicationState(t, ctx, alpha)
 	baselineState := readInitialApplicationState(t, ctx, baseline)
 	if fmt.Sprint(alphaState) != fmt.Sprint(baselineState) {
-		t.Fatalf("beta baseline initial state = %#v, want alpha-chain state %#v", baselineState, alphaState)
+		t.Fatalf("consolidated baseline initial state = %#v, want alpha-chain state %#v", baselineState, alphaState)
 	}
 }
 

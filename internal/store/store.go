@@ -42,6 +42,8 @@ type Options struct {
 
 const defaultStatementTimeout = 30 * time.Second
 
+const unsupportedMigrationHistory = "migration history is not supported by the current fresh-deployment baseline; deploy a new empty database and restore portable exports"
+
 // Open connects to Postgres and returns a Store. The caller must Close it.
 func Open(ctx context.Context, dsn string) (*Store, error) {
 	return OpenWithOptions(ctx, dsn, Options{})
@@ -185,8 +187,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	if len(unknown) > 0 {
 		return fmt.Errorf(
-			"database contains unsupported migration versions %s: alpha databases are not upgradeable; deploy fresh for beta",
+			"database contains unsupported migration versions %s: %s",
 			strings.Join(unknown, ", "),
+			unsupportedMigrationHistory,
 		)
 	}
 
@@ -202,7 +205,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return fmt.Errorf("inspect migration checksum column: %w", err)
 	}
 	if !hasChecksumColumn {
-		return fmt.Errorf("migration history has no checksum column: alpha databases are not upgradeable; deploy fresh for beta")
+		return fmt.Errorf("migration history has no checksum column: %s", unsupportedMigrationHistory)
 	}
 
 	applied := make(map[string]*string, len(names))
@@ -233,13 +236,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 		switch {
 		case recordedChecksum == nil:
 			return fmt.Errorf(
-				"migration %s has no recorded checksum: alpha databases are not upgradeable; deploy fresh for beta",
+				"migration %s has no recorded checksum: %s",
 				migration.name,
+				unsupportedMigrationHistory,
 			)
 		case *recordedChecksum != migration.checksum:
 			return fmt.Errorf(
-				"migration %s checksum mismatch: applied migrations are immutable (recorded %s, embedded %s)",
-				migration.name, *recordedChecksum, migration.checksum,
+				"migration %s checksum mismatch: %s (changed since this database was created; recorded %s, embedded %s)",
+				migration.name, unsupportedMigrationHistory, *recordedChecksum, migration.checksum,
 			)
 		}
 	}

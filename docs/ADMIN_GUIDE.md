@@ -53,9 +53,9 @@ and the backend/SPA. Demo users use their username as the password:
 Keycloak's local admin console is at <http://localhost:8082> (`admin` / `admin`). These seeded
 credentials and the compose defaults are for local development only.
 
-A fresh backend creates `schema_migrations`, applies the beta baseline and forward migrations, seeds
-the configured default scanner node, and starts the scheduler, template sync/distribution,
-node-health monitor, and retention sweeper.
+A fresh backend creates `schema_migrations`, applies the current schema baseline, seeds the configured
+default scanner node, and starts the scheduler, template sync/distribution, node-health monitor, and
+retention sweeper.
 
 ### Production deployment
 
@@ -126,8 +126,9 @@ are insert-only by node name; PostgreSQL and subsequent API/UI edits are authori
 
 When `COOKIE_SECURE=true`, the session cookie is host-locked: it uses the `__Host-` prefix, `Path=/`,
 `Secure`, and no `Domain` attribute. This prevents a sibling subdomain from setting a competing
-session cookie for the backend. Existing sessions remain valid across the migration, but their
-database identifiers are stored only as SHA-256 hashes. Set `COOKIE_SECURE=false` only for local
+session cookie for the backend. Session identifiers created on the current schema are stored only as
+SHA-256 hashes. Alpha databases are fresh-deployment-only, so this change intentionally does not
+include an in-place conversion of existing session rows. Set `COOKIE_SECURE=false` only for local
 plaintext HTTP, where browsers reject `__Host-` cookies.
 
 ### Object storage

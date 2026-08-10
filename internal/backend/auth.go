@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -38,6 +39,27 @@ type AuthConfig struct {
 	SecureCookie bool // set the Secure flag (true behind TLS; false for local http)
 }
 
+const (
+	defaultSessionCookieName = "nsc_session"
+	hostCookiePrefix         = "__Host-"
+)
+
+// sessionCookieName returns the effective browser-session cookie name. Secure
+// deployments use the __Host- prefix, which requires Secure, Path=/, and no
+// Domain attribute and therefore prevents sibling subdomains from tossing a
+// cookie for this host. Local plaintext development keeps the unprefixed name
+// because browsers reject __Host- cookies without Secure.
+func sessionCookieName(configured string, secure bool) string {
+	name := strings.TrimSpace(configured)
+	if name == "" {
+		name = defaultSessionCookieName
+	}
+	if secure && !strings.HasPrefix(name, hostCookiePrefix) {
+		name = hostCookiePrefix + name
+	}
+	return name
+}
+
 // Authenticator runs the OIDC authorization-code + BFF session flow.
 type Authenticator struct {
 	store    *store.Store
@@ -62,9 +84,7 @@ func NewAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger, cf
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery: %w", err)
 	}
-	if cfg.CookieName == "" {
-		cfg.CookieName = "nsc_session"
-	}
+	cfg.CookieName = sessionCookieName(cfg.CookieName, cfg.SecureCookie)
 	if cfg.SessionTTL <= 0 {
 		cfg.SessionTTL = 12 * time.Hour
 	}
@@ -202,7 +222,7 @@ func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 // handleLogout clears the server-side session and the cookie.
 func (a *Authenticator) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(a.cfg.CookieName); err == nil {
+	if c, err := r.Cookie(a.sessionCookieName()); err == nil {
 		_ = a.store.DeleteSession(r.Context(), c.Value)
 	}
 	a.clearSessionCookie(w)
@@ -219,7 +239,7 @@ func (a *Authenticator) handleLogout(w http.ResponseWriter, r *http.Request) {
 // pointless re-login that fails at the same lookup. A missing/empty cookie or
 // ErrNotFound still returns (zero, nil) so the middleware emits a 401.
 func (a *Authenticator) identityFromRequest(r *http.Request) (store.Identity, error) {
-	c, err := r.Cookie(a.cfg.CookieName)
+	c, err := r.Cookie(a.sessionCookieName())
 	if err != nil || c.Value == "" {
 		return store.Identity{}, nil
 	}
@@ -251,7 +271,7 @@ func (a *Authenticator) mapRoles(claims map[string]any) []string {
 
 func (a *Authenticator) setSessionCookie(w http.ResponseWriter, value string, expires time.Time) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     a.cfg.CookieName,
+		Name:     a.sessionCookieName(),
 		Value:    value,
 		Path:     "/",
 		Expires:  expires,
@@ -297,7 +317,7 @@ func (a *Authenticator) clearAuthStateCookie(w http.ResponseWriter) {
 
 func (a *Authenticator) clearSessionCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     a.cfg.CookieName,
+		Name:     a.sessionCookieName(),
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
@@ -305,6 +325,10 @@ func (a *Authenticator) clearSessionCookie(w http.ResponseWriter) {
 		Secure:   a.cfg.SecureCookie,
 		SameSite: http.SameSiteLaxMode,
 	})
+}
+
+func (a *Authenticator) sessionCookieName() string {
+	return sessionCookieName(a.cfg.CookieName, a.cfg.SecureCookie)
 }
 
 // randToken returns a 256-bit URL-safe random string for session/state/nonce use.

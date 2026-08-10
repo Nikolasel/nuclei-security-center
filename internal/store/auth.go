@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"time"
 
@@ -36,7 +38,8 @@ func (s *Store) UpsertUser(ctx context.Context, id Identity) error {
 	return err
 }
 
-// Session is a server-side browser session. ID is the opaque cookie value.
+// Session is a server-side browser session. ID is the opaque cookie value;
+// persistence hashes it before it reaches the database.
 type Session struct {
 	ID        string
 	Identity  Identity
@@ -48,7 +51,7 @@ func (s *Store) CreateSession(ctx context.Context, sess Session) error {
 	_, err := s.pool.Exec(ctx,
 		`INSERT INTO sessions (id, subject, email, name, roles, expires_at)
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		sess.ID, sess.Identity.Subject, nullStr(sess.Identity.Email),
+		hashSessionID(sess.ID), sess.Identity.Subject, nullStr(sess.Identity.Email),
 		nullStr(sess.Identity.Name), orEmpty(sess.Identity.Roles), sess.ExpiresAt,
 	)
 	return err
@@ -60,15 +63,16 @@ func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 	var sess Session
 	var email, name *string
 	err := s.pool.QueryRow(ctx,
-		`SELECT id, subject, email, name, roles, expires_at
-		 FROM sessions WHERE id = $1 AND expires_at > now()`, id,
-	).Scan(&sess.ID, &sess.Identity.Subject, &email, &name, &sess.Identity.Roles, &sess.ExpiresAt)
+		`SELECT subject, email, name, roles, expires_at
+		 FROM sessions WHERE id = $1 AND expires_at > now()`, hashSessionID(id),
+	).Scan(&sess.Identity.Subject, &email, &name, &sess.Identity.Roles, &sess.ExpiresAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Session{}, ErrNotFound
 		}
 		return Session{}, err
 	}
+	sess.ID = id
 	sess.Identity.Email = deref(email)
 	sess.Identity.Name = deref(name)
 	return sess, nil
@@ -76,8 +80,13 @@ func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 
 // DeleteSession removes a session (logout). Missing is not an error.
 func (s *Store) DeleteSession(ctx context.Context, id string) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE id = $1`, id)
+	_, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE id = $1`, hashSessionID(id))
 	return err
+}
+
+func hashSessionID(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:])
 }
 
 // AuthFlow is transient authorization-code-flow state, keyed by the opaque

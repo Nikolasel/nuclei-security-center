@@ -106,7 +106,7 @@ func (s *Server) requireAuthWithResolvers(
 		}
 		if id.Subject == "" {
 			authMethod := "none"
-			if c, cookieErr := r.Cookie(s.auth.cfg.CookieName); cookieErr == nil && c.Value != "" {
+			if c, cookieErr := r.Cookie(s.auth.sessionCookieName()); cookieErr == nil && c.Value != "" {
 				authMethod = "session"
 			}
 			s.recordAuthenticationFailure(r, authMethod, start)

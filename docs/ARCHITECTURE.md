@@ -409,7 +409,9 @@ trade; the native-services path only wins if you're committed to one cloud forev
 - **Egress control:** run scanner nodes in a segmented network / per zone; the node makes
   active connections to targets, so treat its egress like an attack surface.
 - **BFF token custody:** OIDC access/refresh tokens live server-side in the backend; the
-  SPA only ever holds an httpOnly, SameSite session cookie — no tokens in browser JS.
+  SPA only ever holds an httpOnly, SameSite session cookie — `__Host-`-prefixed and host-locked
+  when secure cookies are enabled — no tokens in browser JS. Session bearer values are stored
+  only as SHA-256 hashes in Postgres.
 - **Service-token hygiene:** backend→node bearer tokens are per-node secrets, rotatable,
   TLS-only; mTLS is the upgrade when you want mutual auth.
 - **Secrets:** target auth creds (if any) never in the DB plaintext or templates —

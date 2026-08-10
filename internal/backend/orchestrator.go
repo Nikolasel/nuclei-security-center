@@ -327,20 +327,31 @@ func (o *Orchestrator) Submit(ctx context.Context, spec types.ScanSpec, link sto
 	return scanID, nil
 }
 
-const scannerCapacityRetryDelay = time.Second
+const (
+	scannerCapacityRetryInitialDelay = time.Second
+	scannerCapacityRetryMaxDelay     = 4 * time.Second
+)
 
 // startScanWithRetry keeps an admitted scan queued in its bounded backend
 // admission slot when the node is temporarily fuller than the backend's local
 // view. The backend admission still bounds the number of waiting goroutines;
 // the run context bounds how long a node-capacity divergence can persist.
-func startScanWithRetry(ctx context.Context, client *ScannerClient, spec types.ScanSpec) (string, error) {
+// Capacity retries use bounded backoff so a saturated node is not polled in
+// lockstep by every waiting dispatch.
+func startScanWithRetry(ctx context.Context, client *ScannerClient, spec types.ScanSpec, log *slog.Logger) (string, error) {
+	delay := scannerCapacityRetryInitialDelay
+	warned := false
 	for {
 		nodeScanID, err := client.StartScan(ctx, spec)
 		if !errors.Is(err, ErrScanCapacity) {
 			return nodeScanID, err
 		}
+		if !warned && log != nil {
+			log.Warn("scanner node at capacity; retrying scan dispatch", "retry_delay", delay)
+			warned = true
+		}
 
-		timer := time.NewTimer(scannerCapacityRetryDelay)
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			if !timer.Stop() {
@@ -348,6 +359,12 @@ func startScanWithRetry(ctx context.Context, client *ScannerClient, spec types.S
 			}
 			return "", ctx.Err()
 		case <-timer.C:
+		}
+		if delay < scannerCapacityRetryMaxDelay {
+			delay *= 2
+			if delay > scannerCapacityRetryMaxDelay {
+				delay = scannerCapacityRetryMaxDelay
+			}
 		}
 	}
 }
@@ -388,7 +405,7 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec, node st
 		return
 	}
 
-	nodeScanID, err := startScanWithRetry(ctx, client, spec)
+	nodeScanID, err := startScanWithRetry(ctx, client, spec, log)
 	if err != nil {
 		// No status response yet at this point -- nothing to record.
 		o.failScan(ctx, scanID, "dispatch: "+err.Error(), "", "")

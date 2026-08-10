@@ -1,10 +1,12 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -163,7 +165,9 @@ func TestStartScanWithRetryRetriesCapacityResponse(t *testing.T) {
 	defer server.Close()
 
 	client := NewScannerClient(server.URL, "node-token")
-	scanID, err := startScanWithRetry(context.Background(), client, types.ScanSpec{})
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	scanID, err := startScanWithRetry(context.Background(), client, types.ScanSpec{}, logger)
 	if err != nil {
 		t.Fatalf("startScanWithRetry: %v", err)
 	}
@@ -172,6 +176,9 @@ func TestStartScanWithRetryRetriesCapacityResponse(t *testing.T) {
 	}
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("StartScan calls = %d, want 2", got)
+	}
+	if got := strings.Count(logs.String(), "scanner node at capacity; retrying scan dispatch"); got != 1 {
+		t.Fatalf("capacity warning count = %d, want 1; logs=%q", got, logs.String())
 	}
 }
 

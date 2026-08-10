@@ -5,10 +5,10 @@ see the [API reference](API.md); for design rationale and security boundaries, s
 [Architecture](ARCHITECTURE.md).
 
 > [!IMPORTANT]
-> The beta supports **fresh deployments only**. Alpha databases are not upgradeable. Back up any
-> data you need to retain, deploy with a new empty Postgres database, and move portable data with
-> template/template-set exports and scan bundles. The backend rejects an alpha migration history at
-> startup instead of attempting a partial upgrade.
+> The current alpha supports **fresh deployments only**. Alpha databases are not upgradeable. Back
+> up any data you need to retain, deploy with a new empty Postgres database, and move portable data
+> with template/template-set exports and scan bundles. The backend rejects an unsupported migration
+> history at startup instead of attempting a partial upgrade.
 
 ## 1. Deployment
 
@@ -366,15 +366,16 @@ There is deliberately no audit table in PostgreSQL. Configure the platform log c
   moving environments.
 - Rotate DB credentials through `DATABASE_PASSWORD_FILE` using a secret-rendering sidecar/agent.
   Leading/interior whitespace is preserved and trailing CR/LF is trimmed.
-- Future beta migrations are ordered and checksum-immutable. Never edit an applied migration; add a
-  new numbered forward migration.
+- During alpha, schema changes are folded into the consolidated baseline and preserved alpha fixture
+  chain. After beta ships, migrations are ordered and checksum-immutable; never edit an applied
+  migration and add a new numbered forward migration instead.
 - Do not point beta at an alpha database. The startup rejection is intentional; deploy fresh.
 
 ## 9. Troubleshooting
 
 | Symptom | Meaning / action |
 |---|---|
-| Backend reports unsupported migration versions or a missing checksum | The database is from alpha. Preserve exports/backups as needed and deploy beta against a new empty database. |
+| Backend reports unsupported migration versions or a missing checksum | The database history is not supported by the current fresh-deployment baseline. Preserve exports/backups as needed, deploy a new empty database, and restore portable data. |
 | Backend cannot reach Postgres | Verify `DATABASE_URL`, TLS/network policy, credentials, and the password-file contents/permissions. |
 | Login loops or callback fails | Match `APP_BASE_URL`, `OIDC_ISSUER`, and registered `OIDC_REDIRECT_URL`; use `OIDC_DISCOVERY_URL` only for internal metadata routing. |
 | Session works locally but not through ingress | Keep HTTPS end-to-end or at the ingress and verify `COOKIE_SECURE=true`, forwarded host/scheme, and the public base URL. |

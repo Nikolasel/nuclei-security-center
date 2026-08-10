@@ -12,7 +12,7 @@ Repo: `git@github.com:Nikolasel/nuclei-security-center.git`.
 architectural changes. `README.md` is the visitor-facing overview; the practical guides live
 under `docs/` (`ADMIN_GUIDE.md`, `API.md`, `DEVELOPMENT.md`).
 
-The product is a working beta: a logged-in user manages targets/template-sets, runs scans
+The product is a working alpha: a logged-in user manages targets/template-sets, runs scans
 (on demand or on a cron **schedule**), and triages a **Tenable-style finding lifecycle** (dedup +
 first/last-seen + detection state + dispositions/recast), exporting the lifecycle list as
 JSON/CSV/SARIF/raw. OIDC/BFF auth with IdP-driven roles fronts a React SPA. Cross-cutting: a
@@ -316,12 +316,13 @@ dev mode used in headless `curl` testing.
 - Agent-created branches use `feature/<name>` for feature work and `fix/<name>` for bug fixes; do not use the `codex/` prefix in this repository.
 - Config via environment variables (see the table in `docs/ADMIN_GUIDE.md`); required vars fail fast.
 - Errors wrapped with `%w` and context; HTTP handlers return plain-text errors + status.
-- `internal/store/migrations/0001_init.sql` is the fresh-deployment beta baseline. Alpha databases
-  are not upgradeable and are rejected at startup. Future schema changes go in new numbered files;
-  the runner applies unseen files in filename order and records them in `schema_migrations`.
-  Applied migration files are immutable: never revise one after a database may have recorded it.
-  Add a separately named repair/forward migration instead. The runner stores SHA-256 checksums and
-  fails fast if a checksummed migration's contents change.
+- `internal/store/migrations/0001_init.sql` is the consolidated fresh-deployment alpha baseline.
+  Alpha databases are not upgradeable and are rejected at startup. During alpha, fold schema changes
+  into `0001_init.sql` and update the preserved alpha fixture chain/equivalence pin. Once beta ships,
+  freeze the baseline: future schema changes go in new numbered files; the runner applies unseen
+  files in filename order and records them in `schema_migrations`. Applied migration files are
+  immutable after that release boundary; add a separately named repair/forward migration instead.
+  The runner stores SHA-256 checksums and fails fast if a checksummed migration's contents change.
 - Run `gofmt -w`, `go vet`, and `go test` before considering a change done.
 - **Dependency review (recurring):** at a natural review boundary, scan for hand-rolled code
   that duplicates a mature library (per invariant #5) and for unused/heavy deps to drop.

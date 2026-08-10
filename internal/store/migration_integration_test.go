@@ -71,25 +71,26 @@ func TestMigrateRejectsUnknownAppliedVersionPostgres(t *testing.T) {
 	defer cancel()
 	st, _ := openEmptyIsolatedPostgres(t, ctx, dsn)
 
-	const legacyVersion = "0008_alpha_only.sql"
+	const legacyVersion = "0002_scanner_node_capacity.sql"
 	if _, err := st.pool.Exec(ctx, `
 		CREATE TABLE schema_migrations (
 			version TEXT PRIMARY KEY,
 			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`); err != nil {
-		t.Fatalf("create alpha migration history: %v", err)
+		t.Fatalf("create unsupported migration history: %v", err)
 	}
 	if _, err := st.pool.Exec(ctx,
 		`INSERT INTO schema_migrations (version) VALUES ($1)`, legacyVersion); err != nil {
-		t.Fatalf("record legacy migration: %v", err)
+		t.Fatalf("record unsupported migration: %v", err)
 	}
 
 	err := st.Migrate(ctx)
 	if err == nil {
-		t.Fatal("Migrate accepted an alpha database with an unknown applied migration")
+		t.Fatal("Migrate accepted a database with an unsupported applied migration")
 	}
 	if !strings.Contains(err.Error(), legacyVersion) ||
-		!strings.Contains(err.Error(), "alpha databases are not upgradeable; deploy fresh for beta") {
+		!strings.Contains(err.Error(), "current fresh-deployment baseline") ||
+		!strings.Contains(err.Error(), "new empty database") {
 		t.Fatalf("Migrate error = %q, want legacy version and fresh-deploy guidance", err)
 	}
 	var checksumColumnAdded bool
@@ -101,17 +102,17 @@ func TestMigrateRejectsUnknownAppliedVersionPostgres(t *testing.T) {
 			   AND table_name = 'schema_migrations'
 			   AND column_name = 'checksum_sha256'
 		)`).Scan(&checksumColumnAdded); err != nil {
-		t.Fatalf("inspect rejected alpha migration history: %v", err)
+		t.Fatalf("inspect rejected migration history: %v", err)
 	}
 	if checksumColumnAdded {
-		t.Fatal("Migrate altered alpha migration history before rejecting it")
+		t.Fatal("Migrate altered migration history before rejecting it")
 	}
 	var baselineApplied bool
 	if err := st.pool.QueryRow(ctx, `SELECT to_regclass('app_settings') IS NOT NULL`).Scan(&baselineApplied); err != nil {
 		t.Fatalf("check for partially applied baseline: %v", err)
 	}
 	if baselineApplied {
-		t.Fatal("Migrate partially applied the beta baseline before rejecting alpha history")
+		t.Fatal("Migrate partially applied the baseline before rejecting unsupported history")
 	}
 }
 
@@ -134,7 +135,8 @@ func TestMigrateRejectsMissingChecksumPostgres(t *testing.T) {
 		t.Fatal("Migrate accepted an applied migration without a checksum")
 	}
 	if !strings.Contains(err.Error(), "has no recorded checksum") ||
-		!strings.Contains(err.Error(), "deploy fresh for beta") {
+		!strings.Contains(err.Error(), "current fresh-deployment baseline") ||
+		!strings.Contains(err.Error(), "new empty database") {
 		t.Fatalf("Migrate error = %q, want missing-checksum and fresh-deploy guidance", err)
 	}
 }
@@ -178,7 +180,8 @@ func TestMigrateRejectsLegacyHistoryWithoutChecksumColumnBeforeMutationPostgres(
 		t.Fatal("Migrate altered legacy migration history before rejecting it")
 	}
 	if !strings.Contains(err.Error(), "has no checksum column") ||
-		!strings.Contains(err.Error(), "deploy fresh for beta") {
+		!strings.Contains(err.Error(), "current fresh-deployment baseline") ||
+		!strings.Contains(err.Error(), "new empty database") {
 		t.Fatalf("Migrate error = %q, want missing-column and fresh-deploy guidance", err)
 	}
 }

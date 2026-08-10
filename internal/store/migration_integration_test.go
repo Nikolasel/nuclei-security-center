@@ -17,6 +17,21 @@ import (
 //go:embed testdata/alpha_migrations/*.sql
 var alphaMigrationsFS embed.FS
 
+func currentMigrationCount(t *testing.T) int {
+	t.Helper()
+	entries, err := migrationsFS.ReadDir("migrations")
+	if err != nil {
+		t.Fatalf("list embedded migrations: %v", err)
+	}
+	count := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			count++
+		}
+	}
+	return count
+}
+
 func TestAlphaMigrationFixtureIntegrity(t *testing.T) {
 	names, err := fs.Glob(alphaMigrationsFS, "testdata/alpha_migrations/*.sql")
 	if err != nil {
@@ -210,6 +225,47 @@ func TestBaselineSeedsAppSettingsPostgres(t *testing.T) {
 	}
 }
 
+func TestScannerNodeCapacityDefaultsAndPersistsPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openIsolatedPostgres(t, ctx, dsn)
+
+	node, err := st.CreateScannerNode(ctx, ScannerNode{
+		Name:     fmt.Sprintf("capacity-%d", time.Now().UnixNano()),
+		Endpoint: "http://scanner:8081",
+		Token:    "test-token",
+	})
+	if err != nil {
+		t.Fatalf("create scanner node: %v", err)
+	}
+	if node.MaxConcurrentScans != 20 {
+		t.Fatalf("created node max_concurrent_scans = %d, want default 20", node.MaxConcurrentScans)
+	}
+
+	node.MaxConcurrentScans = 3
+	node.Token = ""
+	updated, err := st.UpdateScannerNode(ctx, node.ID, node)
+	if err != nil {
+		t.Fatalf("update scanner node capacity: %v", err)
+	}
+	if updated.MaxConcurrentScans != 3 {
+		t.Fatalf("updated node max_concurrent_scans = %d, want 3", updated.MaxConcurrentScans)
+	}
+
+	got, err := st.GetScannerNode(ctx, node.ID)
+	if err != nil {
+		t.Fatalf("read scanner node: %v", err)
+	}
+	if got.MaxConcurrentScans != 3 {
+		t.Fatalf("persisted node max_concurrent_scans = %d, want 3", got.MaxConcurrentScans)
+	}
+}
+
 func TestBaselineRecordsChecksumAndIsIdempotentPostgres(t *testing.T) {
 	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -301,8 +357,8 @@ func TestMigrateRollsBackSQLWhenHistoryRecordFailsPostgres(t *testing.T) {
 	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count migration records after retry: %v", err)
 	}
-	if migrationCount != 1 {
-		t.Fatalf("migration record count after retry = %d, want 1", migrationCount)
+	if want := currentMigrationCount(t); migrationCount != want {
+		t.Fatalf("migration record count after retry = %d, want %d", migrationCount, want)
 	}
 }
 
@@ -459,8 +515,8 @@ func TestMigrateSerializesConcurrentStartsPostgres(t *testing.T) {
 	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM schema_migrations`).Scan(&migrationCount); err != nil {
 		t.Fatalf("count migration records after concurrent starts: %v", err)
 	}
-	if migrationCount != 1 {
-		t.Fatalf("migration record count after concurrent starts = %d, want 1", migrationCount)
+	if want := currentMigrationCount(t); migrationCount != want {
+		t.Fatalf("migration record count after concurrent starts = %d, want %d", migrationCount, want)
 	}
 }
 

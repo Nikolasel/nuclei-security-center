@@ -110,6 +110,10 @@ func (s *Server) handleRunSchedule(w http.ResponseWriter, r *http.Request) {
 	link.ScheduleID = sc.ID
 	scanID, err := s.orch.Submit(r.Context(), spec, link)
 	if err != nil {
+		if errors.Is(err, ErrScanCapacity) {
+			http.Error(w, "scan admission capacity exhausted; retry later", http.StatusTooManyRequests)
+			return
+		}
 		s.serverError(w, "run schedule", err)
 		return
 	}

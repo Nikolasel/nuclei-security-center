@@ -3,6 +3,7 @@ package backend
 import (
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/url"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
 // Scanner node admin endpoints (#22). The registry is DB-backed and managed by
@@ -34,6 +36,39 @@ type nodeView struct {
 	// unhealthy — so an operator can tell a wrong token (401) from an unreachable
 	// node without digging through backend logs.
 	HealthError string `json:"health_error,omitempty"`
+}
+
+// scannerNodeInput keeps max_concurrent_scans as a pointer so an update from an
+// older client that omits the field preserves the stored capacity. An explicit
+// zero remains distinguishable and is rejected by validateNode.
+type scannerNodeInput struct {
+	Name               string   `json:"name"`
+	Endpoint           string   `json:"endpoint"`
+	Token              string   `json:"token"`
+	CIDRs              []string `json:"cidrs"`
+	Tags               []string `json:"tags"`
+	MaxConcurrentScans *int     `json:"max_concurrent_scans"`
+	TLSServerCA        string   `json:"tls_server_ca"`
+	TLSClientCert      string   `json:"tls_client_cert"`
+	TLSClientKey       string   `json:"tls_client_key"`
+}
+
+func (in scannerNodeInput) storeNode(defaultMaxConcurrentScans int) store.ScannerNode {
+	maxConcurrentScans := defaultMaxConcurrentScans
+	if in.MaxConcurrentScans != nil {
+		maxConcurrentScans = *in.MaxConcurrentScans
+	}
+	return store.ScannerNode{
+		Name:               in.Name,
+		Endpoint:           in.Endpoint,
+		Token:              in.Token,
+		CIDRs:              in.CIDRs,
+		Tags:               in.Tags,
+		MaxConcurrentScans: maxConcurrentScans,
+		TLSServerCA:        in.TLSServerCA,
+		TLSClientCert:      in.TLSClientCert,
+		TLSClientKey:       in.TLSClientKey,
+	}
 }
 
 // nodeView builds the API view of a node, merging in its health record. The
@@ -84,10 +119,11 @@ func (s *Server) handleGetNode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
-	var in store.ScannerNode
-	if !decodeJSON(w, r, &in) {
+	var payload scannerNodeInput
+	if !decodeJSON(w, r, &payload) {
 		return
 	}
+	in := payload.storeNode(types.DefaultMaxConcurrentScans)
 	if err := validateNode(&in, true); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -102,9 +138,18 @@ func (s *Server) handleCreateNode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
-	var in store.ScannerNode
-	if !decodeJSON(w, r, &in) {
+	var payload scannerNodeInput
+	if !decodeJSON(w, r, &payload) {
 		return
+	}
+	in := payload.storeNode(types.DefaultMaxConcurrentScans)
+	if payload.MaxConcurrentScans == nil {
+		existing, err := s.store.GetScannerNode(r.Context(), r.PathValue("id"))
+		if err != nil {
+			s.writeStoreErr(w, err)
+			return
+		}
+		in.MaxConcurrentScans = existing.MaxConcurrentScans
 	}
 	// Token optional on update: a blank one keeps the stored value (it's
 	// write-only, so the admin can't re-supply it when editing other fields).
@@ -145,6 +190,9 @@ func validateNode(in *store.ScannerNode, requireToken bool) error {
 	}
 	if requireToken && strings.TrimSpace(in.Token) == "" {
 		return errBadRequest("token is required")
+	}
+	if in.MaxConcurrentScans < 1 || in.MaxConcurrentScans > types.MaxConcurrentScansCeiling {
+		return errBadRequest(fmt.Sprintf("max_concurrent_scans must be between 1 and %d", types.MaxConcurrentScansCeiling))
 	}
 	for i, c := range in.CIDRs {
 		c = strings.TrimSpace(c)

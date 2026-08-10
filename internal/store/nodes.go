@@ -26,18 +26,19 @@ import (
 // Token (blanked on reads, blank-keeps-stored on update). All empty ⇒ plain
 // HTTP/token, unchanged.
 type ScannerNode struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Endpoint      string    `json:"endpoint"`
-	Token         string    `json:"token,omitempty"`
-	CIDRs         []string  `json:"cidrs"`
-	Tags          []string  `json:"tags"`
-	TLSServerCA   string    `json:"tls_server_ca,omitempty"`
-	TLSClientCert string    `json:"tls_client_cert,omitempty"`
-	TLSClientKey  string    `json:"tls_client_key,omitempty"`
-	CreatedBy     string    `json:"created_by,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	Endpoint           string    `json:"endpoint"`
+	Token              string    `json:"token,omitempty"`
+	CIDRs              []string  `json:"cidrs"`
+	Tags               []string  `json:"tags"`
+	MaxConcurrentScans int       `json:"max_concurrent_scans"`
+	TLSServerCA        string    `json:"tls_server_ca,omitempty"`
+	TLSClientCert      string    `json:"tls_client_cert,omitempty"`
+	TLSClientKey       string    `json:"tls_client_key,omitempty"`
+	CreatedBy          string    `json:"created_by,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 	// TemplatesSyncedAt is when the backend last pushed the full template catalog
 	// to this node (#85); nil = never. Read-only (set by the distributor, not the
 	// node CRUD API).
@@ -47,7 +48,7 @@ type ScannerNode struct {
 // nodeColumns is the full column list for scanner_nodes reads, in the order
 // scanNode expects.
 const nodeColumns = `id, name, endpoint, token, cidrs, tags,
-	tls_server_ca, tls_client_cert, tls_client_key,
+	max_concurrent_scans, tls_server_ca, tls_client_cert, tls_client_key,
 	created_by, created_at, updated_at, templates_synced_at`
 
 // ListScannerNodes returns all nodes ordered by name.
@@ -79,6 +80,9 @@ func (s *Store) CreateScannerNode(ctx context.Context, in ScannerNode) (ScannerN
 	in.ID = types.NewID()
 	in.CIDRs = orEmpty(in.CIDRs)
 	in.Tags = orEmpty(in.Tags)
+	if in.MaxConcurrentScans == 0 {
+		in.MaxConcurrentScans = types.DefaultMaxConcurrentScans
+	}
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -91,11 +95,11 @@ func (s *Store) CreateScannerNode(ctx context.Context, in ScannerNode) (ScannerN
 	}
 	err = tx.QueryRow(ctx,
 		`INSERT INTO scanner_nodes
-		   (id, name, endpoint, token, cidrs, tags, tls_server_ca, tls_client_cert, tls_client_key, created_by)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		   (id, name, endpoint, token, cidrs, tags, max_concurrent_scans, tls_server_ca, tls_client_cert, tls_client_key, created_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		 RETURNING created_at, updated_at`,
 		in.ID, in.Name, in.Endpoint, in.Token, in.CIDRs, in.Tags,
-		in.TLSServerCA, in.TLSClientCert, in.TLSClientKey, nullStr(in.CreatedBy),
+		in.MaxConcurrentScans, in.TLSServerCA, in.TLSClientCert, in.TLSClientKey, nullStr(in.CreatedBy),
 	).Scan(&in.CreatedAt, &in.UpdatedAt)
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -134,13 +138,14 @@ func (s *Store) UpdateScannerNode(ctx context.Context, id string, in ScannerNode
 		   token = COALESCE(NULLIF($4, ''), token),
 		   cidrs = $5,
 		   tags = $6,
-		   tls_server_ca = $7,
-		   tls_client_cert = $8,
-		   tls_client_key = COALESCE(NULLIF($9, ''), tls_client_key),
+		   max_concurrent_scans = $7,
+		   tls_server_ca = $8,
+		   tls_client_cert = $9,
+		   tls_client_key = COALESCE(NULLIF($10, ''), tls_client_key),
 		   updated_at = now()
 		 WHERE id = $1
 		 RETURNING `+nodeColumns,
-		id, in.Name, in.Endpoint, in.Token, in.CIDRs, in.Tags,
+		id, in.Name, in.Endpoint, in.Token, in.CIDRs, in.Tags, in.MaxConcurrentScans,
 		in.TLSServerCA, in.TLSClientCert, in.TLSClientKey))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -352,7 +357,7 @@ func scanNode(row rowScanner) (ScannerNode, error) {
 	var n ScannerNode
 	var createdBy *string
 	if err := row.Scan(&n.ID, &n.Name, &n.Endpoint, &n.Token, &n.CIDRs, &n.Tags,
-		&n.TLSServerCA, &n.TLSClientCert, &n.TLSClientKey,
+		&n.MaxConcurrentScans, &n.TLSServerCA, &n.TLSClientCert, &n.TLSClientKey,
 		&createdBy, &n.CreatedAt, &n.UpdatedAt, &n.TemplatesSyncedAt); err != nil {
 		return ScannerNode{}, err
 	}

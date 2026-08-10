@@ -30,8 +30,9 @@ type Runner struct {
 	workRoot   string
 	bundle     *bundleStore // node-managed active template tree pushed by the backend (#85)
 
-	mu    sync.Mutex
-	scans map[string]*job
+	mu        sync.Mutex
+	scans     map[string]*job
+	admission *scanAdmission
 }
 
 type job struct {
@@ -50,7 +51,7 @@ const coverageDrainTimeout = 5 * time.Second
 // (#86); it is only invoked when a scan spec opts into discovery. scanType is the
 // naabu mode ("syn" or "connect"); it is normalized, so any unrecognized value
 // (including "") falls back to the SYN default.
-func NewRunner(nucleiPath, naabuPath, scanType, workRoot string) (*Runner, error) {
+func NewRunner(nucleiPath, naabuPath, scanType, workRoot string, maxConcurrentScans int) (*Runner, error) {
 	if err := os.MkdirAll(workRoot, 0o750); err != nil {
 		return nil, fmt.Errorf("create work root: %w", err)
 	}
@@ -68,6 +69,7 @@ func NewRunner(nucleiPath, naabuPath, scanType, workRoot string) (*Runner, error
 		workRoot:   workRoot,
 		bundle:     bundle,
 		scans:      make(map[string]*job),
+		admission:  newScanAdmission(maxConcurrentScans),
 	}, nil
 }
 
@@ -83,17 +85,22 @@ func (r *Runner) Start(spec types.ScanSpec) (string, error) {
 	if len(spec.Targets) == 0 {
 		return "", fmt.Errorf("scan spec has no targets")
 	}
+	if err := r.acquireScan(spec.MaxConcurrentScans); err != nil {
+		return "", err
+	}
 	templates, unlockTemplates, err := r.bundle.lockTemplates(
 		spec.Templates.TemplateIDs,
 		spec.Templates.TemplatesCommit,
 	)
 	if err != nil {
+		r.releaseScan()
 		return "", err
 	}
 	id := types.NewID()
 	dir := filepath.Join(r.workRoot, id)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		unlockTemplates()
+		r.releaseScan()
 		return "", fmt.Errorf("create scan dir: %w", err)
 	}
 
@@ -168,6 +175,8 @@ func (r *Runner) Cancel(id string) bool {
 }
 
 func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []lockedTemplate, unlockTemplates func()) {
+	defer r.releaseScan()
+
 	// Start acquired the active bundle's shared lock after validating the
 	// manifest. Hold it across discovery and Nuclei so no bundle activation can
 	// swap the selected files under this scan.
@@ -333,6 +342,19 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 	}
 
 	j.complete(findingCount)
+}
+
+func (r *Runner) acquireScan(requestedLimit int) error {
+	if r.admission == nil {
+		return nil
+	}
+	return r.admission.acquire(requestedLimit)
+}
+
+func (r *Runner) releaseScan() {
+	if r.admission != nil {
+		r.admission.release()
+	}
 }
 
 func writeTargetsFile(path string, targets []string) error {

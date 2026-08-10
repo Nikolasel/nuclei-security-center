@@ -242,6 +242,10 @@ func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 
 	scanID, err := s.orch.Submit(r.Context(), spec, link)
 	if err != nil {
+		if errors.Is(err, ErrScanCapacity) {
+			http.Error(w, "scan admission capacity exhausted; retry later", http.StatusTooManyRequests)
+			return
+		}
 		s.serverError(w, "submit scan", err)
 		return
 	}

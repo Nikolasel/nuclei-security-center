@@ -85,7 +85,7 @@ such as `30s`, `15m`, and `6h`.
 | `DATABASE_PASSWORD_FILE` | unset | File containing only the DB password. It is re-read before each new connection, allowing an external secret agent to rotate credentials without restarting NSC. |
 | `SCANNER_URL` | `http://localhost:8081` | Endpoint used to seed the first catch-all scanner node. Seed-only after first boot. |
 | `SCANNER_TOKEN` | required, at least 32 characters on the scanner | Token used with `SCANNER_URL` to seed the default node. Generate with `openssl rand -base64 24`. |
-| `SCAN_ZONES` | unset | JSON array of additional seed nodes with `name`, `url`, `token`, `cidrs`, and optional per-node TLS fields. Seed-only; PostgreSQL is authoritative afterward. |
+| `SCAN_ZONES` | unset | JSON array of additional seed nodes with `name`, `url`, `token`, `cidrs`, optional `max_concurrent_scans`, and optional per-node TLS fields. Seed-only; PostgreSQL is authoritative afterward. |
 | `NODE_HEALTH_INTERVAL` | `30s` | Capability-poll interval. A node stays healthy for three times this interval after its last successful poll. |
 | `RETENTION_SWEEP_INTERVAL` | `1h` | How often the backend applies the DB-backed scan-retention policy. |
 | `TEMPLATE_SYNC_INTERVAL` | `6h` | Upstream catalog refresh cadence. |
@@ -97,7 +97,7 @@ such as `30s`, `15m`, and `6h`.
 `SCAN_ZONES` uses this JSON shape (the three PEM-valued TLS keys are optional):
 
 ```sh
-export SCAN_ZONES='[{"name":"dmz","url":"https://scanner-dmz:8081","token":"replace-with-a-strong-token","cidrs":["10.20.0.0/16"],"tls_server_ca":"<PEM CA>","tls_client_cert":"<PEM client certificate>","tls_client_key":"<PEM client key>"}]'
+export SCAN_ZONES='[{"name":"dmz","url":"https://scanner-dmz:8081","token":"replace-with-a-strong-token","cidrs":["10.20.0.0/16"],"max_concurrent_scans":4,"tls_server_ca":"<PEM CA>","tls_client_cert":"<PEM client certificate>","tls_client_key":"<PEM client key>"}]'
 ```
 
 Use escaped `\n` characters inside JSON strings when embedding multiline PEM values. Seed entries
@@ -153,6 +153,7 @@ URLs.
 | `SCANNER_TLS_CERT` | unset | PEM server certificate. Must be paired with `SCANNER_TLS_KEY`. |
 | `SCANNER_TLS_KEY` | unset | PEM server private key. |
 | `SCANNER_CLIENT_CA` | unset | CA bundle used to require and verify backend client certificates (mTLS). |
+| `SCANNER_MAX_CONCURRENT_SCANS` | `20` | Standalone-node fallback admission limit (`1`–`100`) used only when a direct node caller omits the backend registry value. Normal backend dispatch sends the per-node value from PostgreSQL. |
 
 ## 3. Authentication, service accounts, and transport security
 
@@ -291,6 +292,12 @@ that do not exist; they never overwrite admin edits or delete nodes.
 - A node with no CIDRs is the catch-all for hostnames and unmatched IPs.
 - All IP targets in one scan must map to the same node.
 - Deleting the last catch-all is refused.
+- `max_concurrent_scans` is configured independently per node in **Scanner Nodes**. It bounds both
+  backend polling goroutines and node-side scan admission. If the backend's local view is full,
+  `POST /api/scans` returns HTTP `429` without creating a scan row. If the node's independent gate
+  is full, the already-admitted backend dispatch retries with bounded exponential backoff (capped at
+  four seconds) without marking the scan failed; the backend admission still bounds the number of
+  waiting dispatches. The default is `20`, with a hard range of `1`–`100`.
 - Dispatch fails fast when the selected node is known unhealthy.
 - Bundle distribution targets only stale, idle nodes; a busy node may return `409` until its scan
   releases the active template tree.

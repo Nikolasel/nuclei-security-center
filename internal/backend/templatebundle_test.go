@@ -29,7 +29,7 @@ func TestBuildCatalogBundleAcceptedByNode(t *testing.T) {
 		t.Fatalf("buildCatalogBundle: %v", err)
 	}
 
-	runner, err := scanner.NewRunner("/bin/echo", "/bin/echo", "connect", t.TempDir())
+	runner, err := scanner.NewRunner("/bin/echo", "/bin/echo", "connect", t.TempDir(), 1)
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}

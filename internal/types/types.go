@@ -28,10 +28,19 @@ const (
 // inputs are explicit; template ids resolve against TemplatesCommit in the
 // node's already-active full-catalog bundle.
 type ScanSpec struct {
-	Targets   []string         `json:"targets"`
-	Templates TemplateSelector `json:"templates"`
-	Options   ScanOptions      `json:"options"`
+	Targets            []string         `json:"targets"`
+	Templates          TemplateSelector `json:"templates"`
+	Options            ScanOptions      `json:"options"`
+	MaxConcurrentScans int              `json:"max_concurrent_scans,omitempty"`
 }
+
+// Scan admission defaults and the hard ceiling shared by the backend registry,
+// admin API, and scanner-node wire contract. The per-node setting is persisted in
+// scanner_nodes; a zero wire value means the node's local fallback applies.
+const (
+	DefaultMaxConcurrentScans = 20
+	MaxConcurrentScansCeiling = 100
+)
 
 // TemplateSelector picks which templates run. TemplateIDs select entries from
 // the full catalog bundle already active on the scanner node; TemplatesCommit is

@@ -1,9 +1,12 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -132,6 +135,50 @@ func TestScannerClientRejectsMultipleJSONValues(t *testing.T) {
 	client := NewScannerClient(server.URL, "node-token")
 	if _, err := client.StartScan(context.Background(), types.ScanSpec{}); err == nil {
 		t.Fatal("client accepted multiple scanner JSON values")
+	}
+}
+
+func TestScannerClientMapsCapacityResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, "scanner scan capacity exhausted")
+	}))
+	defer server.Close()
+
+	client := NewScannerClient(server.URL, "node-token")
+	if _, err := client.StartScan(context.Background(), types.ScanSpec{}); !errors.Is(err, ErrScanCapacity) {
+		t.Fatalf("StartScan error = %v, want ErrScanCapacity", err)
+	}
+}
+
+func TestStartScanWithRetryRetriesCapacityResponse(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, `{"scan_id":"node-scan-1"}`)
+	}))
+	defer server.Close()
+
+	client := NewScannerClient(server.URL, "node-token")
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	scanID, err := startScanWithRetry(context.Background(), client, types.ScanSpec{}, logger)
+	if err != nil {
+		t.Fatalf("startScanWithRetry: %v", err)
+	}
+	if scanID != "node-scan-1" {
+		t.Fatalf("scan id = %q, want node-scan-1", scanID)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("StartScan calls = %d, want 2", got)
+	}
+	if got := strings.Count(logs.String(), "scanner node at capacity; retrying scan dispatch"); got != 1 {
+		t.Fatalf("capacity warning count = %d, want 1; logs=%q", got, logs.String())
 	}
 }
 

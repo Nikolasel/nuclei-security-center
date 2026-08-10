@@ -64,8 +64,11 @@ retention sweeper.
    token and TLS; use mTLS for untrusted segments.
 3. Deploy the backend with Postgres, OIDC, object-store, and initial scanner seed configuration.
 4. Terminate browser TLS at the backend or an ingress and keep `COOKIE_SECURE=true`.
-5. Send backend stdout to the platform log aggregator; that is the audit trail.
-6. Verify `/healthz`, sign in, and complete the [first-run bootstrap](#4-first-run-bootstrap).
+5. Plan for all existing browser sessions to require sign-in again when this session-hardening
+   release is deployed: old session rows are not converted, and secure deployments also change the
+   cookie name to the host-locked `__Host-` form.
+6. Send backend stdout to the platform log aggregator; that is the audit trail.
+7. Verify `/healthz`, sign in, and complete the [first-run bootstrap](#4-first-run-bootstrap).
 
 The images are multi-architecture (`linux/amd64`, `linux/arm64`) Red Hat UBI 10 Micro images. The
 scanner image contains pinned, checksum-verified `nuclei` and `naabu` binaries; scanner upgrades are
@@ -127,9 +130,10 @@ are insert-only by node name; PostgreSQL and subsequent API/UI edits are authori
 When `COOKIE_SECURE=true`, the session cookie is host-locked: it uses the `__Host-` prefix, `Path=/`,
 `Secure`, and no `Domain` attribute. This prevents a sibling subdomain from setting a competing
 session cookie for the backend. Session identifiers created on the current schema are stored only as
-SHA-256 hashes. Alpha databases are fresh-deployment-only, so this change intentionally does not
-include an in-place conversion of existing session rows. Set `COOKIE_SECURE=false` only for local
-plaintext HTTP, where browsers reject `__Host-` cookies.
+SHA-256 hashes. Existing session rows are not converted; their old plaintext identifiers cannot
+authenticate because presented cookie values are hashed before lookup, and the expiry sweeper removes
+the rows. Set `COOKIE_SECURE=false` only for local plaintext HTTP, where browsers reject `__Host-`
+cookies.
 
 ### Object storage
 

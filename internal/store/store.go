@@ -25,7 +25,8 @@ var migrationsFS embed.FS
 
 // Store wraps a pgx connection pool.
 type Store struct {
-	pool *pgxpool.Pool
+	pool             *pgxpool.Pool
+	maxLiveAuthFlows int
 }
 
 // Options tunes how the store connects to Postgres.
@@ -38,9 +39,20 @@ type Options struct {
 	// restart. The rest of the DSN (host/user/database) still comes from the
 	// DSN, keeping the connection parts separate from the password source.
 	PasswordFile string
+	// MaxLiveAuthFlows bounds active browser authorization flows across backend
+	// replicas. Zero selects DefaultMaxLiveAuthFlows.
+	MaxLiveAuthFlows int
 }
 
 const defaultStatementTimeout = 30 * time.Second
+
+// DefaultMaxLiveAuthFlows is the default global cap on active authorization
+// flows across all backend replicas.
+const DefaultMaxLiveAuthFlows = 10_000
+
+// MaxConfiguredLiveAuthFlows is a hard upper bound for the configurable global
+// authorization-flow cap, preventing an unsafe accidental unbounded setting.
+const MaxConfiguredLiveAuthFlows = 100_000
 
 const unsupportedMigrationHistory = "migration history is not supported by the current fresh-deployment baseline; deploy a new empty database and restore portable exports"
 
@@ -55,6 +67,13 @@ func OpenWithOptions(ctx context.Context, dsn string, opts Options) (*Store, err
 	if err != nil {
 		return nil, fmt.Errorf("parse postgres dsn: %w", err)
 	}
+	maxLiveAuthFlows := opts.MaxLiveAuthFlows
+	if maxLiveAuthFlows == 0 {
+		maxLiveAuthFlows = DefaultMaxLiveAuthFlows
+	}
+	if maxLiveAuthFlows < 1 || maxLiveAuthFlows > MaxConfiguredLiveAuthFlows {
+		return nil, fmt.Errorf("MaxLiveAuthFlows must be between 1 and %d", MaxConfiguredLiveAuthFlows)
+	}
 	configurePool(cfg, opts)
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
@@ -64,7 +83,7 @@ func OpenWithOptions(ctx context.Context, dsn string, opts Options) (*Store, err
 		pool.Close()
 		return nil, fmt.Errorf("ping postgres: %w", err)
 	}
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool, maxLiveAuthFlows: maxLiveAuthFlows}, nil
 }
 
 func configurePool(cfg *pgxpool.Config, opts Options) {

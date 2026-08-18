@@ -38,8 +38,8 @@ func TestAlphaMigrationFixtureIntegrity(t *testing.T) {
 		t.Fatalf("list alpha migration fixtures: %v", err)
 	}
 	sort.Strings(names)
-	if len(names) != 43 {
-		t.Fatalf("alpha migration fixture count = %d, want 43", len(names))
+	if len(names) != 44 {
+		t.Fatalf("alpha migration fixture count = %d, want 44", len(names))
 	}
 
 	digest := sha256.New()
@@ -55,7 +55,7 @@ func TestAlphaMigrationFixtureIntegrity(t *testing.T) {
 		_, _ = digest.Write([]byte{0})
 	}
 
-	const want = "dea2512dd88c4dd89e1c99136622114e0a799ee324a7e650fbf487e03d6e7273"
+	const want = "cffa9ca24c5ce0b0f807a777898049a470b04d7d380c0db28eca10dacc8874c5"
 	if got := fmt.Sprintf("%x", digest.Sum(nil)); got != want {
 		t.Fatalf("alpha migration fixture digest = %s, want %s; update the pin only for an intentional pre-beta reference-chain change", got, want)
 	}

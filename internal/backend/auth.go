@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -37,6 +39,15 @@ type AuthConfig struct {
 	SessionTTL   time.Duration
 	CookieName   string
 	SecureCookie bool // set the Secure flag (true behind TLS; false for local http)
+	// LoginRate, LoginBurst, and LoginMaxClients tune unauthenticated login
+	// admission. Zero selects the built-in safe default for each field.
+	LoginRate       float64
+	LoginBurst      int
+	LoginMaxClients int
+	// TrustedProxyCIDRs enables X-Forwarded-For parsing only when the direct
+	// peer belongs to one of these explicitly trusted proxy networks. Empty
+	// keeps the safe RemoteAddr-only behavior.
+	TrustedProxyCIDRs []netip.Prefix
 }
 
 const (
@@ -68,11 +79,19 @@ type Authenticator struct {
 	provider *oidc.Provider
 	verifier *oidc.IDTokenVerifier
 	oauth    *oauth2.Config
+
+	loginAdmissionOnce sync.Once
+	loginAdmission     *loginAdmission
+	trustedProxies     trustedProxySet
 }
 
 // NewAuthenticator performs OIDC discovery against the issuer and returns a
 // ready authenticator. It fails fast if the IdP is unreachable or misconfigured.
 func NewAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger, cfg AuthConfig) (*Authenticator, error) {
+	if err := validateLoginAdmissionConfig(cfg); err != nil {
+		return nil, err
+	}
+	trustedProxies := newTrustedProxySet(cfg.TrustedProxyCIDRs)
 	discoverFrom := cfg.Issuer
 	if cfg.DiscoveryURL != "" {
 		// Fetch metadata from the internal URL but trust cfg.Issuer as the issuer
@@ -95,11 +114,12 @@ func NewAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger, cf
 		cfg.RolesClaim = "groups"
 	}
 	return &Authenticator{
-		store:    st,
-		log:      log,
-		cfg:      cfg,
-		provider: provider,
-		verifier: provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
+		store:          st,
+		log:            log,
+		cfg:            cfg,
+		provider:       provider,
+		verifier:       provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
+		trustedProxies: trustedProxies,
 		oauth: &oauth2.Config{
 			ClientID:     cfg.ClientID,
 			ClientSecret: cfg.ClientSecret,
@@ -120,6 +140,12 @@ const (
 // handleLogin begins the authorization-code flow: it mints CSRF state, a nonce,
 // and a PKCE verifier, stashes them server-side, and redirects to the IdP.
 func (a *Authenticator) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if !a.loginAdmitter().allow(authLoginClientKey(r, a.trustedProxies)) {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "too many login attempts", http.StatusTooManyRequests)
+		return
+	}
+
 	state := randToken()
 	nonce := randToken()
 	verifier := oauth2.GenerateVerifier()
@@ -128,10 +154,19 @@ func (a *Authenticator) handleLogin(w http.ResponseWriter, r *http.Request) {
 		State:        state,
 		Nonce:        nonce,
 		PKCEVerifier: verifier,
-		ReturnTo:     r.URL.Query().Get("return_to"),
+		ReturnTo:     authReturnTo(r.URL.Query().Get("return_to")),
 		ExpiresAt:    time.Now().Add(authFlowTTL),
 	}
 	if err := a.store.CreateAuthFlow(r.Context(), flow); err != nil {
+		if errors.Is(err, store.ErrAuthFlowBusy) {
+			w.Header().Set("Retry-After", "1")
+			http.Error(w, "login temporarily unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if errors.Is(err, store.ErrAuthFlowLimit) {
+			http.Error(w, "login temporarily unavailable", http.StatusTooManyRequests)
+			return
+		}
 		a.log.Error("create auth flow", "err", err)
 		http.Error(w, "login unavailable", http.StatusInternalServerError)
 		return

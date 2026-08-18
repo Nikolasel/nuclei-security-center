@@ -10,6 +10,24 @@ below assume a cookie jar `jar.txt` populated by a real login, or
 Authorization per endpoint follows the three roles: reads need `viewer`, running scans and
 config writes need `operator`, deletes need `admin`.
 
+## Interactive authentication
+
+`GET /api/auth/login` starts the browser OIDC flow and normally returns a `302` redirect to the
+identity provider. The unauthenticated admission controls can also return:
+
+- `429 login temporarily unavailable` when the configured global live-flow cap is full. This
+  response intentionally has no recovery-time `Retry-After`, because a slot may be consumed before
+  the ten-minute flow lifetime expires.
+- `503 login temporarily unavailable` with `Retry-After: 1` when three short non-blocking admission
+  lock attempts all collide. A top-level browser navigation does not automatically retry this
+  response; retry the login link/navigation manually. Sustained `503` responses indicate database
+  contention or availability trouble.
+
+See [Administration → Authentication](ADMIN_GUIDE.md#authentication-and-sessions) for the
+`AUTH_MAX_LIVE_FLOWS`, `AUTH_LOGIN_*`, and optional `AUTH_TRUSTED_PROXY_CIDRS` configuration bounds.
+The trusted-proxy setting is safe-by-default: without it, forwarded headers are ignored. When it is
+set, configure only proxy networks that sanitize `X-Forwarded-For` before forwarding requests.
+
 ## Scans
 
 A scan is launched by selecting a **scan policy** (`scan_policy_id`) — the central, reusable

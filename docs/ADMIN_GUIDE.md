@@ -126,6 +126,11 @@ are insert-only by node name; PostgreSQL and subsequent API/UI edits are authori
 | `SESSION_TTL` | `12h` | Server-side session lifetime. |
 | `SESSION_COOKIE_NAME` | `__Host-nsc_session` when `COOKIE_SECURE=true`; `nsc_session` otherwise | Session cookie name. Secure deployments enforce the `__Host-` prefix. |
 | `COOKIE_SECURE` | `true` | Secure-cookie flag. Set `false` only for local plaintext HTTP. |
+| `AUTH_MAX_LIVE_FLOWS` | `10000` | Global active browser-flow cap across backend replicas (`1`–`100000`). At the cap, new flows fail closed with `429`. |
+| `AUTH_LOGIN_RATE` | `1` | Per-peer login-flow token refill rate in requests/second (`0.000001`–`1000`). |
+| `AUTH_LOGIN_BURST` | `5` | Per-peer login burst (`1`–`1000`). |
+| `AUTH_LOGIN_MAX_CLIENTS` | `4096` | Maximum in-memory peer limiters (`1`–`65536`); the stalest entry is evicted at capacity. |
+| `AUTH_TRUSTED_PROXY_CIDRS` | unset | Comma-separated trusted proxy CIDRs (maximum 64). Only matching direct peers may supply sanitized `X-Forwarded-For` client addresses. |
 
 When `COOKIE_SECURE=true`, the session cookie is host-locked: it uses the `__Host-` prefix, `Path=/`,
 `Secure`, and no `Domain` attribute. This prevents a sibling subdomain from setting a competing
@@ -134,6 +139,29 @@ SHA-256 hashes. Existing session rows are not converted; their old plaintext ide
 authenticate because presented cookie values are hashed before lookup, and the expiry sweeper removes
 the rows. Set `COOKIE_SECURE=false` only for local plaintext HTTP, where browsers reject `__Host-`
 cookies.
+
+The public login entrypoint is protected by two admission layers. The backend applies a per-peer
+token-bucket limiter. By default it keys from the TCP peer address and ignores forwarded headers.
+If `AUTH_TRUSTED_PROXY_CIDRS` is configured and the direct peer matches one of those networks, it
+walks the `X-Forwarded-For` chain from the nearest hop outward and uses the first untrusted address;
+the proxy must strip or overwrite client-supplied forwarding headers before this boundary. Missing
+or malformed forwarding data falls back to the direct peer. Its in-memory table is bounded by lazy
+least-recently-seen eviction when full; the request path does not scan the entire table to reap idle
+entries. PostgreSQL also caps live
+authorization flows across backend replicas, using a non-blocking advisory-lock probe so competing
+login attempts do not queue pooled connections behind one another. The live-flow query ignores
+expired rows, while the background sweeper owns their physical deletion. A full global cap is an
+intentional fail-closed backstop: new flows receive `429` until capacity is available again.
+After three short non-blocking lock attempts, rare remaining admission contention returns `503` with
+`Retry-After: 1`; an interactive browser should retry the login navigation.
+
+If a TLS-terminating ingress proxies all requests from one address, the application limiter sees
+that ingress as one shared peer rather than providing per-user isolation; in that topology the
+ingress/WAF must provide the per-client rate limit. Keep an ingress/WAF rate limit in front of
+`/api/auth/login` as an additional distributed control; the application limiter is defense in
+depth and does not infer a trusted proxy configuration. The advisory-lock namespace is fixed in
+code and is not an environment setting, preventing accidental collisions with other database
+lock domains.
 
 ### Object storage
 
@@ -378,6 +406,8 @@ There is deliberately no audit table in PostgreSQL. Configure the platform log c
 | Backend reports unsupported migration versions or a missing checksum | The database history is not supported by the current fresh-deployment baseline. Preserve exports/backups as needed, deploy a new empty database, and restore portable data. |
 | Backend cannot reach Postgres | Verify `DATABASE_URL`, TLS/network policy, credentials, and the password-file contents/permissions. |
 | Login loops or callback fails | Match `APP_BASE_URL`, `OIDC_ISSUER`, and registered `OIDC_REDIRECT_URL`; use `OIDC_DISCOVERY_URL` only for internal metadata routing. |
+| Login returns `503` temporarily | A short auth-flow admission collision survived the bounded retries. Retry the login navigation; sustained failures indicate database contention or availability trouble. |
+| Login limiter treats all users behind the LB as one peer | Set `AUTH_TRUSTED_PROXY_CIDRS` to the LB/proxy source networks only, and verify the proxy strips or overwrites incoming `X-Forwarded-For`; otherwise use the LB/WAF per-client limiter. |
 | Session works locally but not through ingress | Keep HTTPS end-to-end or at the ingress and verify `COOKIE_SECURE=true`, forwarded host/scheme, and the public base URL. |
 | Node remains unknown/unhealthy | Check backend→node DNS/routing, endpoint scheme, bearer token, TLS CA/client pair, and `/v1/capabilities`. |
 | Custom template returns `400` | Fix the Nuclei YAML using the returned diagnostics; nothing was persisted. |

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -99,14 +100,87 @@ type AuthFlow struct {
 	ExpiresAt    time.Time
 }
 
-// CreateAuthFlow stores per-login state before redirecting to the IdP.
+// ErrAuthFlowLimit means the bounded live authorization-flow pool is full. It
+// is an expected admission result, not a database failure; callers should ask
+// the browser/client to retry later without exposing internal details.
+var ErrAuthFlowLimit = errors.New("authorization flow limit reached")
+
+// ErrAuthFlowBusy means another backend is currently admitting an auth flow.
+// It is an expected, retryable admission result rather than a database fault.
+var ErrAuthFlowBusy = errors.New("authorization flow admission busy")
+
+const (
+	authFlowAdmissionKey        = int64(0x6e73632d61757468) // "nsc-auth"
+	authFlowAdmissionAttempts   = 3
+	authFlowAdmissionRetryDelay = 5 * time.Millisecond
+)
+
+// CreateAuthFlow stores per-login state before redirecting to the IdP. Creation
+// is globally bounded across backend replicas. A non-blocking transaction
+// advisory-lock probe provides the linearization point without queueing a pool
+// connection behind another login. The live-row count uses the expiry index;
+// physical deletion belongs to the background sweeper.
 func (s *Store) CreateAuthFlow(ctx context.Context, f AuthFlow) error {
-	_, err := s.pool.Exec(ctx,
+	maxLive := s.maxLiveAuthFlows
+	if maxLive <= 0 {
+		maxLive = DefaultMaxLiveAuthFlows
+	}
+	return s.createAuthFlowWithLimit(ctx, f, maxLive)
+}
+
+func (s *Store) createAuthFlowWithLimit(ctx context.Context, f AuthFlow, maxLive int) error {
+	return retryAuthFlowAdmission(ctx, func() error {
+		return s.createAuthFlowAttempt(ctx, f, maxLive)
+	})
+}
+
+func retryAuthFlowAdmission(ctx context.Context, attempt func() error) error {
+	for attemptNumber := 0; attemptNumber < authFlowAdmissionAttempts; attemptNumber++ {
+		err := attempt()
+		if !errors.Is(err, ErrAuthFlowBusy) || attemptNumber == authFlowAdmissionAttempts-1 {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(authFlowAdmissionRetryDelay):
+		}
+	}
+	return nil
+}
+
+func (s *Store) createAuthFlowAttempt(ctx context.Context, f AuthFlow, maxLive int) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin auth flow admission transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var acquired bool
+	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock($1)`, authFlowAdmissionKey).Scan(&acquired); err != nil {
+		return fmt.Errorf("probe auth flow admission lock: %w", err)
+	}
+	if !acquired {
+		return ErrAuthFlowBusy
+	}
+	var live int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM auth_flows WHERE expires_at > now()`).Scan(&live); err != nil {
+		return fmt.Errorf("count live auth flows: %w", err)
+	}
+	if live >= maxLive {
+		return ErrAuthFlowLimit
+	}
+	if _, err := tx.Exec(ctx,
 		`INSERT INTO auth_flows (state, nonce, pkce_verifier, return_to, expires_at)
 		 VALUES ($1, $2, $3, $4, $5)`,
 		f.State, f.Nonce, f.PKCEVerifier, nullStr(f.ReturnTo), f.ExpiresAt,
-	)
-	return err
+	); err != nil {
+		return fmt.Errorf("insert auth flow: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit auth flow: %w", err)
+	}
+	return nil
 }
 
 // TakeAuthFlow atomically consumes a live auth flow by state (single-use), or

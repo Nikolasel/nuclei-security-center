@@ -416,6 +416,8 @@ CREATE UNIQUE INDEX service_accounts_name_key ON service_accounts USING btree (n
 
 CREATE UNIQUE INDEX service_accounts_token_hash_key ON service_accounts USING btree (token_hash);
 
+CREATE INDEX auth_flows_expires_at_idx ON auth_flows USING btree (expires_at);
+
 CREATE INDEX sessions_expires_at_idx ON sessions USING btree (expires_at);
 
 CREATE UNIQUE INDEX targets_name_key ON targets USING btree (lower(name));

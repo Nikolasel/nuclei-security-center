@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -50,6 +51,46 @@ func TestReadPasswordFileMissing(t *testing.T) {
 func TestOpenWithOptionsBadDSN(t *testing.T) {
 	if _, err := OpenWithOptions(context.Background(), "://not a dsn", Options{}); err == nil {
 		t.Fatal("expected parse error for malformed DSN, got nil")
+	}
+}
+
+func TestOpenWithOptionsRejectsInvalidAuthFlowLimit(t *testing.T) {
+	for _, value := range []int{-1, MaxConfiguredLiveAuthFlows + 1} {
+		_, err := OpenWithOptions(context.Background(), "postgres://localhost/nsc", Options{MaxLiveAuthFlows: value})
+		if err == nil || !strings.Contains(err.Error(), "MaxLiveAuthFlows") {
+			t.Fatalf("MaxLiveAuthFlows=%d error = %v, want validation error", value, err)
+		}
+	}
+}
+
+func TestRetryAuthFlowAdmissionRetriesBusy(t *testing.T) {
+	attempts := 0
+	err := retryAuthFlowAdmission(context.Background(), func() error {
+		attempts++
+		if attempts < 3 {
+			return ErrAuthFlowBusy
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("retryAuthFlowAdmission: %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts = %d, want 3", attempts)
+	}
+}
+
+func TestRetryAuthFlowAdmissionDoesNotRetryOtherErrors(t *testing.T) {
+	attempts := 0
+	err := retryAuthFlowAdmission(context.Background(), func() error {
+		attempts++
+		return ErrAuthFlowLimit
+	})
+	if err != ErrAuthFlowLimit {
+		t.Fatalf("retryAuthFlowAdmission error = %v, want ErrAuthFlowLimit", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
 	}
 }
 

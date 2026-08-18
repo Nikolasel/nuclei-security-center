@@ -5,10 +5,14 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -34,7 +38,27 @@ func main() {
 		os.Exit(1)
 	}
 
-	storeOpts := store.Options{PasswordFile: os.Getenv("DATABASE_PASSWORD_FILE")}
+	storeOpts, err := storeOptionsFromEnv()
+	if err != nil {
+		log.Error("configure store", "err", err)
+		os.Exit(1)
+	}
+	loginRate, loginBurst, loginMaxClients, err := authLoginAdmissionFromEnv()
+	if err != nil {
+		log.Error("configure auth admission", "err", err)
+		os.Exit(1)
+	}
+	trustedProxyCIDRs, err := trustedProxyCIDRsFromEnv()
+	if err != nil {
+		log.Error("configure trusted proxy boundary", "err", err)
+		os.Exit(1)
+	}
+	loginSettings := authLoginAdmissionSettings{
+		rate:              loginRate,
+		burst:             loginBurst,
+		maxClients:        loginMaxClients,
+		trustedProxyCIDRs: trustedProxyCIDRs,
+	}
 
 	ctx := context.Background()
 	st, err := openStoreWithRetry(ctx, dsn, storeOpts, log)
@@ -79,7 +103,7 @@ func main() {
 
 	orch := backend.NewOrchestrator(st, archive, health, log)
 
-	auth, err := buildAuthenticator(ctx, st, log)
+	auth, err := buildAuthenticator(ctx, st, log, loginSettings)
 	if err != nil {
 		log.Error("configure auth", "err", err)
 		os.Exit(1)
@@ -143,12 +167,19 @@ func main() {
 	waitForShutdown(log, srv)
 }
 
+type authLoginAdmissionSettings struct {
+	rate              float64
+	burst             int
+	maxClients        int
+	trustedProxyCIDRs []netip.Prefix
+}
+
 // buildAuthenticator wires the OIDC/BFF authenticator from the environment.
 // Auth is fail-closed: an unset OIDC_ISSUER is a hard error unless dev mode is
 // explicitly opted into with AUTH_DISABLED=true (in which case it returns
 // (nil, nil)). When the issuer is set, the remaining required OIDC vars must be
 // present.
-func buildAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger) (*backend.Authenticator, error) {
+func buildAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger, loginSettings authLoginAdmissionSettings) (*backend.Authenticator, error) {
 	issuer := os.Getenv("OIDC_ISSUER")
 	if issuer == "" {
 		if os.Getenv("AUTH_DISABLED") != "true" {
@@ -162,7 +193,6 @@ func buildAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger) 
 	if clientID == "" || clientSecret == "" {
 		return nil, errors.New("OIDC_CLIENT_ID and OIDC_CLIENT_SECRET are required when OIDC_ISSUER is set")
 	}
-
 	baseURL := envOr("APP_BASE_URL", "http://localhost:8080")
 	redirect := envOr("OIDC_REDIRECT_URL", baseURL+"/api/auth/callback")
 	postLogin := envOr("POST_LOGIN_REDIRECT", baseURL+"/")
@@ -190,9 +220,13 @@ func buildAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger) 
 			envOr("OIDC_OPERATOR_GROUP", "operator"): backend.RoleOperator,
 			envOr("OIDC_VIEWER_GROUP", "viewer"):     backend.RoleViewer,
 		},
-		SessionTTL:   ttl,
-		CookieName:   envOr("SESSION_COOKIE_NAME", "nsc_session"),
-		SecureCookie: secureCookieEnabled(),
+		SessionTTL:        ttl,
+		CookieName:        envOr("SESSION_COOKIE_NAME", "nsc_session"),
+		SecureCookie:      secureCookieEnabled(),
+		LoginRate:         loginSettings.rate,
+		LoginBurst:        loginSettings.burst,
+		LoginMaxClients:   loginSettings.maxClients,
+		TrustedProxyCIDRs: loginSettings.trustedProxyCIDRs,
 	}
 
 	auth, err := backend.NewAuthenticator(ctx, st, log, cfg)
@@ -204,6 +238,96 @@ func buildAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger) 
 	}
 	log.Info("OIDC auth enabled", "issuer", issuer, "client_id", clientID)
 	return auth, nil
+}
+
+func storeOptionsFromEnv() (store.Options, error) {
+	maxLive, err := intEnv("AUTH_MAX_LIVE_FLOWS", store.DefaultMaxLiveAuthFlows, 1, store.MaxConfiguredLiveAuthFlows)
+	if err != nil {
+		return store.Options{}, err
+	}
+	return store.Options{
+		PasswordFile:     os.Getenv("DATABASE_PASSWORD_FILE"),
+		MaxLiveAuthFlows: maxLive,
+	}, nil
+}
+
+func authLoginAdmissionFromEnv() (float64, int, int, error) {
+	rateLimit, err := floatEnv("AUTH_LOGIN_RATE", backend.DefaultAuthLoginRate, 0.000001, backend.MaxConfiguredAuthLoginRate)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	burst, err := intEnv("AUTH_LOGIN_BURST", backend.DefaultAuthLoginBurst, 1, backend.MaxConfiguredAuthLoginBurst)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	maxClients, err := intEnv("AUTH_LOGIN_MAX_CLIENTS", backend.DefaultAuthLoginMaxClients, 1, backend.MaxConfiguredAuthLoginClients)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return rateLimit, burst, maxClients, nil
+}
+
+func trustedProxyCIDRsFromEnv() ([]netip.Prefix, error) {
+	raw := strings.TrimSpace(os.Getenv("AUTH_TRUSTED_PROXY_CIDRS"))
+	if raw == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) > backend.MaxTrustedProxyCIDRs {
+		return nil, fmt.Errorf("AUTH_TRUSTED_PROXY_CIDRS contains too many entries")
+	}
+	seen := make(map[netip.Prefix]struct{}, len(parts))
+	prefixes := make([]netip.Prefix, 0, len(parts))
+	for index, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return nil, fmt.Errorf("AUTH_TRUSTED_PROXY_CIDRS entry %d is empty", index+1)
+		}
+		prefix, err := netip.ParsePrefix(part)
+		if err != nil {
+			return nil, fmt.Errorf("AUTH_TRUSTED_PROXY_CIDRS entry %d: parse prefix: %w", index+1, err)
+		}
+		prefix = prefix.Masked()
+		if _, ok := seen[prefix]; ok {
+			continue
+		}
+		seen[prefix] = struct{}{}
+		prefixes = append(prefixes, prefix)
+	}
+	return prefixes, nil
+}
+
+func intEnv(name string, defaultValue, minValue, maxValue int) (int, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return defaultValue, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%s: parse integer: %w", name, err)
+	}
+	if value < minValue || value > maxValue {
+		return 0, fmt.Errorf("%s must be between %d and %d (got %d)", name, minValue, maxValue, value)
+	}
+	return value, nil
+}
+
+func floatEnv(name string, defaultValue, minValue, maxValue float64) (float64, error) {
+	raw := os.Getenv(name)
+	if raw == "" {
+		return defaultValue, nil
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s: parse number: %w", name, err)
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < minValue || value > maxValue {
+		return 0, fmt.Errorf("%s must be between %s and %s (got %s)", name,
+			strconv.FormatFloat(minValue, 'f', -1, 64),
+			strconv.FormatFloat(maxValue, 'f', -1, 64),
+			strconv.FormatFloat(value, 'g', -1, 64))
+	}
+	return value, nil
 }
 
 // secureCookieEnabled defaults the session-cookie Secure flag to true, so a TLS

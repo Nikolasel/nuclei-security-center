@@ -46,14 +46,19 @@ const (
 	// compressed zip), mirroring the orchestrator's own results-stream ceiling.
 	ScanBundleMaxUpload = 512 << 20
 	// ScanBundleMaxManifest is the decompressed ceiling for a zip bundle's
-	// manifest, set well below the request-body ceiling — compressed manifests
-	// expand far better than 1:1, and io.ReadAll has already materialized the
-	// body before decoding.
+	// manifest, set below the request-body ceiling. The importer enforces this
+	// while decoding the zip entry, so compressed manifests cannot expand without
+	// bound before they reach the JSON decoder.
 	ScanBundleMaxManifest = 128 << 20
+	// ScanBundleMaxEntries caps the number of entries in a zip bundle. Scan
+	// bundles currently contain only manifest.json; the larger allowance leaves
+	// room for future auxiliary entries while keeping archive/zip's central
+	// directory bounded before it is materialized.
+	ScanBundleMaxEntries = 25000
 	// ScanBundleMaxFindings caps the occurrence count a manifest may carry. It
-	// is a sanity limit on the already-decoded manifest (json.Unmarshal must
-	// materialize the slice before Validate can check it); the actual
-	// decode-time memory bound is the upload/manifest ceilings above.
+	// is a sanity limit on the already-decoded manifest (the JSON decoder must
+	// materialize the slice before Validate can check it); the actual decode-time
+	// memory bound is the upload/manifest ceilings above.
 	ScanBundleMaxFindings = 1 << 20
 )
 

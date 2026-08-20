@@ -36,6 +36,8 @@ type Server struct {
 	log                    *slog.Logger
 	exportSlots            chan struct{}
 	exportSlotsOnce        sync.Once
+	scanBundleImportSlots  chan struct{}
+	scanBundleImportOnce   sync.Once
 	exportSpoolDir         string
 	exportStore            findingsExportStore
 }
@@ -59,16 +61,17 @@ func NewServer(st *store.Store, orch *Orchestrator, auth *Authenticator, archive
 		exportSpoolDir = os.TempDir()
 	}
 	s := &Server{
-		store:          st,
-		orch:           orch,
-		auth:           auth,
-		archive:        archive,
-		searcher:       pgSearcher{store: st},
-		spa:            spa,
-		log:            log,
-		exportSlots:    make(chan struct{}, maxConcurrentFindingExports),
-		exportSpoolDir: exportSpoolDir,
-		exportStore:    st,
+		store:                 st,
+		orch:                  orch,
+		auth:                  auth,
+		archive:               archive,
+		searcher:              pgSearcher{store: st},
+		spa:                   spa,
+		log:                   log,
+		exportSlots:           make(chan struct{}, maxConcurrentFindingExports),
+		scanBundleImportSlots: make(chan struct{}, maxConcurrentScanBundleImports),
+		exportSpoolDir:        exportSpoolDir,
+		exportStore:           st,
 	}
 	s.templateValidator = s.validateCustomTemplate
 	s.templateBatchValidator = s.validateCustomTemplateBatch

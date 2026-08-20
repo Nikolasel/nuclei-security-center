@@ -140,9 +140,11 @@ contributes to mitigation evidence. The default conflict policy
 `error` returns **409** when the exported scan id already exists locally; `conflict=duplicate`
 imports under a fresh id instead. A bundle must be a format/version this backend understands
 and must validate (`400` otherwise) — including a `scan.source` and no future-dated
-timestamps. Zip bundles are sniffed by the `PK` magic, must contain exactly one
-`manifest.json`, and are extracted with a 512 MiB upload ceiling (decompressed manifest
-capped at 128 MiB).
+timestamps. Uploads are streamed; ZIP bundles are spooled to backend scratch storage,
+sniffed by the `PK` magic, must contain exactly one `manifest.json`, and are extracted with
+a 512 MiB upload ceiling, an 8 MiB/25,000-entry central-directory limit, and a decompressed
+manifest cap of 128 MiB. Only one import runs at a time; a concurrent import receives
+`429` with `Retry-After: 10`; an upload over the wire limit receives `413`.
 
 ```sh
 # download the manifest for one scan (viewer)

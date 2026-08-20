@@ -96,7 +96,7 @@ such as `30s`, `15m`, and `6h`.
 | `TEMPLATE_SYNC_REF` | `latest` | Revision to mirror. `latest` resolves to the highest stable semantic-version tag; tags and commit SHAs are reproducible, while branch names advance. |
 | `TEMPLATE_SYNC_DIR` | `/tmp/nsc-template-sync` | Backend clone cache. Mount persistent storage to avoid repeated full clones. |
 | `TEMPLATE_DISTRIBUTE_INTERVAL` | `1h` | How often stale, idle scanner nodes receive the current full catalog bundle. Pre-dispatch top-up still runs. |
-| `EXPORT_SPOOL_DIR` | `os.TempDir()` (usually `/tmp`) | Writable backend-local scratch directory for findings exports. Reserve at least 512 MiB for four simultaneous 64 MiB exports; SARIF uses a second bounded rule spool. On a read-only-root deployment mount a writable `emptyDir`/volume and point this variable at it. |
+| `EXPORT_SPOOL_DIR` | `os.TempDir()` (usually `/tmp`) | Writable backend-local scratch directory for findings exports and scan-bundle imports. Reserve at least 512 MiB for four simultaneous 64 MiB exports plus up to 512 MiB for the one in-flight scan-bundle ZIP spool; SARIF uses a second bounded rule spool. On a read-only-root deployment mount a writable `emptyDir`/volume and point this variable at it. |
 
 `SCAN_ZONES` uses this JSON shape (the three PEM-valued TLS keys are optional):
 

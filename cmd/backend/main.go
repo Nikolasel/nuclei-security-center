@@ -37,6 +37,11 @@ func main() {
 		log.Error("SCANNER_TOKEN is required")
 		os.Exit(1)
 	}
+	exportSpoolDir := envOr("EXPORT_SPOOL_DIR", os.TempDir())
+	if err := backend.ValidateFindingsExportSpoolDir(exportSpoolDir); err != nil {
+		log.Error("configure findings export spool", "err", err)
+		os.Exit(1)
+	}
 
 	storeOpts, err := storeOptionsFromEnv()
 	if err != nil {
@@ -114,7 +119,7 @@ func main() {
 		log.Warn("OIDC_ISSUER not set — authentication is DISABLED (dev mode); all requests act as an all-roles dev user")
 	}
 
-	apiSrv := backend.NewServer(st, orch, auth, archive, web.Handler(), log)
+	apiSrv := backend.NewServer(st, orch, auth, archive, web.Handler(), log, exportSpoolDir)
 	// Template catalog sync (#85) mirrors nuclei-templates into Postgres. Like
 	// S3_ENDPOINT / OIDC_ISSUER, an empty TEMPLATE_SYNC_REPO disables the feature
 	// (a full clone is ~1 GB of .git and pointless in a headless dev stack).

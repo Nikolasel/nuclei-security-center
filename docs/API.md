@@ -263,7 +263,29 @@ overlay — detection state, disposition, `times_mitigated`, and all contributin
 preserved Nuclei output of each finding's latest occurrence, one JSON object per line (Nuclei's
 native `out.jsonl` shape) — the full request/response, curl reproducer, and classification that
 the projected formats drop. PostgreSQL-backed exports replace invalid UTF-8 with U+FFFD; the
-per-scan object-storage archive remains the byte-exact scanner output.
+per-scan object-storage archive remains the byte-exact scanner output. If a lifecycle finding's
+latest occurrence is unavailable, raw JSONL omits it and reports the count in
+`X-NSC-Export-Missing-Occurrences`; the projected formats still include the lifecycle row.
+If another export cap also trips, the count covers rows examined before that cap and
+`X-NSC-Export-Truncated` remains the authoritative completeness signal.
+Exports are capped at 64 MiB and 50,000 matching rows, with a process-level
+limit of four concurrent exports. The backend probes one row beyond the row
+cap, so either cap is reported consistently. It prepares the bounded response
+before sending download headers, so a database error returns `500` instead of
+a successful partial file. When a cap is reached, the response ends at a
+complete JSON object/CSV row/raw JSONL line (or a valid truncated SARIF
+document) and sends `X-NSC-Export-Truncated: true` as a regular response
+header; clients must treat that response as incomplete.
+`X-NSC-Export-Row-Count` reports the number of rows included, and
+`X-NSC-Export-Max-Bytes` advertises the byte cap. Successful exports set
+`Cache-Control: no-store`. The response has a ten-minute
+write deadline; a client that cannot receive the file in that time is
+disconnected and the export slot is released. If all export slots are busy,
+the API returns `429 Too Many Requests` with `Retry-After: 30` as a short retry
+hint. The bounded spool directory is configured by
+`EXPORT_SPOOL_DIR` and is probed at backend startup; allow at least 512 MiB of
+writable space for four simultaneous maximum-size exports (SARIF uses a second
+bounded rule spool).
 
 ```sh
 # every critical/high finding still active, as CSV

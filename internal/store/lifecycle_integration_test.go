@@ -347,7 +347,7 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 		{Field: "target", Op: "any_of", Values: []string{target.ID}},
 		{Field: "name", Op: "contains", Values: []string{"tls-version"}},
 	}}}}
-	rawExport, err := st.ExportLifecycleRaw(ctx, tlsQuery)
+	rawExport, _, _, err := st.ExportLifecycleRaw(ctx, tlsQuery)
 	if err != nil {
 		t.Fatalf("export TLS lifecycle raw: %v", err)
 	}

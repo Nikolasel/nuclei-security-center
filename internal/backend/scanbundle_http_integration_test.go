@@ -92,8 +92,8 @@ func TestScanBundleHTTPRoundTripPostgres(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	spa := http.NotFoundHandler()
-	origin := NewServer(originStore, nil, nil, nil, spa, logger).Handler()
-	dest := NewServer(destStore, nil, nil, nil, spa, logger).Handler()
+	origin := NewServer(originStore, nil, nil, nil, spa, logger, os.TempDir()).Handler()
+	dest := NewServer(destStore, nil, nil, nil, spa, logger, os.TempDir()).Handler()
 
 	scanID, _, _, _ := seedBundleScan(t, ctx, originStore)
 
@@ -248,7 +248,7 @@ func TestScanBundleHTTPImportTrustedCoveragePostgres(t *testing.T) {
 	defer cancel()
 	st := openScanRequestTestStore(t, ctx, dsn)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	h := NewServer(st, nil, nil, nil, http.NotFoundHandler(), logger).Handler()
+	h := NewServer(st, nil, nil, nil, http.NotFoundHandler(), logger, os.TempDir()).Handler()
 	invalidModeReq := httptest.NewRequest(http.MethodPost, "/api/scans/import?coverage=unexpected", nil)
 	invalidModeRR := httptest.NewRecorder()
 	h.ServeHTTP(invalidModeRR, invalidModeReq)

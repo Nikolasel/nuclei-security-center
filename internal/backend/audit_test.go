@@ -48,6 +48,12 @@ func TestStatusRecorder(t *testing.T) {
 	if !sr2.written || sr2.status != http.StatusOK {
 		t.Errorf("after Write: status=%d written=%v, want 200/true", sr2.status, sr2.written)
 	}
+
+	underlying := httptest.NewRecorder()
+	sr3 := &statusRecorder{ResponseWriter: underlying, status: http.StatusOK}
+	if got := sr3.Unwrap(); got != underlying {
+		t.Fatalf("Unwrap returned %T, want the wrapped response writer", got)
+	}
 }
 
 func TestRecordAuditFields(t *testing.T) {

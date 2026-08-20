@@ -92,7 +92,9 @@ func (s *Server) mutation(eventID, action, objectType, role string, next http.Ha
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		r = r.WithContext(context.WithValue(r.Context(), requestAuditFieldsKey{}, &requestAuditFields{}))
 		id := identityFrom(r.Context())
-		if !satisfies(id, role) {
+		if !s.mutationOriginAllowed(r) {
+			http.Error(rec, "forbidden origin", http.StatusForbidden)
+		} else if !satisfies(id, role) {
 			http.Error(rec, "insufficient role", http.StatusForbidden)
 		} else {
 			next(rec, r)

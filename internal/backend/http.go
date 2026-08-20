@@ -96,7 +96,7 @@ func (s *Server) Handler() http.Handler {
 	if s.auth != nil {
 		mux.HandleFunc("GET /api/auth/login", s.auth.handleLogin)
 		mux.HandleFunc("GET /api/auth/callback", s.auth.handleCallback)
-		mux.HandleFunc("POST /api/auth/logout", s.auth.handleLogout)
+		mux.HandleFunc("POST /api/auth/logout", s.sameOrigin(s.auth.handleLogout))
 	}
 	mux.HandleFunc("GET /api/auth/me", s.requireAuth(s.handleMe))
 
@@ -243,12 +243,8 @@ type createScanRequest struct {
 
 func (s *Server) handleCreateScan(w http.ResponseWriter, r *http.Request) {
 	var req createScanRequest
-	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if len(body) > 0 {
-		if err := json.Unmarshal(body, &req); err != nil {
-			http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
-			return
-		}
+	if !decodeJSON(w, r, &req) {
+		return
 	}
 
 	spec, link, err := s.buildScanSpec(r.Context(), req)
@@ -815,8 +811,7 @@ func (s *Server) handleSetDisposition(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req setDispositionRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
-		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if !store.ValidDisposition(req.Disposition) {
@@ -844,8 +839,7 @@ func (s *Server) handleRecastSeverity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req recastSeverityRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
-		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	sev := strings.TrimSpace(req.Severity)

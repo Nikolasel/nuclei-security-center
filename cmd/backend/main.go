@@ -218,6 +218,7 @@ func buildAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger, 
 		ClientSecret: clientSecret,
 		RedirectURL:  redirect,
 		PostLogin:    postLogin,
+		PublicOrigin: baseURL,
 		Scopes:       splitCSV(envOr("OIDC_SCOPES", "openid,profile,email")),
 		RolesClaim:   envOr("OIDC_ROLES_CLAIM", "groups"),
 		GroupRoles: map[string]string{

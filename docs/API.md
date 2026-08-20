@@ -10,6 +10,12 @@ below assume a cookie jar `jar.txt` populated by a real login, or
 Authorization per endpoint follows the three roles: reads need `viewer`, running scans and
 config writes need `operator`, deletes need `admin`.
 
+Cookie-authenticated state-changing requests must include an `Origin` header matching the
+configured `APP_BASE_URL` origin. If a browser omits `Origin`, `Sec-Fetch-Site: same-origin` is
+accepted; `same-site` is intentionally not sufficient because sibling subdomains may be
+untrusted. JSON-body endpoints also require `Content-Type: application/json`. Service-account
+bearer requests are explicit credentials and do not need browser-origin headers.
+
 ## Interactive authentication
 
 `GET /api/auth/login` starts the browser OIDC flow and normally returns a `302` redirect to the
@@ -38,7 +44,7 @@ stored target, so scope is guaranteed by construction. Create a policy and targe
 ```sh
 # start a scan using a policy against an approved target
 curl -sb jar.txt -X POST localhost:8080/api/scans \
-  -H 'content-type: application/json' \
+  -H 'content-type: application/json' -H 'Origin: http://localhost:8080' \
   -d '{"scan_policy_id":"<policy_id>","target_id":"<target_id>"}'   # => {"scan_id":"..."}
 # check scan state (queued → running → complete)
 curl -sb jar.txt localhost:8080/api/scans/<scan_id>
@@ -87,9 +93,9 @@ best-effort; a running scan must be cancelled first (`409`).
 
 ```sh
 # stop a queued/running scan (operator). 409 if it's already terminal, 404 if unknown.
-curl -sb jar.txt -X POST localhost:8080/api/scans/<scan_id>/cancel   # => 204
+curl -sb jar.txt -X POST -H 'Origin: http://localhost:8080' localhost:8080/api/scans/<scan_id>/cancel   # => 204
 # delete a terminal scan record (admin). 409 if it's still queued/running.
-curl -sb jar.txt -X DELETE localhost:8080/api/scans/<scan_id>        # => 204
+curl -sb jar.txt -X DELETE -H 'Origin: http://localhost:8080' localhost:8080/api/scans/<scan_id>        # => 204
 ```
 
 To tune how a scan runs, edit or create a [scan policy](#config-scan-policies). Select the target
@@ -144,7 +150,7 @@ curl -sb jar.txt "localhost:8080/api/scans/<scan_id>/export" -o bundle.nsc-bundl
 # the same document zipped
 curl -sb jar.txt "localhost:8080/api/scans/<scan_id>/export?format=zip" -o bundle.nsc-bundle.zip
 # recreate the scan + results here (operator); 409 if the id already exists
-curl -sb jar.txt -X POST -H 'content-type: application/octet-stream' \
+curl -sb jar.txt -X POST -H 'content-type: application/octet-stream' -H 'Origin: http://localhost:8080' \
   --data-binary @bundle.nsc-bundle.zip "localhost:8080/api/scans/import" | jq
 ```
 
@@ -212,11 +218,11 @@ curl -sb jar.txt "localhost:8080/api/findings/<finding_id>" | jq
 curl -sb jar.txt "localhost:8080/api/occurrences/<occurrence_id>" | jq
 # disposition (operator) — none | false_positive | accepted (+ optional accept_expires_at)
 curl -sb jar.txt -X PATCH localhost:8080/api/findings/<finding_id>/disposition \
-  -H 'content-type: application/json' \
+  -H 'content-type: application/json' -H 'Origin: http://localhost:8080' \
   -d '{"disposition":"accepted","note":"risk accepted for Q3","accept_expires_at":"2027-01-01T00:00:00Z"}'
 # recast severity (operator) — empty severity clears the recast
 curl -sb jar.txt -X PATCH localhost:8080/api/findings/<finding_id>/severity \
-  -H 'content-type: application/json' -d '{"severity":"high","note":"internet-facing"}'
+  -H 'content-type: application/json' -H 'Origin: http://localhost:8080' -d '{"severity":"high","note":"internet-facing"}'
 ```
 
 `GET /api/findings` supports server-side filtering + pagination. The filter is a **structured
@@ -362,7 +368,7 @@ the backend was down fires once on the next tick, then reschedules forward.
 ```sh
 # create a schedule: run a policy against a target at 03:00 nightly (5-field cron; also
 # accepts @hourly/@daily/… and "@every 30m").
-curl -sb jar.txt -X POST localhost:8080/api/schedules -H 'content-type: application/json' -d '{
+curl -sb jar.txt -X POST localhost:8080/api/schedules -H 'content-type: application/json' -H 'Origin: http://localhost:8080' -d '{
   "name": "nightly-prod",
   "scan_policy_id": "<scan_policy_id>",
   "target_id": "<target_id>",
@@ -372,11 +378,11 @@ curl -sb jar.txt -X POST localhost:8080/api/schedules -H 'content-type: applicat
 # list schedules (each shows next_run_at / last_run_at / last_scan_id)
 curl -sb jar.txt localhost:8080/api/schedules | jq
 # pause a schedule (edit) — enabled:false clears its next run
-curl -sb jar.txt -X PUT localhost:8080/api/schedules/<id> -H 'content-type: application/json' \
+curl -sb jar.txt -X PUT localhost:8080/api/schedules/<id> -H 'content-type: application/json' -H 'Origin: http://localhost:8080' \
   -d '{"name":"nightly-prod","scan_policy_id":"<scan_policy_id>","target_id":"<target_id>","cron":"0 3 * * *","enabled":false}'
 # dispatch once now, off-schedule (leaves the cron cadence untouched)
-curl -sb jar.txt -X POST localhost:8080/api/schedules/<id>/run     # => {"scan_id":"..."}
-curl -sb jar.txt -X DELETE localhost:8080/api/schedules/<id>       # remove
+curl -sb jar.txt -X POST -H 'Origin: http://localhost:8080' localhost:8080/api/schedules/<id>/run     # => {"scan_id":"..."}
+curl -sb jar.txt -X DELETE -H 'Origin: http://localhost:8080' localhost:8080/api/schedules/<id>       # remove
 ```
 
 Reads need `viewer`; create/edit/run need `operator`; delete needs `admin`. The SPA exposes all
@@ -389,9 +395,9 @@ template catalog) to launch scans from:
 
 ```sh
 # create a target (the hosts list is the scope allowlist)
-curl -sb jar.txt -X POST localhost:8080/api/targets -d '{"name":"prod-web","hosts":["scanme.sh"],"tags":["prod"]}'
+curl -sb jar.txt -X POST -H 'Content-Type: application/json' -H 'Origin: http://localhost:8080' localhost:8080/api/targets -d '{"name":"prod-web","hosts":["scanme.sh"],"tags":["prod"]}'
 # create an exact template set, then select its members (see below)
-curl -sb jar.txt -X POST localhost:8080/api/template-sets -d '{"name":"critical-web","mode":"exact"}'
+curl -sb jar.txt -X POST -H 'Content-Type: application/json' -H 'Origin: http://localhost:8080' localhost:8080/api/template-sets -d '{"name":"critical-web","mode":"exact"}'
 # ...then bundle them into a scan policy (see Config: scan policies below)
 ```
 
@@ -413,15 +419,15 @@ except its stored exclusions:
 ```sh
 # set a set's membership to exactly these catalog template ids (the editor's "save")
 curl -sb jar.txt -X PUT localhost:8080/api/template-sets/<set_id>/members \
-  -H 'content-type: application/json' -d '{"template_ids":["CVE-2021-44228","my-custom-check"]}'
+  -H 'content-type: application/json' -H 'Origin: http://localhost:8080' -d '{"template_ids":["CVE-2021-44228","my-custom-check"]}'
 # add ids (idempotent); remove one
-curl -sb jar.txt -X POST   localhost:8080/api/template-sets/<set_id>/members -d '{"template_ids":["tech-detect"]}'
-curl -sb jar.txt -X DELETE localhost:8080/api/template-sets/<set_id>/members/tech-detect
+curl -sb jar.txt -X POST -H 'Content-Type: application/json' -H 'Origin: http://localhost:8080' localhost:8080/api/template-sets/<set_id>/members -d '{"template_ids":["tech-detect"]}'
+curl -sb jar.txt -X DELETE -H 'Origin: http://localhost:8080' localhost:8080/api/template-sets/<set_id>/members/tech-detect
 # list a set's member templates (catalog rows, yaml omitted)
 curl -sb jar.txt localhost:8080/api/template-sets/<set_id>/members
 # replace the exclusions for an exclude-mode set (empty list clears them)
 curl -sb jar.txt -X PUT localhost:8080/api/template-sets/<set_id>/exclusions \
-  -H 'content-type: application/json' -d '{"template_ids":["noisy-template","incompatible-check"]}'
+  -H 'content-type: application/json' -H 'Origin: http://localhost:8080' -d '{"template_ids":["noisy-template","incompatible-check"]}'
 # list excluded catalog templates (yaml omitted)
 curl -sb jar.txt localhost:8080/api/template-sets/<set_id>/exclusions
 ```
@@ -463,15 +469,15 @@ curl -sb jar.txt 'localhost:8080/api/templates/ids?severity=critical&tag=rce&q=s
 # one template incl. its verbatim YAML body
 curl -sb jar.txt localhost:8080/api/templates/CVE-2021-44228
 # add a custom template — the request body is raw YAML, not JSON
-curl -sb jar.txt -X POST localhost:8080/api/templates --data-binary @my-check.yaml
+curl -sb jar.txt -X POST -H 'Origin: http://localhost:8080' localhost:8080/api/templates --data-binary @my-check.yaml
 # replace a custom template (the id inside the YAML must equal the URL id)
-curl -sb jar.txt -X PUT localhost:8080/api/templates/my-custom-check --data-binary @my-check.yaml
+curl -sb jar.txt -X PUT -H 'Origin: http://localhost:8080' localhost:8080/api/templates/my-custom-check --data-binary @my-check.yaml
 # delete a custom template
-curl -sb jar.txt -X DELETE localhost:8080/api/templates/my-custom-check
+curl -sb jar.txt -X DELETE -H 'Origin: http://localhost:8080' localhost:8080/api/templates/my-custom-check
 # read safe upstream-sync configuration (viewer)
 curl -sb jar.txt localhost:8080/api/templates/sync
 # queue an upstream refresh now (operator)
-curl -sb jar.txt -X POST localhost:8080/api/templates/sync
+curl -sb jar.txt -X POST -H 'Origin: http://localhost:8080' localhost:8080/api/templates/sync
 # recent upstream-sync outcomes (for the Sync view)
 curl -sb jar.txt localhost:8080/api/templates/sync-runs
 ```
@@ -544,9 +550,9 @@ curl -sb jar.txt -o portable-set.tar.gz \
   'localhost:8080/api/template-sets/<set_id>/export?format=yaml'
 
 # import templates, or atomically restore a set plus its custom members
-curl -sb jar.txt -X POST -F file=@templates.tar.gz \
+curl -sb jar.txt -X POST -H 'Origin: http://localhost:8080' -F file=@templates.tar.gz \
   'localhost:8080/api/templates/import?on_conflict=skip'
-curl -sb jar.txt -X POST -F file=@portable-set.tar.gz \
+curl -sb jar.txt -X POST -H 'Origin: http://localhost:8080' -F file=@portable-set.tar.gz \
   'localhost:8080/api/template-sets/import?on_conflict=rename'
 ```
 
@@ -620,7 +626,7 @@ alone.
 
 ```sh
 # a policy for fragile devices: select templates, slow down, tolerate more host errors
-curl -sb jar.txt -X POST localhost:8080/api/scan-policies -H 'content-type: application/json' -d '{
+curl -sb jar.txt -X POST localhost:8080/api/scan-policies -H 'content-type: application/json' -H 'Origin: http://localhost:8080' -d '{
   "name": "fragile-device",
   "template_set_id": "<template_set_id>",
   "rate_limit": 20,
@@ -631,6 +637,7 @@ curl -sb jar.txt -X POST localhost:8080/api/scan-policies -H 'content-type: appl
 }'
 # launch it against an approved target
 curl -sb jar.txt -X POST localhost:8080/api/scans \
+  -H 'content-type: application/json' -H 'Origin: http://localhost:8080' \
   -d '{"scan_policy_id":"<policy_id>","target_id":"<target_id>"}'
 ```
 
@@ -653,6 +660,7 @@ for hostname targets and IPs matching no other node. Reads need `viewer`; create
 curl -sb jar.txt localhost:8080/api/nodes
 # add a node serving a CIDR range
 curl -sb jar.txt -X POST localhost:8080/api/nodes \
+  -H 'content-type: application/json' -H 'Origin: http://localhost:8080' \
   -d '{"name":"corp","endpoint":"http://scanner-corp:8081","token":"<bearer>","cidrs":["10.0.0.0/8"],"tags":["corp"],"max_concurrent_scans":4}'
 ```
 
@@ -688,7 +696,7 @@ are newer or the reported digest differs, and on admin request:
 
 ```sh
 # push the current full catalog to one node now (admin) → { templates_commit, template_count }
-curl -sb jar.txt -X POST localhost:8080/api/nodes/<node_id>/templates/sync
+curl -sb jar.txt -X POST -H 'Origin: http://localhost:8080' localhost:8080/api/nodes/<node_id>/templates/sync
 ```
 
 `404` for an unknown node; `502` if the node rejects the bundle or is unreachable. A node returns
@@ -727,7 +735,7 @@ same surface for scripting it.
 ```sh
 # Create (admin). ttl_days is optional: omitted => 90 days; 0 => no expiry.
 curl -sb jar.txt -X POST localhost:8080/api/service-accounts \
-  -H 'Content-Type: application/json' \
+  -H 'Content-Type: application/json' -H 'Origin: http://localhost:8080' \
   -d '{"name":"defectdojo-export","role":"viewer","ttl_days":90}'
 # => 201 { "id":"…", "name":"defectdojo-export", "role":"viewer",
 #          "token_prefix":"nsc_AbCdEfG", "expires_at":"…",
@@ -741,10 +749,10 @@ curl -H "Authorization: Bearer $NSC_TOKEN" \
 curl -sb jar.txt localhost:8080/api/service-accounts
 
 # Rotate (admin) — mints a new token and invalidates the old one immediately.
-curl -sb jar.txt -X POST localhost:8080/api/service-accounts/$ID/rotate
+curl -sb jar.txt -X POST -H 'Origin: http://localhost:8080' localhost:8080/api/service-accounts/$ID/rotate
 
 # Revoke (admin) — deletes the account; the token stops working at once.
-curl -sb jar.txt -X DELETE localhost:8080/api/service-accounts/$ID
+curl -sb jar.txt -X DELETE -H 'Origin: http://localhost:8080' localhost:8080/api/service-accounts/$ID
 ```
 
 | Method & path | Role | Purpose |

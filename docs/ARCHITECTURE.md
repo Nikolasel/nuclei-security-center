@@ -412,6 +412,11 @@ trade; the native-services path only wins if you're committed to one cloud forev
   SPA only ever holds an httpOnly, SameSite session cookie — `__Host-`-prefixed and host-locked
   when secure cookies are enabled — no tokens in browser JS. Session bearer values are stored
   only as SHA-256 hashes in Postgres.
+- **Browser mutation protection:** cookie-authenticated state-changing requests must carry an
+  exact `Origin` matching `APP_BASE_URL` (or `Sec-Fetch-Site: same-origin` when `Origin` is
+  absent); `same-site` is not accepted because sibling subdomains may be untrusted. JSON-body
+  mutations require `Content-Type: application/json`. Explicit service-account bearer callers
+  do not depend on ambient browser cookies and are exempt from the browser-origin header.
 - **Service-token hygiene:** backend→node bearer tokens are per-node secrets, rotatable,
   TLS-only; mTLS is the upgrade when you want mutual auth.
 - **Secrets:** target auth creds (if any) never in the DB plaintext or templates —

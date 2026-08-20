@@ -1,8 +1,6 @@
 package backend
 
 import (
-	"encoding/json"
-	"io"
 	"net/http"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
@@ -33,8 +31,7 @@ type updateSettingsRequest struct {
 
 func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	var req updateSettingsRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req); err != nil {
-		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if req.ScanRetentionDays != nil && *req.ScanRetentionDays <= 0 {

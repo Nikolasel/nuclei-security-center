@@ -328,7 +328,9 @@ so scans survive a busy or briefly-unreachable node.
    default (`conflict=duplicate` mints a fresh id). Import is fail-soft on
    references but fail-hard on the manifest itself: version-checked, validated,
    bounded (`ScanBundleMaxFindings` occurrences, 512 MiB upload cap,
-   zip-bomb-limited extraction).
+   streamed raw JSON / scratch-spooled ZIP uploads, an 8 MiB central-directory
+   and 25,000-entry limit, a 128 MiB decompressed manifest cap, and one in-flight
+   import process-wide; zip-bomb-limited extraction).
 
 ---
 

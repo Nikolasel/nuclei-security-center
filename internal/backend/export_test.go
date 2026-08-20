@@ -44,9 +44,12 @@ func TestSarifLevel(t *testing.T) {
 	}
 }
 
-func TestWriteFindingsCSV(t *testing.T) {
+func TestStreamFindingsCSVContent(t *testing.T) {
 	var buf bytes.Buffer
-	writeFindingsCSV(&buf, sampleRows())
+	truncated, err := streamFindingsCSV(&buf, 1<<20, lifecycleRowStream(sampleRows()))
+	if err != nil || truncated {
+		t.Fatalf("streamFindingsCSV: truncated=%v err=%v", truncated, err)
+	}
 
 	recs, err := csv.NewReader(&buf).ReadAll()
 	if err != nil {
@@ -69,7 +72,7 @@ func TestWriteFindingsCSV(t *testing.T) {
 	}
 }
 
-func TestWriteFindingsCSVFormulaInjection(t *testing.T) {
+func TestStreamFindingsCSVFormulaInjection(t *testing.T) {
 	t0 := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	rows := []store.LifecycleRow{{
 		ID: 1, TemplateID: "t", Name: "n", Severity: "high", EffectiveSeverity: "high",
@@ -80,7 +83,10 @@ func TestWriteFindingsCSVFormulaInjection(t *testing.T) {
 		Disposition: "none", FirstSeenAt: t0, LastSeenAt: t0,
 	}}
 	var buf bytes.Buffer
-	writeFindingsCSV(&buf, rows)
+	truncated, err := streamFindingsCSV(&buf, 1<<20, lifecycleRowStream(rows))
+	if err != nil || truncated {
+		t.Fatalf("streamFindingsCSV: truncated=%v err=%v", truncated, err)
+	}
 
 	recs, err := csv.NewReader(&buf).ReadAll()
 	if err != nil {
@@ -110,7 +116,7 @@ func TestNeutralizeCSVCell(t *testing.T) {
 	}
 }
 
-func TestWriteFindingsRawJSONL(t *testing.T) {
+func TestStreamFindingsRawJSONLContent(t *testing.T) {
 	// Pretty-printed input (as Postgres JSONB hands back), a compact one, and an
 	// empty object — all must come out as one compact object per line, each with
 	// the lifecycle id injected and the original fields preserved.
@@ -120,7 +126,10 @@ func TestWriteFindingsRawJSONL(t *testing.T) {
 		{ID: 103, Raw: json.RawMessage(`{}`)},
 	}
 	var buf bytes.Buffer
-	writeFindingsRawJSONL(&buf, rows)
+	truncated, err := streamFindingsRawJSONL(&buf, 1<<20, rawRowStream(rows))
+	if err != nil || truncated {
+		t.Fatalf("streamFindingsRawJSONL: truncated=%v err=%v", truncated, err)
+	}
 
 	lines := bytes.Split(bytes.TrimRight(buf.Bytes(), "\n"), []byte("\n"))
 	if len(lines) != 3 {
@@ -145,9 +154,12 @@ func TestWriteFindingsRawJSONL(t *testing.T) {
 	}
 }
 
-func TestWriteFindingsSARIF(t *testing.T) {
+func TestStreamFindingsSARIFContent(t *testing.T) {
 	var buf bytes.Buffer
-	writeFindingsSARIF(&buf, sampleRows())
+	truncated, err := streamFindingsSARIF(&buf, 1<<20, lifecycleRowStream(sampleRows()), newByteReadWriteSeeker())
+	if err != nil || truncated {
+		t.Fatalf("streamFindingsSARIF: truncated=%v err=%v", truncated, err)
+	}
 
 	var doc sarifLog
 	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {

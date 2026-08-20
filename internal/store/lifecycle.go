@@ -490,32 +490,58 @@ func (s *Store) ListLifecycleFindings(ctx context.Context, q FindingQuery, limit
 
 // ExportLifecycleFindings returns all deduplicated findings matching the filter
 // (up to exportMaxRows), in the same order as the list — for bulk export. The
-// filter's Limit/Offset are ignored.
-func (s *Store) ExportLifecycleFindings(ctx context.Context, q FindingQuery) ([]LifecycleRow, error) {
+// boolean reports whether the row cap omitted another finding; the filter's
+// Limit/Offset are ignored.
+func (s *Store) ExportLifecycleFindings(ctx context.Context, q FindingQuery) ([]LifecycleRow, bool, error) {
+	var out []LifecycleRow
+	rowCapped, err := s.StreamLifecycleFindings(ctx, q, func(row LifecycleRow) error {
+		out = append(out, row)
+		return nil
+	})
+	return out, rowCapped, err
+}
+
+// StreamLifecycleFindings visits matching lifecycle rows in database order. The
+// callback runs while each row is held by the pgx cursor, so callers can encode
+// or otherwise consume a row without retaining the full export in memory. The
+// boolean reports whether a row beyond exportMaxRows was available; callers can
+// surface that row cap as an explicit incomplete export rather than confusing it
+// with a complete result set.
+func (s *Store) StreamLifecycleFindings(ctx context.Context, q FindingQuery, fn func(LifecycleRow) error) (bool, error) {
 	var args []any
 	where, err := buildFindingWhere(q, &args)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	args = append(args, exportMaxRows)
+	// Fetch one probe row beyond the delivered cap so the caller can distinguish
+	// "exactly capped" from "there were more matching findings".
+	args = append(args, exportMaxRows+1)
 	limitPH := len(args)
 	query := fmt.Sprintf(`SELECT %s %s %s%s LIMIT $%d`,
 		lcSelectCols, lifecycleFrom, where, lcOrderBy, limitPH)
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
+	// A byte cap stops the callback, but closing the pgx rows still releases the
+	// database portal/connection; this is cleanup, not an early query cancel.
 	defer rows.Close()
 
-	var out []LifecycleRow
+	seen := 0
 	for rows.Next() {
+		if seen == exportMaxRows {
+			return true, nil
+		}
 		var r LifecycleRow
 		if err := scanLifecycleRow(rows, &r); err != nil {
-			return nil, err
+			return false, err
 		}
-		out = append(out, r)
+		if err := fn(r); err != nil {
+			return false, err
+		}
+		seen++
 	}
-	return out, rows.Err()
+	return false, rows.Err()
 }
 
 // RawExportRow pairs a lifecycle finding's id with the preserved Nuclei JSON of
@@ -528,35 +554,65 @@ type RawExportRow struct {
 
 // ExportLifecycleRaw returns each matching finding's lifecycle id + the preserved
 // Nuclei JSON of its latest occurrence (same filter + order as the list), for a
-// raw JSONL export. Findings whose latest occurrence is missing are skipped
-// (INNER JOIN).
-func (s *Store) ExportLifecycleRaw(ctx context.Context, q FindingQuery) ([]RawExportRow, error) {
+// raw JSONL export. The first boolean reports whether the row cap omitted another
+// lifecycle row; the count reports lifecycle rows whose latest occurrence was
+// unavailable. Such rows are intentionally omitted from raw JSONL.
+func (s *Store) ExportLifecycleRaw(ctx context.Context, q FindingQuery) ([]RawExportRow, bool, int64, error) {
+	var out []RawExportRow
+	rowCapped, missing, err := s.StreamLifecycleRaw(ctx, q, func(row RawExportRow) error {
+		out = append(out, row)
+		return nil
+	})
+	return out, rowCapped, missing, err
+}
+
+// StreamLifecycleRaw visits matching findings' lifecycle id and preserved raw
+// occurrence payload in database order. The callback runs one row at a time so
+// raw request/response bodies do not accumulate in a process-sized slice. The
+// first result reports whether a lifecycle row beyond exportMaxRows was
+// available; the count reports lifecycle rows encountered without a live latest
+// occurrence. Such rows are omitted from the callback output.
+func (s *Store) StreamLifecycleRaw(ctx context.Context, q FindingQuery, fn func(RawExportRow) error) (bool, int64, error) {
 	var args []any
 	where, err := buildFindingWhere(q, &args)
 	if err != nil {
-		return nil, err
+		return false, 0, err
 	}
-	args = append(args, exportMaxRows)
+	args = append(args, exportMaxRows+1)
 	limitPH := len(args)
-	query := fmt.Sprintf(`SELECT l.id, COALESCE(o.raw_line, o.raw::text) %s JOIN findings o ON o.id = l.latest_occurrence_id %s%s LIMIT $%d`,
+	query := fmt.Sprintf(`SELECT l.id, (o.id IS NULL), COALESCE(o.raw_line, o.raw::text) %s LEFT JOIN findings o ON o.id = l.latest_occurrence_id %s%s LIMIT $%d`,
 		lifecycleFrom, where, lcOrderBy, limitPH)
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return false, 0, err
 	}
+	// A byte cap stops the callback, but closing the pgx rows still releases the
+	// database portal/connection; this is cleanup, not an early query cancel.
 	defer rows.Close()
 
-	var out []RawExportRow
+	seen := 0
+	var missing int64
 	for rows.Next() {
-		var r RawExportRow
-		var raw string
-		if err := rows.Scan(&r.ID, &raw); err != nil {
-			return nil, err
+		if seen == exportMaxRows {
+			return true, missing, nil
 		}
-		r.Raw = json.RawMessage(raw)
-		out = append(out, r)
+		var r RawExportRow
+		var missingOccurrence bool
+		var raw *string
+		if err := rows.Scan(&r.ID, &missingOccurrence, &raw); err != nil {
+			return false, missing, err
+		}
+		seen++
+		if missingOccurrence || raw == nil {
+			missing++
+			continue
+		}
+		r.Raw = json.RawMessage(*raw)
+		if err := fn(r); err != nil {
+			return false, missing, err
+		}
 	}
-	return out, rows.Err()
+	return false, missing, rows.Err()
 }
 
 // GetLifecycleFinding returns one deduplicated finding by id, including the

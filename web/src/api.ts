@@ -539,9 +539,7 @@ function findingsParams(q: FindingsQuery): URLSearchParams {
 export type ExportFormat = "json" | "csv" | "sarif" | "raw";
 
 /** findingsExportUrl builds the download URL for the lifecycle findings export,
- *  reusing the same filter params as the list. The browser navigates to it so the
- *  same-origin session cookie authenticates the request (it's a file download,
- *  not JSON, so it bypasses the fetch helper). */
+ *  reusing the same filter params as the list. */
 export function findingsExportUrl(format: ExportFormat, q: FindingsQuery = {}): string {
   const p = findingsParams(q);
   p.set("format", format);
@@ -613,6 +611,41 @@ export class ApiError extends Error {
     super(message);
     this.status = status;
   }
+}
+
+export interface FindingsExportDownload {
+  blob: Blob;
+  filename: string;
+  truncated: boolean;
+  rowCount: number | null;
+  missingOccurrences: number;
+}
+
+async function fetchFindingsExport(
+  format: ExportFormat,
+  q: FindingsQuery = {},
+): Promise<FindingsExportDownload> {
+  const res = await fetch(findingsExportUrl(format, q), { credentials: "same-origin" });
+  if (!res.ok) {
+    const text = (await res.text()).trim();
+    throw new ApiError(res.status, text || res.statusText);
+  }
+  const fallbackName = `findings.${format === "raw" ? "jsonl" : format}`;
+  const disposition = res.headers.get("content-disposition") ?? "";
+  const match = disposition.match(/filename="([^"]+)"/i);
+  const filename = (match?.[1] || fallbackName).split(/[\\/]/).pop() || fallbackName;
+  const rowCountHeader = res.headers.get("X-NSC-Export-Row-Count");
+  const parsedRowCount = rowCountHeader === null ? Number.NaN : Number(rowCountHeader);
+  const missingOccurrencesHeader = res.headers.get("X-NSC-Export-Missing-Occurrences");
+  const parsedMissingOccurrences = missingOccurrencesHeader === null ? Number.NaN : Number(missingOccurrencesHeader);
+  return {
+    blob: await res.blob(),
+    filename,
+    truncated: res.headers.get("X-NSC-Export-Truncated") === "true",
+    rowCount: Number.isSafeInteger(parsedRowCount) && parsedRowCount >= 0 ? parsedRowCount : null,
+    missingOccurrences:
+      Number.isSafeInteger(parsedMissingOccurrences) && parsedMissingOccurrences >= 0 ? parsedMissingOccurrences : 0,
+  };
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
@@ -851,6 +884,7 @@ export const api = {
     const qs = p.toString();
     return request<Page<LifecycleFinding>>("GET", qs ? `/api/findings?${qs}` : "/api/findings");
   },
+  fetchFindingsExport,
   getFinding: (id: number | string) => request<FindingDetail>("GET", `/api/findings/${id}`),
   getOccurrence: (id: number | string) => request<OccurrenceDetail>("GET", `/api/occurrences/${id}`),
   // Analyst overlays (operator only). accept_expires_at applies to "accepted".

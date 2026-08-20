@@ -43,6 +43,10 @@ type statusRecorder struct {
 	written bool
 }
 
+// Unwrap lets http.ResponseController reach optional connection controls such
+// as SetWriteDeadline through the audit wrapper.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
 // requestAuditFields is a request-scoped, handler-populated extension to the
 // common audit envelope. The mutation middleware installs it before invoking a
 // handler, and recordAudit reads it afterward. This lets a handler record

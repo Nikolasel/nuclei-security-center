@@ -9,8 +9,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
@@ -32,6 +34,10 @@ type Server struct {
 	templateBatchValidator func(context.Context, []store.TemplateImportWrite) (types.TemplateBatchValidationResult, error)
 	spa                    http.Handler
 	log                    *slog.Logger
+	exportSlots            chan struct{}
+	exportSlotsOnce        sync.Once
+	exportSpoolDir         string
+	exportStore            findingsExportStore
 }
 
 // SetTemplateSyncer wires the upstream catalog status/trigger API.
@@ -46,9 +52,24 @@ func (s *Server) SetTemplateDistributor(d *TemplateDistributor) {
 
 // NewServer builds the backend HTTP server. auth may be nil to disable auth; spa
 // is the handler for the embedded frontend (served for all non-/api routes). The
-// findings searcher defaults to Postgres; SetFindingsSearcher swaps it.
-func NewServer(st *store.Store, orch *Orchestrator, auth *Authenticator, archive ObjectStore, spa http.Handler, log *slog.Logger) *Server {
-	s := &Server{store: st, orch: orch, auth: auth, archive: archive, searcher: pgSearcher{store: st}, spa: spa, log: log}
+// findings searcher defaults to Postgres; SetFindingsSearcher swaps it. The
+// entrypoint validates exportSpoolDir before passing it here.
+func NewServer(st *store.Store, orch *Orchestrator, auth *Authenticator, archive ObjectStore, spa http.Handler, log *slog.Logger, exportSpoolDir string) *Server {
+	if exportSpoolDir == "" {
+		exportSpoolDir = os.TempDir()
+	}
+	s := &Server{
+		store:          st,
+		orch:           orch,
+		auth:           auth,
+		archive:        archive,
+		searcher:       pgSearcher{store: st},
+		spa:            spa,
+		log:            log,
+		exportSlots:    make(chan struct{}, maxConcurrentFindingExports),
+		exportSpoolDir: exportSpoolDir,
+		exportStore:    st,
+	}
 	s.templateValidator = s.validateCustomTemplate
 	s.templateBatchValidator = s.validateCustomTemplateBatch
 	return s

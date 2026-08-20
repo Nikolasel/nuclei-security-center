@@ -96,6 +96,7 @@ such as `30s`, `15m`, and `6h`.
 | `TEMPLATE_SYNC_REF` | `latest` | Revision to mirror. `latest` resolves to the highest stable semantic-version tag; tags and commit SHAs are reproducible, while branch names advance. |
 | `TEMPLATE_SYNC_DIR` | `/tmp/nsc-template-sync` | Backend clone cache. Mount persistent storage to avoid repeated full clones. |
 | `TEMPLATE_DISTRIBUTE_INTERVAL` | `1h` | How often stale, idle scanner nodes receive the current full catalog bundle. Pre-dispatch top-up still runs. |
+| `EXPORT_SPOOL_DIR` | `os.TempDir()` (usually `/tmp`) | Writable backend-local scratch directory for findings exports. Reserve at least 512 MiB for four simultaneous 64 MiB exports; SARIF uses a second bounded rule spool. On a read-only-root deployment mount a writable `emptyDir`/volume and point this variable at it. |
 
 `SCAN_ZONES` uses this JSON shape (the three PEM-valued TLS keys are optional):
 
@@ -421,6 +422,7 @@ There is deliberately no audit table in PostgreSQL. Configure the platform log c
 | Discovery fails with permission/libpcap errors | Use the scanner image with required libraries/capability, or set the policy/node to connect mode. |
 | Docker Desktop reports every private-CIDR host alive | macOS VM/NAT can distort SYN host-discovery tally. Trust persisted discovered endpoints, use connect mode for local development, or verify SYN behavior on Linux/routable networks. |
 | Archive endpoint returns `404` | `S3_ENDPOINT` is unset, the scan has no archive, or the object is unavailable. |
+| Findings export returns `500 prepare findings export` | Verify `EXPORT_SPOOL_DIR` exists, is writable by the backend runtime user, and has at least 512 MiB of free space. |
 | Object upload logs warnings but scan completes | Archival is best-effort by design; repair endpoint/credentials/bucket policy and test a new scan. |
 | A finding does not auto-mitigate | Confirm a later complete scan ran the same template and request-trace evidence reached the same normalized host:port without skipped ingest. Missing coverage fails closed. |
 

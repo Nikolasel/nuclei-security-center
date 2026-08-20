@@ -3,7 +3,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Filter } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api, findingsExportUrl, type ExportFormat } from "../api";
+import { api, type ExportFormat } from "../api";
 import {
   ConditionBuilder,
   countActiveConditions,
@@ -70,6 +70,8 @@ export function FindingsView() {
   const [filter, setFilter] = useState(compiled);
   const [filterOpen, setFilterOpen] = useState(false);
   const [offset, setOffset] = useState(() => Math.max(0, Number(searchParams.get("offset")) || 0));
+  const [exporting, setExporting] = useState<ExportFormat | null>(null);
+  const [exportNotice, setExportNotice] = useState<{ kind: "warning" | "error"; text: string } | null>(null);
 
   useEffect(() => {
     const t = setTimeout(() => setFilter(compiled), 300);
@@ -112,16 +114,63 @@ export function FindingsView() {
 
   const total = query.data?.total ?? 0;
   const items = query.data?.items ?? [];
+  // Compare export rows only with a settled count for the same filter. During
+  // debounce/refetch, keepPreviousData intentionally exposes the prior page;
+  // using that total would create false incomplete-export warnings.
+  const exportReady = query.data != null && !query.isFetching && !query.isPlaceholderData;
   const from = total === 0 ? 0 : offset + 1;
   const to = Math.min(offset + PAGE_SIZE, total);
 
-  const download = (format: ExportFormat) => {
-    const a = document.createElement("a");
-    a.href = findingsExportUrl(format, { filter });
-    a.rel = "noopener";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+  useEffect(() => {
+    setExportNotice(null);
+  }, [filter, offset]);
+
+  const download = async (format: ExportFormat) => {
+    const expectedRows = total;
+    setExporting(format);
+    setExportNotice(null);
+    try {
+      const result = await api.fetchFindingsExport(format, { filter });
+      const objectURL = URL.createObjectURL(result.blob);
+      const a = document.createElement("a");
+      a.href = objectURL;
+      a.download = result.filename;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(objectURL), 0);
+
+      // Raw exports report lifecycle rows without a live latest occurrence in a
+      // separate header, so the UI can distinguish that omission from a count
+      // mismatch caused by the intentional raw join.
+      const rowCountMismatch =
+        format !== "raw" && result.rowCount !== null && result.rowCount !== expectedRows;
+      const rawMissingOccurrences = format === "raw" && result.missingOccurrences > 0;
+      if (result.truncated || rowCountMismatch || rawMissingOccurrences) {
+        const notices: string[] = [];
+        if (result.truncated || rowCountMismatch) {
+          const count = result.rowCount === null ? "an unknown number of" : `${result.rowCount} of ${expectedRows}`;
+          notices.push(`The ${format.toUpperCase()} export may be incomplete: it contains ${count} findings.`);
+        }
+        if (rawMissingOccurrences) {
+          notices.push(
+            `The RAW export omits ${result.missingOccurrences} lifecycle findings whose latest occurrence is no longer stored.`,
+          );
+        }
+        setExportNotice({
+          kind: "warning",
+          text: notices.join(" "),
+        });
+      }
+    } catch (error) {
+      setExportNotice({
+        kind: "error",
+        text: error instanceof Error ? error.message : "Unable to download findings export.",
+      });
+    } finally {
+      setExporting(null);
+    }
   };
 
   return (
@@ -175,8 +224,16 @@ export function FindingsView() {
 
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild>
-            <Button className="ml-auto" title="Export the findings matching the current filter">
-              Export ▾
+            <Button
+              className="ml-auto"
+              disabled={exporting !== null || !exportReady}
+              title={
+                exportReady
+                  ? "Export the findings matching the current filter"
+                  : "Wait for the current findings list to finish loading"
+              }
+            >
+              {exporting ? "Exporting…" : "Export ▾"}
             </Button>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
@@ -191,7 +248,7 @@ export function FindingsView() {
               {EXPORT_FORMATS.map((f) => (
                 <DropdownMenu.Item
                   key={f.format}
-                  onSelect={() => download(f.format)}
+                  onSelect={() => void download(f.format)}
                   className="cursor-pointer rounded px-2 py-1.5 text-sm outline-none hover:bg-neutral-100 dark:hover:bg-neutral-800"
                 >
                   {f.label}
@@ -201,6 +258,20 @@ export function FindingsView() {
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
       </div>
+
+      {exportNotice && (
+        <div
+          role={exportNotice.kind === "error" ? "alert" : "status"}
+          className={cn(
+            "rounded-md border px-3 py-2 text-sm",
+            exportNotice.kind === "error"
+              ? "border-red-200 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/40 dark:text-red-300"
+              : "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300",
+          )}
+        >
+          {exportNotice.text}
+        </div>
+      )}
 
       {filterOpen && (
         <Card className="p-3">

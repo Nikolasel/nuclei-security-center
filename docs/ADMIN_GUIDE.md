@@ -208,6 +208,17 @@ Register the exact `OIDC_REDIRECT_URL` with the provider. If browser-facing and 
 issuer addresses differ, keep the canonical browser issuer in `OIDC_ISSUER` and use
 `OIDC_DISCOVERY_URL` for backend metadata requests.
 
+### Browser mutation protection
+
+Cookie-authenticated state-changing API requests must carry an `Origin` matching the origin of
+`APP_BASE_URL`. When a browser omits `Origin`, the backend accepts
+`Sec-Fetch-Site: same-origin`; `same-site` is rejected because a sibling subdomain can be
+attacker-controlled. The guard is applied centrally to mutations, including logout, and fails
+closed when the configured public origin is missing or malformed. JSON-body endpoints also
+require `Content-Type: application/json`, preventing simple HTML form bodies from reaching JSON
+decoders. Service-account bearer-token callers are explicit rather than ambient credentials and
+do not need browser-origin headers.
+
 ### Headless automation
 
 Admins can create role-scoped, revocable NSC service-account tokens. Automation sends:

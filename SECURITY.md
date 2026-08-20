@@ -44,7 +44,10 @@ In short:
   before dispatch, and it **fails closed** (no approved targets ⇒ every scan is rejected).
 - **Authentication** is OIDC via the BFF pattern — access/refresh tokens stay server-side and
   the browser only ever holds an httpOnly session cookie. RBAC is enforced on every mutating
-  endpoint.
+  endpoint. Cookie-authenticated mutations additionally require an exact `Origin` match to
+  `APP_BASE_URL` (or `Sec-Fetch-Site: same-origin` when `Origin` is absent), and JSON bodies must
+  declare `Content-Type: application/json`; service-account bearer callers are explicit and do
+  not rely on ambient cookies.
 - **Audit trail:** every mutating call is emitted as a structured log event to stdout for the
   platform's log aggregator, off the app database.
 

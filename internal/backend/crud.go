@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
+	"strings"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 )
@@ -231,6 +233,11 @@ func (s *Server) handleDeleteScanPolicy(w http.ResponseWriter, r *http.Request) 
 
 // decodeJSON reads a JSON body (capped) into v, writing a 400 on failure.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || !strings.EqualFold(mediaType, "application/json") {
+		http.Error(w, "Content-Type must be application/json", http.StatusBadRequest)
+		return false
+	}
 	body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err := json.Unmarshal(body, v); err != nil {
 		http.Error(w, "invalid JSON body: "+err.Error(), http.StatusBadRequest)

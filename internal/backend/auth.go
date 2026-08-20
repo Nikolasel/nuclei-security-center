@@ -33,6 +33,7 @@ type AuthConfig struct {
 	DiscoveryURL string
 	RedirectURL  string            // this backend's /auth/callback URL, registered with the IdP
 	PostLogin    string            // where to send the browser after a successful login
+	PublicOrigin string            // public browser-facing app URL used for CSRF origin checks
 	Scopes       []string          // OIDC scopes to request (must include openid)
 	RolesClaim   string            // ID-token claim holding the user's groups/roles (e.g. "groups")
 	GroupRoles   map[string]string // IdP group value -> local role

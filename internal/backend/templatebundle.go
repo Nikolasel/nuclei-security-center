@@ -5,11 +5,23 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"path"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
+
+// errDuplicateBundlePath marks a catalog that cannot be packed: two templates
+// would occupy the same tar member name. The catalog's UNIQUE (source, path)
+// constraint scopes uniqueness per source only, so an upstream repo-relative
+// path can collide with a synthesized custom path (upstream custom/x.yaml vs
+// custom template id x) while both rows are individually valid. The node
+// extracts each member with O_TRUNC and verifies against the manifest, so such
+// a bundle is rejected wholesale as ErrInvalidBundle — freezing distribution to
+// every node. Failing here keeps that outcome loud, early, and actionable.
+var errDuplicateBundlePath = errors.New("duplicate template bundle path")
 
 // buildCatalogBundle packs every active template into the gzipped tar the node's
 // POST /v1/templates/bundle expects: each template's verbatim YAML at its path,
@@ -17,10 +29,29 @@ import (
 // returned digest is types.BundleDigest over the manifest entries — the value the
 // node will report back as templates_commit. Byte-for-byte YAML keeps the digest
 // a faithful record of exactly what the node runs.
+//
+// Packing invariant, asserted here rather than trusted to the schema: every tar
+// member must resolve to a unique name under the SAME rules the node applies
+// when extracting — the cleaned form of the slash path (extractTarGz's
+// duplicate key). Backslashes therefore stay literal: scanner nodes extract on
+// Linux, where a backslash is an ordinary filename character, so `http\a.yaml`
+// and `http/a.yaml` are distinct files there and must not be flagged here.
+// (The DB constrains (source, path) within one source; cross-source collisions
+// are still representable and fail here instead of shipping a bundle every
+// node rejects.)
 func buildCatalogBundle(bodies []store.Template) (data []byte, digest string, err error) {
 	entries := make([]types.TemplateBundleEntry, len(bodies))
+	byPath := make(map[string]string, len(bodies)) // resolved member name -> first claimant id
 	for i, t := range bodies {
 		entries[i] = types.TemplateBundleEntry{ID: t.ID, Path: t.Path, SHA256: t.ContentSHA256}
+		member := path.Clean(t.Path)
+		if first, dup := byPath[member]; dup {
+			return nil, "", fmt.Errorf(
+				"%w: %q would be written by both template %q and %q; rename or delete one",
+				errDuplicateBundlePath, t.Path, first, t.ID,
+			)
+		}
+		byPath[member] = t.ID
 	}
 	digest = types.BundleDigest(entries)
 	manifest, err := json.Marshal(types.TemplateBundleManifest{Digest: digest, Templates: entries})

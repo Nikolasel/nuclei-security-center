@@ -186,6 +186,64 @@ func TestBundleApplyRejects(t *testing.T) {
 		assertInvalid(t, data)
 	})
 
+	t.Run("duplicate member name", func(t *testing.T) {
+		// Two members at one name would silently truncate the earlier copy and
+		// break manifest verification (#213); the extractor must refuse up
+		// front — and the previously verified bundle must stay active.
+		b := newTestBundleStore(t)
+		status, err := b.apply(bytes.NewReader(makeBundle(t, good, nil, nil)))
+		if err != nil {
+			t.Fatalf("seed apply: %v", err)
+		}
+		data := makeBundle(t, good, nil, func(tw *tar.Writer) {
+			writeTar(t, tw, "http/a.yaml", "id: a-overwritten\n")
+		})
+		if _, err := b.apply(bytes.NewReader(data)); !errors.Is(err, ErrInvalidBundle) ||
+			!strings.Contains(err.Error(), "duplicate") {
+			t.Fatalf("err = %v, want duplicate-entry ErrInvalidBundle", err)
+		}
+		if b.activeDigest() != status.TemplatesCommit {
+			t.Errorf("rejected push changed the active bundle digest")
+		}
+	})
+
+	t.Run("aliased duplicate member name", func(t *testing.T) {
+		// A "./"-spelled repeat resolves to the same file. Detection must
+		// compare resolved names: this manifest hashes exactly what the LAST
+		// member writes, so downstream verification alone would accept the
+		// clobbered bundle and only the dup check catches it.
+		m := &types.TemplateBundleManifest{Templates: []types.TemplateBundleEntry{
+			{ID: "a", Path: "http/a.yaml", SHA256: contentHash("id: last\n")},
+		}}
+		m.Digest = types.BundleDigest(m.Templates)
+
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		tw := tar.NewWriter(gz)
+		mBytes, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeTar(t, tw, manifestName, string(mBytes))
+		writeTar(t, tw, "http/a.yaml", "id: first\n")
+		writeTar(t, tw, "http/./a.yaml", "id: last\n")
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := gz.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		b := newTestBundleStore(t)
+		if _, err := b.apply(bytes.NewReader(buf.Bytes())); !errors.Is(err, ErrInvalidBundle) ||
+			!strings.Contains(err.Error(), "duplicate") {
+			t.Fatalf("err = %v, want duplicate-entry rejection of aliased repeat", err)
+		}
+		if b.activeDigest() != "" {
+			t.Errorf("a rejected bundle must not become active")
+		}
+	})
+
 	t.Run("not gzip", func(t *testing.T) {
 		assertInvalid(t, []byte("this is not a gzip stream"))
 	})

@@ -218,8 +218,10 @@ func uniqueSorted(values []string) []string {
 }
 
 // extractTarGz unpacks a gzipped tar into dest, refusing anything that isn't a
-// plain file or directory and any path that escapes dest (zip-slip, CWE-22). The
-// total decompressed size is bounded (CWE-409).
+// plain file or directory, any path that escapes dest (zip-slip, CWE-22), and
+// any duplicate entry name (a repeated member would silently truncate the
+// earlier copy, so the manifest could never verify — reject the bundle up
+// front). The total decompressed size is bounded (CWE-409).
 func extractTarGz(r io.Reader, dest string) error {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
@@ -228,6 +230,7 @@ func extractTarGz(r io.Reader, dest string) error {
 	defer gz.Close()
 	tr := tar.NewReader(io.LimitReader(gz, maxBundleBytes+1))
 	var total int64
+	seenNames := make(map[string]struct{})
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -236,6 +239,11 @@ func extractTarGz(r io.Reader, dest string) error {
 		if err != nil {
 			return fmt.Errorf("%w: tar: %v", ErrInvalidBundle, err)
 		}
+		name := filepath.Clean(filepath.ToSlash(hdr.Name))
+		if _, dup := seenNames[name]; dup {
+			return fmt.Errorf("%w: duplicate tar entry %q", ErrInvalidBundle, hdr.Name)
+		}
+		seenNames[name] = struct{}{}
 		target, err := safeJoin(dest, hdr.Name)
 		if err != nil {
 			return err

@@ -51,7 +51,7 @@ retention + querying; keeping it off the app DB means a DB compromise can't rewr
 then logs actor / `event_id` / `action` / object type+id / method / path / status / duration.
 `event_id` is a small fixed vocabulary for detections — `access_denied` (authentication rejected,
 HTTP 401, or an audited mutation rejected by authorization, HTTP 403), `config_changed`
-(targets/template-sets/schedules CUD), `scan_dispatched` (scan submit or schedule run),
+(targets/template-sets/schedules CUD, or scan-history deletion), `scan_dispatched` (scan submit or schedule run),
 `finding_triaged` (disposition/recast), `service_account_changed`
 (API-token create/rotate/revoke) — all at INFO (a denial is normal enforcement, not a fault).
 Authenticated events carry `actor_type` (`user` or `service_account`) so headless token callers

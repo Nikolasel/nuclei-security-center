@@ -123,7 +123,7 @@ func (s *RetentionSweeper) deleteScan(ctx context.Context, id string) bool {
 	}
 	// Every mutation is audited (docs/ARCHITECTURE.md); a background delete has no
 	// HTTP request, so it goes through the system-actor variant.
-	logSystemAudit(ctx, s.log, eventScanDispatched, "scan.delete", "scan", id)
+	logSystemAudit(ctx, s.log, eventConfigChanged, "scan.delete", "scan", id)
 	s.log.Info("retention: deleted scan", "scan_id", id)
 	return true
 }

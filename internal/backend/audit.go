@@ -27,7 +27,7 @@ import (
 // of what it tried to do; a successful mutation gets its semantic category.
 const (
 	eventAccessDenied          = "access_denied"           // authentication or audited authz rejected (401/403)
-	eventConfigChanged         = "config_changed"          // targets / template sets / schedules CUD
+	eventConfigChanged         = "config_changed"          // config CUD and scan-history deletion
 	eventScanDispatched        = "scan_dispatched"         // ad-hoc scan submit or schedule run
 	eventFindingTriaged        = "finding_triaged"         // disposition / severity recast
 	eventServiceAccountChanged = "service_account_changed" // service-account token create/rotate/revoke

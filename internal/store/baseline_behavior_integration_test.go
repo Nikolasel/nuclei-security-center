@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
 )
 
@@ -377,5 +379,261 @@ func TestBaselineDeleteScanSerializesWithFindingIngestPostgres(t *testing.T) {
 	}
 	if lifecycleRows != 0 || occurrenceRows != 0 {
 		t.Fatalf("post-delete rows = lifecycle:%d occurrences:%d, want 0/0", lifecycleRows, occurrenceRows)
+	}
+}
+
+// TestBaselineDeleteScanOrdersSharedLifecycleLocksPostgres pins the concurrent
+// delete-scan lock order (#177): two scans observing the same results share
+// finding_lifecycle rows, so two concurrent DeleteScan transactions both mutate
+// those rows. DeleteScan must lock every affected lifecycle row in one
+// ascending-id pass after its own scan row and before any mutation — a global
+// order that makes a crossing acquisition (and therefore a deadlock) between
+// two deletes impossible.
+//
+// The interleaving is deterministic: a helper transaction plays the dangerous
+// half of a second delete by locking its scan row plus only the HIGHEST shared
+// lifecycle id, then the real DeleteScan of the other scan must block on that
+// row while already owning the LOWEST one. Probing the lowest id with
+// FOR UPDATE NOWAIT from a third session proves it; an untouched control row
+// proves the lock set is per-row, not table-wide. Deleting the newer scan makes
+// the blocking unconditional: both shared rows' latest occurrences belong to
+// it, so its NULL-out phase necessarily matches them.
+func TestBaselineDeleteScanOrdersSharedLifecycleLocksPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openIsolatedPostgres(t, ctx, dsn)
+
+	target, err := st.CreateTarget(ctx, Target{
+		Name:  "delete-lock-order-" + types.NewID(),
+		Hosts: []string{"delete-lock-order.invalid"},
+	})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	findings := []types.NucleiFinding{
+		{
+			TemplateID: "delete-order-one",
+			Host:       target.Hosts[0],
+			MatchedAt:  "https://one.delete-lock-order.invalid",
+			Type:       "http",
+			Info:       types.NucleiInfo{Name: "Delete order one", Severity: "high"},
+		},
+		{
+			TemplateID: "delete-order-two",
+			Host:       target.Hosts[0],
+			MatchedAt:  "https://two.delete-lock-order.invalid",
+			Type:       "http",
+			Info:       types.NucleiInfo{Name: "Delete order two", Severity: "medium"},
+		},
+	}
+	raws := make([][]byte, len(findings))
+	for i, f := range findings {
+		raw, err := json.Marshal(f)
+		if err != nil {
+			t.Fatalf("marshal finding %d: %v", i, err)
+		}
+		raws[i] = raw
+	}
+
+	scanA, err := st.CreateScan(ctx, types.ScanSpec{Targets: target.Hosts}, ScanLink{TargetID: target.ID})
+	if err != nil {
+		t.Fatalf("create first scan: %v", err)
+	}
+	scanB, err := st.CreateScan(ctx, types.ScanSpec{Targets: target.Hosts}, ScanLink{TargetID: target.ID})
+	if err != nil {
+		t.Fatalf("create second scan: %v", err)
+	}
+	// Both shared rows are observed by scanA first and scanB last, so their
+	// latest occurrences belong to scanB. Deleting the newer scan therefore
+	// provably mutates both rows (its latest_occurrence_id NULL-out matches
+	// them), while the helper below holds the higher row out of order.
+	for i, f := range findings {
+		if err := st.IngestFinding(ctx, scanA, target.ID, f, raws[i]); err != nil {
+			t.Fatalf("ingest finding %d into first scan: %v", i, err)
+		}
+		if err := st.IngestFinding(ctx, scanB, target.ID, f, raws[i]); err != nil {
+			t.Fatalf("ingest finding %d into second scan: %v", i, err)
+		}
+	}
+	if err := st.MarkComplete(ctx, scanA, "", ""); err != nil {
+		t.Fatalf("complete first scan: %v", err)
+	}
+	if err := st.MarkComplete(ctx, scanB, "", ""); err != nil {
+		t.Fatalf("complete second scan: %v", err)
+	}
+
+	var sharedIDs []int64
+	rows, err := st.pool.Query(ctx, `
+		SELECT DISTINCT f.finding_id
+		  FROM findings f
+		 WHERE f.scan_id IN ($1, $2)
+		   AND f.finding_id IS NOT NULL
+		 ORDER BY 1`, scanA, scanB)
+	if err != nil {
+		t.Fatalf("list shared lifecycle ids: %v", err)
+	}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			t.Fatalf("scan shared lifecycle id: %v", err)
+		}
+		sharedIDs = append(sharedIDs, id)
+	}
+	rows.Close()
+	if len(sharedIDs) != 2 {
+		t.Fatalf("shared lifecycle rows = %v, want exactly two", sharedIDs)
+	}
+	lowID, highID := sharedIDs[0], sharedIDs[1]
+
+	// An unrelated third result neither delete touches: the NOWAIT control.
+	control := types.NucleiFinding{
+		TemplateID: "delete-order-control",
+		Host:       "control.invalid",
+		MatchedAt:  "https://control.invalid",
+		Type:       "http",
+		Info:       types.NucleiInfo{Name: "Delete order control", Severity: "low"},
+	}
+	controlRaw, err := json.Marshal(control)
+	if err != nil {
+		t.Fatalf("marshal control finding: %v", err)
+	}
+	scanC, err := st.CreateScan(ctx, types.ScanSpec{}, ScanLink{})
+	if err != nil {
+		t.Fatalf("create control scan: %v", err)
+	}
+	if err := st.IngestFinding(ctx, scanC, "", control, controlRaw); err != nil {
+		t.Fatalf("ingest control finding: %v", err)
+	}
+	if err := st.MarkComplete(ctx, scanC, "", ""); err != nil {
+		t.Fatalf("complete control scan: %v", err)
+	}
+	var controlID int64
+	if err := st.pool.QueryRow(ctx,
+		`SELECT finding_id FROM findings WHERE scan_id = $1`, scanC,
+	).Scan(&controlID); err != nil {
+		t.Fatalf("read control lifecycle id: %v", err)
+	}
+
+	helper, err := st.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin helper transaction: %v", err)
+	}
+	defer helper.Rollback(context.Background())
+	var helperPID int
+	if err := helper.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&helperPID); err != nil {
+		t.Fatalf("read helper pid: %v", err)
+	}
+	// Play the dangerous half of a concurrent delete of the older scanA: its
+	// own scan row locked first, then the highest shared lifecycle id grabbed
+	// out of order. Under unordered locking the real delete below could reach
+	// that row without holding the lowest id, and this transaction wanting
+	// that same row next would close a deadlock cycle. With ordered locking
+	// the delete owns every shared row before it can block here.
+	if _, err := helper.Exec(ctx,
+		`SELECT state FROM scans WHERE id = $1 FOR UPDATE`, scanA,
+	); err != nil {
+		t.Fatalf("helper lock first scan: %v", err)
+	}
+	if _, err := helper.Exec(ctx,
+		`SELECT id FROM finding_lifecycle WHERE id = $1 FOR UPDATE`, highID,
+	); err != nil {
+		t.Fatalf("helper lock highest shared lifecycle: %v", err)
+	}
+
+	deleteErr := make(chan error, 1)
+	deleteCtx, deleteCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer deleteCancel()
+	go func() {
+		_, _, err := st.DeleteScan(deleteCtx, scanB)
+		deleteErr <- err
+	}()
+
+	var blocked bool
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := st.pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				  FROM pg_stat_activity
+				 WHERE pid <> pg_backend_pid()
+				   AND wait_event_type = 'Lock'
+				   AND $1 = ANY(pg_blocking_pids(pid))
+			)`, helperPID).Scan(&blocked); err != nil {
+			t.Fatalf("inspect blocked delete: %v", err)
+		}
+		if blocked {
+			break
+		}
+		if time.Now().After(deadline) {
+			if err := helper.Rollback(context.Background()); err != nil {
+				t.Fatalf("deadline rollback helper: %v", err)
+			}
+			select {
+			case err := <-deleteErr:
+				t.Fatalf("DeleteScan did not block on the highest shared lifecycle row (its error: %v)", err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("DeleteScan did not block on the highest shared lifecycle row")
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// The blocked delete must already hold the LOWEST shared row: acquiring it
+	// elsewhere must refuse immediately instead of succeeding behind its back.
+	probeBlocked := func(lifecycleID int64) bool {
+		ptx, err := st.pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin lock probe: %v", err)
+		}
+		defer ptx.Rollback(context.Background())
+		_, err = ptx.Exec(ctx,
+			`SELECT id FROM finding_lifecycle WHERE id = $1 FOR UPDATE NOWAIT`, lifecycleID)
+		if err == nil {
+			return false
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) {
+			t.Fatalf("lock probe of lifecycle %d failed unexpectedly: %v", lifecycleID, err)
+		}
+		return pgErr.Code == "55P03" // lock_not_available: held by another transaction
+	}
+	if !probeBlocked(lowID) {
+		t.Fatal("DeleteScan reached the highest shared lifecycle row without holding the lowest one")
+	}
+	if probeBlocked(controlID) {
+		t.Fatal("unrelated lifecycle row was locked alongside the shared rows")
+	}
+
+	if err := helper.Rollback(context.Background()); err != nil {
+		t.Fatalf("rollback helper transaction: %v", err)
+	}
+	if err := <-deleteErr; err != nil {
+		t.Fatalf("delete scan after ordered lifecycle locking: %v", err)
+	}
+
+	var firstOccurrences, secondOccurrences, lifecycleRows, repairedRows int
+	if err := st.pool.QueryRow(ctx, `
+		SELECT
+			(SELECT count(*) FROM findings WHERE scan_id = $1),
+			(SELECT count(*) FROM findings WHERE scan_id = $2),
+			(SELECT count(*) FROM finding_lifecycle WHERE id = ANY($3)),
+			(SELECT count(*) FROM finding_lifecycle
+			  WHERE id = ANY($3)
+			    AND first_seen_scan = $1
+			    AND last_seen_scan = $1
+			    AND last_covering_scan = $1)`,
+		scanA, scanB, sharedIDs,
+	).Scan(&firstOccurrences, &secondOccurrences, &lifecycleRows, &repairedRows); err != nil {
+		t.Fatalf("read post-delete state: %v", err)
+	}
+	if firstOccurrences != 2 || secondOccurrences != 0 || lifecycleRows != 2 || repairedRows != 2 {
+		t.Fatalf("post-delete state = occurrences A:%d B:%d lifecycle:%d repaired-to-A:%d, want 2/0/2/2",
+			firstOccurrences, secondOccurrences, lifecycleRows, repairedRows)
 	}
 }

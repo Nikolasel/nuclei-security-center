@@ -746,6 +746,14 @@ func (s *Store) CancelScan(ctx context.Context, id, reason string) (nodeScanID s
 // orchestrator goroutine never writes to a deleted row. It returns the scan's
 // archived object keys (raw output and execution log, either possibly empty) so
 // the caller can best-effort purge storage.
+//
+// Locking order: the scan row is locked first (serializing against finding
+// ingestion), then every finding_lifecycle row this transaction will mutate —
+// plus its pointer-reference closure, so the delete cascade's SET NULL
+// triggers never touch an unlocked row — is locked in one ascending-id pass
+// before any of them changes. Concurrent deletes of different scans that share
+// lifecycle rows therefore request those rows in the same global order instead
+// of an executor-chosen one that could cross and deadlock.
 func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey string, err error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -807,7 +815,13 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 		 UNION
 		 SELECT finding_id
 		   FROM findings
-		  WHERE scan_id = $1 AND finding_id IS NOT NULL`, coverageOriginClaimedSQL)
+		  WHERE scan_id = $1 AND finding_id IS NOT NULL
+		 UNION
+		 SELECT id
+		   FROM finding_lifecycle
+		  WHERE first_seen_scan = $1
+		     OR last_seen_scan = $1
+		     OR last_covering_scan = $1`, coverageOriginClaimedSQL)
 	affectedRows, err := tx.Query(ctx, query, id)
 	if err != nil {
 		return "", "", fmt.Errorf("list affected lifecycle: %w", err)
@@ -826,10 +840,34 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 		return "", "", fmt.Errorf("list affected lifecycle: %w", err)
 	}
 	affectedRows.Close()
+	// Lock every lifecycle row this transaction will mutate — the pointer
+	// NULL-out below, the delete cascade's SET NULL triggers, and the repair —
+	// in one ascending-id pass before touching any of them. Two concurrent
+	// deletes of different scans sharing lifecycle rows then acquire the shared
+	// rows in the same global order, so neither can hold one row while waiting
+	// for another the opposite transaction holds in reverse. The scan row is
+	// already locked above, preserving the scan-before-lifecycle order that
+	// serializes deletion against finding ingestion. The SQL `ORDER BY id` is
+	// the load-bearing part: Postgres locks rows in the statement's output
+	// order (LockRows sits above the sort), so no caller-side ordering matters.
+	if len(affectedLifecycle) > 0 {
+		if _, err := tx.Exec(ctx,
+			`SELECT id
+			   FROM finding_lifecycle
+			  WHERE id = ANY($1)
+			  ORDER BY id
+			    FOR UPDATE`, affectedLifecycle); err != nil {
+			return "", "", fmt.Errorf("lock affected lifecycle: %w", err)
+		}
+	}
 	// Clear pointers to occurrences that the scan cascade is about to delete.
 	// PostgreSQL assigns internal RI-trigger names from creation order, so relying
 	// on ON DELETE SET NULL to run before both scan-to-finding cascade constraints
 	// is not portable across an equivalent schema rebuilt from a compacted dump.
+	// Every row this UPDATE matches is already locked above: a lifecycle row's
+	// latest_occurrence_id always points to an occurrence whose finding_id links
+	// back to that same row, so the scan's findings branch of the lock set
+	// covers it.
 	if _, err := tx.Exec(ctx, `
 		UPDATE finding_lifecycle
 		   SET latest_occurrence_id = NULL

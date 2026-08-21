@@ -45,6 +45,7 @@ func main() {
 		log.Error("init runner", "err", err)
 		os.Exit(1)
 	}
+	defer runner.Close()
 
 	// Optional TLS / mTLS (#26). Unset ⇒ plain HTTP (unchanged). When a server
 	// cert is configured the node serves HTTPS; when a client CA is also set it

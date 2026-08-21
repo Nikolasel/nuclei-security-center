@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 //go:embed testdata/alpha_migrations/*.sql
@@ -38,8 +40,8 @@ func TestAlphaMigrationFixtureIntegrity(t *testing.T) {
 		t.Fatalf("list alpha migration fixtures: %v", err)
 	}
 	sort.Strings(names)
-	if len(names) != 44 {
-		t.Fatalf("alpha migration fixture count = %d, want 44", len(names))
+	if len(names) != 46 {
+		t.Fatalf("alpha migration fixture count = %d, want 46", len(names))
 	}
 
 	digest := sha256.New()
@@ -55,7 +57,7 @@ func TestAlphaMigrationFixtureIntegrity(t *testing.T) {
 		_, _ = digest.Write([]byte{0})
 	}
 
-	const want = "cffa9ca24c5ce0b0f807a777898049a470b04d7d380c0db28eca10dacc8874c5"
+	const want = "c949ec341305e22fc80545b4d7591c52b8eb4937383960c8e89d464463b1eeb9"
 	if got := fmt.Sprintf("%x", digest.Sum(nil)); got != want {
 		t.Fatalf("alpha migration fixture digest = %s, want %s; update the pin only for an intentional pre-beta reference-chain change", got, want)
 	}
@@ -234,6 +236,55 @@ func TestBaselineSeedsAppSettingsPostgres(t *testing.T) {
 	}
 }
 
+func TestMigrateIndexesScanDeletionFKCleanupColumnsPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openIsolatedPostgres(t, ctx, dsn)
+
+	// These columns carry ON DELETE SET NULL foreign keys, so deleting scans
+	// (manual deletes and retention sweeps cascading through findings and
+	// schedules) runs one referential-integrity UPDATE against the referencing
+	// table per deleted row. A valid non-partial btree index keyed on each
+	// column keeps those updates off full seq scans. Full indexes are a choice
+	// of simplicity and write-cost, not a requirement: the planner also picks
+	// IS NOT NULL partial indexes for the cached RI plan (the schema already
+	// relies on that for finding_lifecycle_last_covering_scan_idx), but nearly
+	// every row holds a non-NULL pointer here, so a partial variant would save
+	// nothing.
+	for _, tc := range []struct{ table, column string }{
+		{"finding_lifecycle", "latest_occurrence_id"},
+		{"schedules", "last_scan_id"},
+	} {
+		t.Run(tc.table+"."+tc.column, func(t *testing.T) {
+			var indexes int
+			if err := st.pool.QueryRow(ctx, `
+				SELECT count(*)
+				  FROM pg_index i
+				  JOIN pg_class tbl ON tbl.oid = i.indrelid
+				  JOIN pg_class idx ON idx.oid = i.indexrelid
+				  JOIN pg_am am ON am.oid = idx.relam
+				 WHERE tbl.relnamespace = current_schema()::regnamespace
+				   AND tbl.relname = $1
+				   AND i.indisvalid
+				   AND i.indpred IS NULL
+				   AND am.amname = 'btree'
+				   AND pg_get_indexdef(i.indexrelid, 1, true) = $2`,
+				tc.table, tc.column,
+			).Scan(&indexes); err != nil {
+				t.Fatalf("inspect scan-deletion FK-cleanup indexes: %v", err)
+			}
+			if indexes == 0 {
+				t.Fatalf("no valid non-partial btree index on %s.%s; scan deletion loses its FK-cleanup index", tc.table, tc.column)
+			}
+		})
+	}
+}
+
 func TestScannerNodeCapacityDefaultsAndPersistsPostgres(t *testing.T) {
 	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -379,10 +430,24 @@ func TestMigrateLiftsPoolStatementTimeoutForTransactionPostgres(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	st, _ := openEmptyIsolatedPostgresWithRuntimeParams(t, ctx, dsn, map[string]string{
+	st, schema := openEmptyIsolatedPostgresWithRuntimeParams(t, ctx, dsn, map[string]string{
 		"statement_timeout": "100ms",
 	})
-	if _, err := st.pool.Exec(ctx, `
+	// Install the fixture over a dedicated connection without the pool's
+	// statement_timeout: the 100ms budget is what Migrate must lift for its own
+	// transaction, not a budget for test setup, whose DDL batch could otherwise
+	// intermittently exceed it on loaded runners.
+	setupCfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf("parse setup connection config: %v", err)
+	}
+	setupCfg.ConnConfig.RuntimeParams = map[string]string{"search_path": schema}
+	setupPool, err := pgxpool.NewWithConfig(ctx, setupCfg)
+	if err != nil {
+		t.Fatalf("open setup pool: %v", err)
+	}
+	defer setupPool.Close()
+	if _, err := setupPool.Exec(ctx, `
 		CREATE TABLE schema_migrations (
 			version TEXT PRIMARY KEY,
 			checksum_sha256 TEXT,

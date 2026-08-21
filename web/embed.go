@@ -26,6 +26,23 @@ const notBuiltHTML = `<!doctype html>
 <p>Frontend not built. Run <code>npm ci &amp;&amp; npm run build</code> in <code>web/</code>.</p>
 `
 
+// SecurityHeadersCSP is the tightly scoped Content-Security-Policy for the
+// same-origin SPA + JSON API. It is the single source of truth for the
+// policy — both the backend middleware and this SPA handler use it, so a
+// future tweak cannot silently diverge between the two packages.
+const SecurityHeadersCSP = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'"
+
+// SetSecurityHeaders applies the baseline hardening headers (CSP,
+// anti-framing, anti-MIME-sniffing, referrer policy) to h. The backend
+// middleware reuses this helper so the SPA handler and the API share the
+// exact same values.
+func SetSecurityHeaders(h http.Header) {
+	h.Set("Content-Security-Policy", SecurityHeadersCSP)
+	h.Set("X-Content-Type-Options", "nosniff")
+	h.Set("X-Frame-Options", "DENY")
+	h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+}
+
 // Handler serves the embedded SPA build. Requests that don't map to a real asset
 // fall back to index.html so client-side routing works on deep links and refresh.
 func Handler() http.Handler {
@@ -49,6 +66,12 @@ func handlerFor(fsys fs.FS) http.Handler {
 	fileServer := http.FileServer(http.FS(fsys))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Harden the SPA even when the handler is used standalone (e.g. in
+		// web tests). In production the backend's securityHeaders middleware
+		// has already set the same values via the shared helper, so this is
+		// an idempotent overwrite with identical values — not a divergent
+		// policy.
+		SetSecurityHeaders(w.Header())
 		p := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
 		if p == "" {
 			p = "index.html"

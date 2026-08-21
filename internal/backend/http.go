@@ -17,6 +17,7 @@ import (
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/Nikolasel/nuclei-security-center/web"
 )
 
 // Server is the backend's HTTP API. Mutating and read endpoints are guarded by
@@ -85,6 +86,25 @@ func (s *Server) SetFindingsSearcher(searcher FindingsSearcher) { s.searcher = s
 // caller doesn't specify their own.
 func defaultOptions() types.ScanOptions {
 	return types.ScanOptions{RateLimit: 150, Concurrency: 25, TimeoutSec: 600}
+}
+
+// securityHeaders wraps every response (SPA shell, assets, JSON API, healthz)
+// with baseline hardening headers. It runs first so even authz denials and
+// 404s are covered. The policy and header names are defined in web
+// (SecurityHeadersCSP / SetSecurityHeaders) so the SPA file handler and the
+// API share a single source of truth and cannot drift. Strict-Transport-
+// Security is deliberately not set here — HSTS is the TLS-terminating
+// ingress's responsibility (the app doesn't know if it's behind HTTPS), and
+// the comment on the middleware makes that omission intentional. The chosen
+// script-src 'self' (no 'unsafe-inline') is correct for a standard Vite
+// production build (external module scripts); a future Vite config that emits
+// inline bootstrap scripts would break under this CSP and needs a
+// production smoke check of the embedded build.
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		web.SetSecurityHeaders(w.Header())
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Handler returns the backend router. The JSON API lives under /api/*; the SPA
@@ -224,7 +244,7 @@ func (s *Server) Handler() http.Handler {
 	// Everything else: the embedded SPA (falls back to index.html for client routes).
 	mux.Handle("/", s.spa)
 
-	return mux
+	return securityHeaders(mux)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

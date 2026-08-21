@@ -334,13 +334,16 @@ func (s *Store) SetScanNode(ctx context.Context, scanID, nodeID string) error {
 	return err
 }
 
-// MarkRunning records the node's scan id and moves the scan to running.
-func (s *Store) MarkRunning(ctx context.Context, scanID, nodeScanID string) error {
-	_, err := s.pool.Exec(ctx,
-		`UPDATE scans SET state = $1, node_scan_id = $2, started_at = now() WHERE id = $3`,
-		types.ScanRunning, nodeScanID, scanID,
+// MarkRunning records the node's scan id and moves a queued scan to running.
+// The conditional transition prevents a queued cancellation from being
+// resurrected after the node has accepted the work.
+func (s *Store) MarkRunning(ctx context.Context, scanID, nodeScanID string) (bool, error) {
+	tag, err := s.pool.Exec(ctx,
+		`UPDATE scans SET state = $1, node_scan_id = $2, started_at = now()
+		  WHERE id = $3 AND state = $4`,
+		types.ScanRunning, nodeScanID, scanID, types.ScanQueued,
 	)
-	return err
+	return tag.RowsAffected() == 1, err
 }
 
 // MarkFailed records a terminal failure with its reason. It never overwrites a

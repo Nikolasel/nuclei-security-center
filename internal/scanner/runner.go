@@ -40,21 +40,23 @@ type Runner struct {
 }
 
 type job struct {
-	mu          sync.Mutex
-	status      types.ScanStatus
-	phase       types.ScanPhase // current stage; stamped onto every progress snapshot (#86)
-	resultsPath string
-	logPath     string // Nuclei's stdout/stderr for this run (#94)
-	dir         string // per-scan work dir under workRoot (#204)
-	finishedAt  time.Time
-	cancel      context.CancelFunc
+	mu              sync.Mutex
+	status          types.ScanStatus
+	phase           types.ScanPhase // current stage; stamped onto every progress snapshot (#86)
+	resultsPath     string
+	logPath         string // Nuclei's stdout/stderr for this run (#94)
+	dir             string // per-scan work dir under workRoot (#204)
+	finishedAt      time.Time
+	cancel          context.CancelFunc
+	cancelRequested bool
+	done            chan struct{}
 }
 
 const coverageDrainTimeout = 5 * time.Second
 
 // scanRetention is how long a terminal scan's work dir and job record are kept
 // before the background reaper removes them (#204). The clock starts when the
-// scan reaches a terminal state (complete/failed), so it only needs to cover
+// scan reaches a terminal state (complete/failed/cancelled), so it only needs to cover
 // the worst-case backend delay between pollToDone returning terminal and the
 // backend fetching results.jsonl/scan.log. That window is normally seconds, but
 // Postgres stalls (e.g. Aurora auto-pause during SetScanDiscovered/
@@ -138,8 +140,10 @@ func (r *Runner) Start(spec types.ScanSpec) (string, error) {
 		return "", err
 	}
 	id := types.NewID()
+	scanCtx, scanCancel := context.WithCancel(context.Background())
 	dir := filepath.Join(r.workRoot, id)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
+		scanCancel()
 		unlockTemplates()
 		r.releaseScan()
 		return "", fmt.Errorf("create scan dir: %w", err)
@@ -154,12 +158,17 @@ func (r *Runner) Start(spec types.ScanSpec) (string, error) {
 		resultsPath: filepath.Join(dir, "results.jsonl"),
 		logPath:     filepath.Join(dir, "scan.log"),
 		dir:         dir,
+		cancel:      scanCancel,
+		done:        make(chan struct{}),
 	}
 	r.mu.Lock()
 	r.scans[id] = j
 	r.mu.Unlock()
 
-	go r.run(j, spec, dir, templates, unlockTemplates)
+	go func() {
+		defer scanCancel()
+		r.run(scanCtx, j, spec, dir, templates, unlockTemplates)
+	}()
 	return id, nil
 }
 
@@ -208,10 +217,30 @@ func (r *Runner) Cancel(id string) bool {
 		return false
 	}
 	j.mu.Lock()
+	if j.status.State != types.ScanRunning || j.cancel == nil || j.cancelRequested || j.done == nil {
+		j.mu.Unlock()
+		return false
+	}
 	cancel := j.cancel
+	done := j.done
+	j.cancelRequested = true
 	j.mu.Unlock()
-	if cancel != nil {
-		cancel()
+	cancel()
+	// Wait briefly for the process group and the run goroutine to finish before
+	// acknowledging the cancellation. The terminal status is published by
+	// finish only after the run's artifact and subprocess defers complete, which
+	// keeps the node's DELETE path from racing a live work directory while still
+	// bounding a pathological subprocess shutdown.
+	timer := time.NewTimer(10 * time.Second)
+	select {
+	case <-done:
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	case <-timer.C:
 	}
 	return true
 }
@@ -230,7 +259,7 @@ func (r *Runner) DeleteScan(id string) error {
 		return ErrScanNotFound
 	}
 	j.mu.Lock()
-	terminal := isTerminal(j.status.State)
+	terminal := j.terminalAndFinished()
 	j.mu.Unlock()
 	if !terminal {
 		r.mu.Unlock()
@@ -262,7 +291,7 @@ func (r *Runner) cleanupExpired() {
 	r.mu.Lock()
 	for id, j := range r.scans {
 		j.mu.Lock()
-		terminal := isTerminal(j.status.State)
+		terminal := j.terminalAndFinished()
 		finishedAt := j.finishedAt
 		dir := j.dir
 		j.mu.Unlock()
@@ -367,7 +396,25 @@ func (r *Runner) Close() {
 }
 
 func isTerminal(s types.ScanState) bool {
-	return s == types.ScanComplete || s == types.ScanFailed
+	return s == types.ScanComplete || s == types.ScanFailed || s == types.ScanCancelled
+}
+
+// terminalAndFinished distinguishes the immediate cancelled status exposed to
+// callers from the point at which the run goroutine has actually released its
+// process resources and the work directory is safe to remove.
+func (j *job) terminalAndFinished() bool {
+	if !isTerminal(j.status.State) || j.finishedAt.IsZero() {
+		return false
+	}
+	if j.status.State != types.ScanCancelled || j.done == nil {
+		return true
+	}
+	select {
+	case <-j.done:
+		return true
+	default:
+		return false
+	}
 }
 
 // ScanCount returns the number of tracked jobs (for tests).
@@ -377,8 +424,9 @@ func (r *Runner) ScanCount() int {
 	return len(r.scans)
 }
 
-func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []lockedTemplate, unlockTemplates func()) {
+func (r *Runner) run(ctx context.Context, j *job, spec types.ScanSpec, dir string, templates []lockedTemplate, unlockTemplates func()) {
 	defer r.releaseScan()
+	defer j.finish()
 
 	// Start acquired the active bundle's shared lock after validating the
 	// manifest. Hold it across discovery and Nuclei so no bundle activation can
@@ -387,8 +435,14 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 
 	// Capture the engine version before the scan so the backend can record
 	// exactly what ran alongside the bundle digest.
-	version := r.nucleiVersion()
+	if ctx.Err() != nil {
+		return
+	}
+	version := r.nucleiVersionContext(ctx)
 	j.setVersion(version)
+	if ctx.Err() != nil {
+		return
+	}
 
 	// The execution-log archive (#94) captures both pipeline stages: the optional
 	// naabu discovery pass and Nuclei. Open it once here and share the handle —
@@ -406,6 +460,9 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 		j.fail(fmt.Errorf("write targets file: %w", err))
 		return
 	}
+	if ctx.Err() != nil {
+		return
+	}
 
 	// Optional naabu port-discovery pre-pass (#86). Fails closed: if discovery
 	// errors, the scan fails rather than falling back to an unfiltered Nuclei run.
@@ -418,12 +475,17 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 		if discTimeout <= 0 {
 			discTimeout = defaultDiscoveryTimeout
 		}
-		dctx, dcancel := context.WithTimeout(context.Background(), discTimeout)
-		j.setCancel(dcancel)
+		dctx, dcancel := context.WithTimeout(ctx, discTimeout)
 		live, err := r.discover(dctx, spec, targetsFile, dir, logw, j.setDiscoveryProgress)
 		dcancel()
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			j.fail(fmt.Errorf("port discovery (naabu): %w", err))
+			return
+		}
+		if ctx.Err() != nil {
 			return
 		}
 		j.setDiscoveredTargets(live)
@@ -437,6 +499,12 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 			j.fail(fmt.Errorf("write discovered targets file: %w", err))
 			return
 		}
+		if ctx.Err() != nil {
+			return
+		}
+	}
+	if ctx.Err() != nil {
+		return
 	}
 	j.setPhase(types.PhaseScanning)
 
@@ -444,8 +512,7 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 	if timeout <= 0 {
 		timeout = 30 * time.Minute
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	j.setCancel(cancel)
+	scanCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	templatePaths := make([]string, 0, len(templates))
@@ -477,15 +544,10 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 	}()
 
 	args := buildArgs(nucleiTargets, j.resultsPath, tracePath, templatePaths, spec)
-	cmd := exec.CommandContext(ctx, r.nucleiPath, args...)
+	cmd := exec.CommandContext(scanCtx, r.nucleiPath, args...)
 	// Run in its own process group so Cancel/timeout kills nuclei and any child.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process != nil {
-			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-		return nil
-	}
+	cmd.Cancel = killProcessGroup(cmd)
 
 	// Nuclei writes its findings to stdout and its diagnostics + -stats-json to
 	// stderr (verified for the pinned v3.11.0). We route ONLY stderr through
@@ -508,6 +570,9 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 	// Release the handshake anchor after Nuclei exits. This is the last writer
 	// when Nuclei failed before opening -trace-log, and therefore guarantees EOF.
 	_ = traceAnchor.Close()
+	if ctx.Err() != nil {
+		return
+	}
 	var coverage coverageResult
 	coverageTimer := time.NewTimer(coverageDrainTimeout)
 	select {
@@ -521,6 +586,9 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 			"endpoint coverage unavailable: trace reducer did not finish within %s",
 			coverageDrainTimeout,
 		)
+	case <-ctx.Done():
+		_ = traceReader.Close()
+		return
 	}
 	findingCount := countLines(j.resultsPath)
 	coverage = validateCoverageAgainstFindings(coverage, findingCount)
@@ -532,7 +600,7 @@ func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []locked
 		// A timeout is its own clean message: the OS reason (`signal: killed`) and
 		// the stderr tail (a batch of per-host "Skipped … unresponsive" diagnostics)
 		// only bury the cause. The full stderr is in the execution-log archive (#94).
-		if ctx.Err() == context.DeadlineExceeded {
+		if scanCtx.Err() == context.DeadlineExceeded {
 			j.fail(fmt.Errorf("nuclei: scan timed out after %s (see execution log for details)", timeout))
 			return
 		}
@@ -625,7 +693,10 @@ func (r *Runner) nucleiVersion() string {
 func (r *Runner) nucleiVersionContext(parent context.Context) string {
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, r.nucleiPath, "-version").CombinedOutput()
+	cmd := exec.CommandContext(ctx, r.nucleiPath, "-version")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = killProcessGroup(cmd)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return ""
 	}
@@ -638,9 +709,33 @@ func (j *job) setVersion(v string) {
 	j.mu.Unlock()
 }
 
-func (j *job) setCancel(c context.CancelFunc) {
+func killProcessGroup(cmd *exec.Cmd) func() error {
+	return func() error {
+		if cmd.Process != nil {
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return nil
+	}
+}
+
+func (j *job) finish() {
 	j.mu.Lock()
-	j.cancel = c
+	if j.cancelRequested {
+		// Publish the terminal state only while holding the job lock, after all
+		// run defers have released subprocesses and artifact handles. Closing
+		// done first ensures Status cannot observe cancelled before the run is
+		// fully finished: readers block on j.mu until both operations complete.
+		if j.done != nil {
+			close(j.done)
+		}
+		j.status.State = types.ScanCancelled
+		j.finishedAt = time.Now()
+		j.mu.Unlock()
+		return
+	}
+	if j.done != nil {
+		close(j.done)
+	}
 	j.mu.Unlock()
 }
 
@@ -711,6 +806,10 @@ func validateCoverageAgainstFindings(coverage coverageResult, findingCount int) 
 
 func (j *job) fail(err error) {
 	j.mu.Lock()
+	if j.cancelRequested || j.status.State == types.ScanCancelled {
+		j.mu.Unlock()
+		return
+	}
 	j.status.State = types.ScanFailed
 	j.status.Error = err.Error()
 	j.finishedAt = time.Now()
@@ -719,6 +818,10 @@ func (j *job) fail(err error) {
 
 func (j *job) complete(count int) {
 	j.mu.Lock()
+	if j.cancelRequested || j.status.State == types.ScanCancelled {
+		j.mu.Unlock()
+		return
+	}
 	j.status.State = types.ScanComplete
 	j.status.FindingCount = count
 	j.finishedAt = time.Now()

@@ -224,7 +224,7 @@ printf '[INF] fake nuclei stderr\n' >&2
 		logPath:     filepath.Join(dir, "scan.log"),
 	}
 	r := &Runner{nucleiPath: fakeNuclei}
-	r.run(j, types.ScanSpec{Targets: []string{"scanme.sh"}}, dir, nil, func() {})
+	r.run(context.Background(), j, types.ScanSpec{Targets: []string{"scanme.sh"}}, dir, nil, func() {})
 
 	log, err := os.ReadFile(j.logPath)
 	if err != nil {

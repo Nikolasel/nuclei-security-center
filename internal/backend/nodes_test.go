@@ -89,6 +89,16 @@ func TestValidateNodeEndpoint(t *testing.T) {
 		{name: "missing scheme", endpoint: "scanner:8081", wantErr: true},
 		{name: "unsupported scheme", endpoint: "ftp://scanner:21", wantErr: true},
 		{name: "missing host", endpoint: "http:///v1", wantErr: true},
+		{name: "credentials", endpoint: "http://user:pass@scanner:8081", wantErr: true},
+		{name: "fragment", endpoint: "http://scanner:8081#frag", wantErr: true},
+		{name: "localhost", endpoint: "http://localhost:8081", wantErr: true},
+		{name: "loopback ipv4", endpoint: "http://127.0.0.1:8081", wantErr: true},
+		{name: "loopback ipv6", endpoint: "http://[::1]:8081", wantErr: true},
+		{name: "link-local", endpoint: "http://169.254.169.254/latest", wantErr: true},
+		{name: "link-local ipv6", endpoint: "http://[fe80::1]:8081", wantErr: true},
+		{name: "unspecified", endpoint: "http://0.0.0.0:8081", wantErr: true},
+		{name: "private allowed", endpoint: "http://10.0.0.1:8081"},
+		{name: "private allowed 2", endpoint: "http://192.168.1.10:8081"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

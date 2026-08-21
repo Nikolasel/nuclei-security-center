@@ -202,11 +202,18 @@ func buildAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger, 
 	redirect := envOr("OIDC_REDIRECT_URL", baseURL+"/api/auth/callback")
 	postLogin := envOr("POST_LOGIN_REDIRECT", baseURL+"/")
 
-	ttl := 12 * time.Hour
+	// Validate SESSION_TTL at env-parse time for a fast, clear startup error.
+	// This intentionally double-gates the same check in backend.NewAuthenticator
+	// (the single source of truth for the 15m..24h bound) so a misconfigured
+	// duration fails before OIDC discovery is attempted.
+	ttl := backend.DefaultSessionTTL
 	if v := os.Getenv("SESSION_TTL"); v != "" {
 		d, err := time.ParseDuration(v)
 		if err != nil {
 			return nil, errors.New("SESSION_TTL: " + err.Error())
+		}
+		if d < backend.MinSessionTTL || d > backend.MaxSessionTTL {
+			return nil, fmt.Errorf("SESSION_TTL must be between %s and %s (got %s)", backend.MinSessionTTL, backend.MaxSessionTTL, d)
 		}
 		ttl = d
 	}

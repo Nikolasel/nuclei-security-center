@@ -14,6 +14,7 @@ import {
   PanelLeftOpen,
   Radar,
   Server,
+  ShieldCheck,
   SlidersHorizontal,
   Target,
   X,
@@ -53,6 +54,7 @@ const categories: Category[] = [
     panes: [
       { to: "/nodes", label: "Scanner Nodes", icon: Server },
       { to: "/service-accounts", label: "Service Accounts", icon: KeyRound },
+      { to: "/sessions", label: "Sessions", icon: ShieldCheck },
       { to: "/settings", label: "Settings", icon: SlidersHorizontal },
     ],
   },

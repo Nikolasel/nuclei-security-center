@@ -256,6 +256,19 @@ export interface ServiceAccountWithToken extends ServiceAccount {
   token: string;
 }
 
+// SessionInfo is the admin-visible projection of a live BFF session (#189).
+// `id` is the stored hash (DB primary key), not the bearer-equivalent cookie
+// value; it is the identifier used for single-session revocation.
+export interface SessionInfo {
+  id: string;
+  subject: string;
+  email?: string;
+  name?: string;
+  roles: string[];
+  created_at: string;
+  expires_at: string;
+}
+
 export const ASSIGNABLE_ROLES = ["viewer", "operator", "admin"] as const;
 
 /** Default token lifetime in days, mirroring the backend's defaultTokenTTLDays.
@@ -860,6 +873,15 @@ export const api = {
   rotateServiceAccount: (id: string, body: { ttl_days?: number } = {}) =>
     request<ServiceAccountWithToken>("POST", `/api/service-accounts/${id}/rotate`, body),
   deleteServiceAccount: (id: string) => request<void>("DELETE", `/api/service-accounts/${id}`),
+
+  // Sessions (admin only) — server-side BFF sessions (#189). `id` is the
+  // stored hash, not the raw cookie. Revoking by subject is the offboarding
+  // path that terminates every live session for one subject without waiting
+  // for SESSION_TTL expiry.
+  listSessions: () => request<SessionInfo[]>("GET", "/api/sessions"),
+  deleteSession: (id: string) => request<void>("DELETE", `/api/sessions/${encodeURIComponent(id)}`),
+  deleteSessionsBySubject: (subject: string) =>
+    request<{ revoked: number }>("DELETE", `/api/sessions?subject=${encodeURIComponent(subject)}`),
 
   // Global app settings (#95) — admin only. The retention policy governs the
   // background scan-deletion sweeper.

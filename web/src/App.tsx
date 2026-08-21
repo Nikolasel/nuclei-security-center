@@ -12,6 +12,7 @@ import { ScansPage } from "./pages/ScansPage";
 import { ScanDetailPage } from "./pages/ScanDetailPage";
 import { SchedulesPage } from "./pages/SchedulesPage";
 import { ServiceAccountsPage } from "./pages/ServiceAccountsPage";
+import { SessionsPage } from "./pages/SessionsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { TargetsPage } from "./pages/TargetsPage";
 import { TemplateSetsPage } from "./pages/TemplateSetsPage";
@@ -68,6 +69,7 @@ export default function App() {
         <Route path="/scan-policies" element={<ScanPoliciesPage />} />
         <Route path="/nodes" element={<NodesPage />} />
         <Route path="/service-accounts" element={<ServiceAccountsPage />} />
+        <Route path="/sessions" element={<SessionsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/findings" replace />} />
       </Routes>

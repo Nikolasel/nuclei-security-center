@@ -56,6 +56,16 @@ const (
 	hostCookiePrefix         = "__Host-"
 )
 
+// Session TTL bounds (#189): an unbounded SESSION_TTL keeps a revoked admin
+// authorized for the whole configured duration. The default is 12h; the
+// maximum bounds the worst-case privilege-revocation window to a documented
+// value. Deployments needing longer-lived sessions must re-authenticate.
+const (
+	DefaultSessionTTL = 12 * time.Hour
+	MinSessionTTL     = 15 * time.Minute
+	MaxSessionTTL     = 24 * time.Hour
+)
+
 // sessionCookieName returns the effective browser-session cookie name. Secure
 // deployments use the __Host- prefix, which requires Secure, Path=/, and no
 // Domain attribute and therefore prevents sibling subdomains from tossing a
@@ -92,6 +102,19 @@ func NewAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger, cf
 	if err := validateLoginAdmissionConfig(cfg); err != nil {
 		return nil, err
 	}
+	cfg.CookieName = sessionCookieName(cfg.CookieName, cfg.SecureCookie)
+	if cfg.SessionTTL <= 0 {
+		cfg.SessionTTL = DefaultSessionTTL
+	}
+	if cfg.SessionTTL < MinSessionTTL || cfg.SessionTTL > MaxSessionTTL {
+		return nil, fmt.Errorf("SESSION_TTL must be between %s and %s (got %s)", MinSessionTTL, MaxSessionTTL, cfg.SessionTTL)
+	}
+	if len(cfg.Scopes) == 0 {
+		cfg.Scopes = []string{oidc.ScopeOpenID, "profile", "email"}
+	}
+	if cfg.RolesClaim == "" {
+		cfg.RolesClaim = "groups"
+	}
 	trustedProxies := newTrustedProxySet(cfg.TrustedProxyCIDRs)
 	discoverFrom := cfg.Issuer
 	if cfg.DiscoveryURL != "" {
@@ -103,16 +126,6 @@ func NewAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger, cf
 	provider, err := oidc.NewProvider(ctx, discoverFrom)
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery: %w", err)
-	}
-	cfg.CookieName = sessionCookieName(cfg.CookieName, cfg.SecureCookie)
-	if cfg.SessionTTL <= 0 {
-		cfg.SessionTTL = 12 * time.Hour
-	}
-	if len(cfg.Scopes) == 0 {
-		cfg.Scopes = []string{oidc.ScopeOpenID, "profile", "email"}
-	}
-	if cfg.RolesClaim == "" {
-		cfg.RolesClaim = "groups"
 	}
 	return &Authenticator{
 		store:          st,

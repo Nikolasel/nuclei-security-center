@@ -32,6 +32,7 @@ const (
 	eventFindingTriaged        = "finding_triaged"         // disposition / severity recast
 	eventServiceAccountChanged = "service_account_changed" // service-account token create/rotate/revoke
 	eventScanImported          = "scan_imported"           // scan bundle import recreated a scan + findings (#136)
+	eventSessionRevoked        = "session_revoked"         // admin terminated a session or subject's sessions (#189)
 )
 
 // statusRecorder wraps a ResponseWriter to remember the status code the handler

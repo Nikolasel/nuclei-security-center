@@ -230,6 +230,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/service-accounts/{id}/rotate", s.mutation(eventServiceAccountChanged, "service_account.rotate", "service_account", RoleAdmin, s.handleRotateServiceAccount))
 	mux.HandleFunc("DELETE /api/service-accounts/{id}", s.mutation(eventServiceAccountChanged, "service_account.revoke", "service_account", RoleAdmin, s.handleDeleteServiceAccount))
 
+	// Sessions (#189) — server-side BFF sessions. Listing and revocation are
+	// admin-only so an administrator can terminate a user's sessions immediately
+	// on offboarding or role demotion, without waiting for SESSION_TTL expiry.
+	// Single-session delete uses the stored hash id returned by the list;
+	// bulk delete uses ?subject=. Both are audited as session_revoked.
+	mux.HandleFunc("GET /api/sessions", s.requireRole(RoleAdmin, s.handleListSessions))
+	mux.HandleFunc("DELETE /api/sessions/{id}", s.mutation(eventSessionRevoked, "session.revoke", "session", RoleAdmin, s.handleDeleteSession))
+	mux.HandleFunc("DELETE /api/sessions", s.mutation(eventSessionRevoked, "session.revoke_by_subject", "session", RoleAdmin, s.handleDeleteSessions))
+
 	// Global app settings (#95) — the scan-retention policy. Admin-only surface;
 	// the read is admin too (it's an infrastructure config page, not a viewer
 	// read). The write is audited as a config change.

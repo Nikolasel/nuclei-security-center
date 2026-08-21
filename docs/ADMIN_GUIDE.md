@@ -124,7 +124,7 @@ are insert-only by node name; PostgreSQL and subsequent API/UI edits are authori
 | `OIDC_ADMIN_GROUP` | `admin` | Group mapped to NSC admin. |
 | `OIDC_OPERATOR_GROUP` | `operator` | Group mapped to NSC operator. |
 | `OIDC_VIEWER_GROUP` | `viewer` | Group mapped to NSC viewer. |
-| `SESSION_TTL` | `12h` | Server-side session lifetime. |
+| `SESSION_TTL` | `12h` | Server-side session lifetime. Must be between `15m` and `24h`; longer values are rejected. The maximum bounds the worst-case privilege-revocation latency when a role is removed at the IdP — see session revocation below. |
 | `SESSION_COOKIE_NAME` | `__Host-nsc_session` when `COOKIE_SECURE=true`; `nsc_session` otherwise | Session cookie name. Secure deployments enforce the `__Host-` prefix. |
 | `COOKIE_SECURE` | `true` | Secure-cookie flag. Set `false` only for local plaintext HTTP. |
 | `AUTH_MAX_LIVE_FLOWS` | `10000` | Global active browser-flow cap across backend replicas (`1`–`100000`). At the cap, new flows fail closed with `429`. |
@@ -163,6 +163,42 @@ ingress/WAF must provide the per-client rate limit. Keep an ingress/WAF rate lim
 depth and does not infer a trusted proxy configuration. The advisory-lock namespace is fixed in
 code and is not an environment setting, preventing accidental collisions with other database
 lock domains.
+
+### Session revocation and privilege-revocation latency
+
+NSC is a BFF: role membership is snapshotted from the IdP's groups claim at login and stored in
+the `sessions` row for the life of that session. The backend discards the OAuth tokens after the
+callback, so there is no background IdP re-check. The worst-case window in which a demoted or
+offboarded user retains their previous NSC role is therefore bounded by `SESSION_TTL` — at most
+`24h` by configuration, `12h` by default.
+
+An administrator can cut that window short at any time (copy the `subject` value
+from the list output — it is the OIDC `sub` claim, an opaque stable identifier
+often a UUID, *not* the email; using an email will match zero rows on most IdPs
+and return 404):
+
+- `GET /api/sessions` (admin) lists every live session with its subject (`sub`), email, roles, and expiry.
+- `DELETE /api/sessions/{id}` (admin) revokes a single session by its stored id.
+- `DELETE /api/sessions?subject=<subject>` (admin) revokes **every** live session for one subject
+  — the offboarding path. Returns 404 `no active sessions for subject` when the
+  supplied `sub` matches no live session so a typo or email-instead-of-`sub`
+  does not silently no-op. Offboarding automation should treat this 404 as
+  already-clean (desired end state: zero sessions) rather than a failure.
+
+Both deletes are audited as `event_id=session_revoked` with `actor_type=user` (or
+`service_account` when a token calls them); a 404 bulk response also emits
+`session_revoked` with `revoked_count=0` and `status=404` so SIEM detections
+should key on `revoked_count`/`status`, not just `event_id`. A revoked
+session's cookie immediately yields `401` on the next request. Treat IdP group
+removal or account disable as a trigger to call one of these endpoints so
+revocation propagates within minutes rather than hours.
+
+In the SPA this is exposed as **Admin → Sessions** (visible only to the `admin` role):
+a live, filterable table grouped by subject — each group header shows the opaque
+`sub` (mono line, the value to use for `?subject=`) alongside email/name and a
+per-subject **Revoke all** (offboarding) button, plus a per-session **Revoke**
+for targeted termination. The page polls `GET /api/sessions` and calls the same
+`DELETE` endpoints above, so its audit trail is identical to the `curl` path.
 
 ### Object storage
 

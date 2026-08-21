@@ -465,10 +465,17 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 		      FROM completed_scan
 		      JOIN findings observed ON observed.scan_id = completed_scan.id
 		     WHERE observed.finding_id IS NOT NULL
+		 ),
+		 locked_candidates AS MATERIALIZED (
+		    SELECT lifecycle.id
+		      FROM finding_lifecycle lifecycle
+		      JOIN candidate_lifecycle candidate ON candidate.id = lifecycle.id
+		     ORDER BY lifecycle.id
+		       FOR UPDATE
 		 )
 		 UPDATE finding_lifecycle lifecycle
 		    SET last_covering_scan = completed_scan.id
-		   FROM completed_scan, candidate_lifecycle candidate
+		   FROM completed_scan, locked_candidates candidate
 		  WHERE lifecycle.id = candidate.id
 		    AND EXISTS (
 		        SELECT 1

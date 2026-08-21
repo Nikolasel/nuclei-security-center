@@ -769,6 +769,43 @@ auth. Successful token calls appear in the [audit log](#audit-log) as
 `actor_type=service_account`; rejected bearer or session authentication attempts are logged with
 `actor_type=unknown` and never include the token or cookie value.
 
+## Sessions
+
+NSC is a BFF: the browser holds only an httpOnly session cookie; server-side rows in
+`POST /api/auth/callback` capture the IdP groups claim at login. Roles are **frozen for the
+life of the session** — at most `SESSION_TTL` (`12h` default, capped at `24h`). To revoke a
+user early (offboarding, demotion), an administrator terminates their live sessions:
+
+```sh
+# list live sessions (admin) — each id is the stored hash, not the raw cookie.
+# `subject` is the OIDC `sub` claim (opaque, often a UUID), *not* the email —
+# copy it from the `subject` field in the list output or the mono line under
+# each subject group in the UI. Using an email here will match zero rows on
+# most IdPs and return 404.
+curl -sb jar.txt localhost:8080/api/sessions | jq
+# revoke one session
+curl -sb jar.txt -X DELETE -H 'Origin: http://localhost:8080' localhost:8080/api/sessions/<hashed-id>  # => 204
+# revoke every session for a subject (offboarding) — copy `subject` from the list above
+curl -sb jar.txt -X DELETE -H 'Origin: http://localhost:8080' "localhost:8080/api/sessions?subject=550e8400-e29b-41d4-a716-446655440000"  # => {"revoked":2}
+# (subject with no active sessions → 404 "no active sessions for subject";
+#  offboarding scripts should treat 404 as already-clean — zero sessions is the
+#  desired end state, 404 just makes a typo/email-instead-of-sub obvious)
+```
+
+A revoked cookie yields `401` on its next use. Both deletes are audited as
+`event_id=session_revoked` (`session.revoke` and `session.revoke_by_subject`);
+a bulk 404 for `no active sessions for subject` still emits `session_revoked`
+with `revoked_count=0` and `status=404` so SIEM rules should key on
+`revoked_count`/`status`, not just `event_id`. Keep `SESSION_TTL` short (the
+default) so even without an explicit revoke the worst-case stale-role window
+stays bounded.
+
+| Method & path | Role | Purpose |
+|---|---|---|
+| `GET /api/sessions` | admin | list live sessions |
+| `DELETE /api/sessions/{id}` | admin | revoke one session by its hashed id |
+| `DELETE /api/sessions?subject=<subject>` | admin | revoke all sessions for a subject (`sub`, not email; 404 if none — treat as already-clean) |
+
 ## Audit log
 
 Every mutating API call (create / update / delete / scan-dispatch / triage) emits one structured
@@ -794,6 +831,7 @@ the application database. Cron dispatches identify their actor as `system`.
 | `scan_dispatched` | a scan is submitted (ad-hoc) or a schedule is run |
 | `finding_triaged` | a finding's disposition or severity recast changes |
 | `service_account_changed` | a service-account token is created / rotated / revoked |
+| `session_revoked` | an admin revokes a session or all sessions for a subject |
 
 All audit events log at **INFO** — a denial or authentication failure is an enforcement result, not
 a backend fault — so alerting keys off `event_id` / `status`, not the log level. Tail them locally

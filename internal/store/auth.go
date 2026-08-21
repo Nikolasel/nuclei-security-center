@@ -85,6 +85,61 @@ func (s *Store) DeleteSession(ctx context.Context, id string) error {
 	return err
 }
 
+// SessionInfo is the admin-visible projection of a live session. ID is the
+// stored hash (the DB primary key), not the bearer-equivalent cookie value.
+type SessionInfo struct {
+	ID        string    `json:"id"`
+	Subject   string    `json:"subject"`
+	Email     string    `json:"email,omitempty"`
+	Name      string    `json:"name,omitempty"`
+	Roles     []string  `json:"roles"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// ListSessions returns all live (unexpired) sessions for admin inspection.
+func (s *Store) ListSessions(ctx context.Context) ([]SessionInfo, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, subject, email, name, roles, created_at, expires_at
+		   FROM sessions WHERE expires_at > now() ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []SessionInfo
+	for rows.Next() {
+		var si SessionInfo
+		var email, name *string
+		if err := rows.Scan(&si.ID, &si.Subject, &email, &name, &si.Roles, &si.CreatedAt, &si.ExpiresAt); err != nil {
+			return nil, err
+		}
+		si.Email = deref(email)
+		si.Name = deref(name)
+		if si.Roles == nil {
+			si.Roles = []string{}
+		}
+		out = append(out, si)
+	}
+	return out, rows.Err()
+}
+
+// DeleteSessionByID removes a session by its stored hashed ID (admin
+// revocation). Unlike DeleteSession, the argument is not hashed again.
+func (s *Store) DeleteSessionByID(ctx context.Context, hashedID string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE id = $1`, hashedID)
+	return err
+}
+
+// DeleteSessionsBySubject removes every live session for a subject (user
+// offboarding / role revocation). It returns the number of rows deleted.
+func (s *Store) DeleteSessionsBySubject(ctx context.Context, subject string) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE subject = $1`, subject)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 func hashSessionID(id string) string {
 	sum := sha256.Sum256([]byte(id))
 	return hex.EncodeToString(sum[:])

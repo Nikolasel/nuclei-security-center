@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/backend"
@@ -142,5 +143,46 @@ func TestTrustedProxyCIDRsFromEnv(t *testing.T) {
 	t.Setenv("AUTH_TRUSTED_PROXY_CIDRS", "not-a-cidr")
 	if _, err := trustedProxyCIDRsFromEnv(); err == nil {
 		t.Fatal("invalid trusted proxy CIDR was accepted")
+	}
+}
+
+// TestBuildAuthenticatorRejectsOutOfRangeSessionTTL verifies SESSION_TTL is
+// bounded to the documented 15m..24h window (#189). The 720h example from the
+// finding would keep a revoked admin authorized for a month.
+func TestBuildAuthenticatorRejectsOutOfRangeSessionTTL(t *testing.T) {
+	t.Setenv("OIDC_ISSUER", "https://example.com")
+	t.Setenv("OIDC_CLIENT_ID", "test-client")
+	t.Setenv("OIDC_CLIENT_SECRET", "test-secret")
+	t.Setenv("AUTH_DISABLED", "")
+
+	cases := []struct {
+		name    string
+		ttl     string
+		wantErr bool
+	}{
+		{name: "default 12h ok", ttl: "12h", wantErr: false},
+		{name: "min 15m ok", ttl: "15m", wantErr: false},
+		{name: "max 24h ok", ttl: "24h", wantErr: false},
+		{name: "too short 1m reject", ttl: "1m", wantErr: true},
+		{name: "too long 720h reject", ttl: "720h", wantErr: true},
+		{name: "just over max 25h reject", ttl: "25h", wantErr: true},
+		{name: "invalid duration reject", ttl: "not-a-duration", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SESSION_TTL", tc.ttl)
+			_, err := buildAuthenticator(context.Background(), nil, nil, authLoginAdmissionSettings{})
+			if tc.wantErr && err == nil {
+				t.Fatalf("SESSION_TTL=%q: expected error, got nil", tc.ttl)
+			}
+			if tc.wantErr && err != nil && !strings.Contains(err.Error(), "SESSION_TTL") {
+				t.Fatalf("SESSION_TTL=%q: error %q does not mention SESSION_TTL", tc.ttl, err)
+			}
+			if !tc.wantErr && err != nil && strings.Contains(err.Error(), "SESSION_TTL") {
+				t.Fatalf("SESSION_TTL=%q: unexpected TTL error: %v", tc.ttl, err)
+			}
+			// Non-TTL errors (e.g. oidc discovery) are acceptable for the ok cases
+			// because we use a dummy issuer without a real IdP.
+		})
 	}
 }

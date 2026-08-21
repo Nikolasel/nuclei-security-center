@@ -406,36 +406,111 @@ func (s *Store) ImportScanBundle(ctx context.Context, b *types.ScanBundle, confl
 	// path derives the destination's own first/last-seen, mitigation counters,
 	// and evidence pointers. Analyst overlays already on the destination are
 	// never touched (import is the scan result, not the exporter's analysis).
+	//
+	// The per-finding loop otherwise locks lifecycle rows in bundle order
+	// (arbitrary vs id) and holds each to commit. Lock the existing rows
+	// this bundle will touch in one ascending pass before any upsert, so a
+	// concurrent ascending DeleteScan cannot cross it (import holds high
+	// then wants low; delete holds low then wants high). The covering
+	// pointer step below already locks ascending; this covers the finding
+	// loop. Zero-finding coverage-only bundles skip this and rely solely
+	// on the ordered locked_candidates CTE in applyScanCoverage.
 	result := &ScanImportResult{ScanID: scanID, CoverageMode: coverageMode, Fallbacks: fallbacks}
-	for _, bf := range b.Findings {
-		f := types.NucleiFinding{
-			TemplateID: bf.TemplateID,
-			Type:       bf.Type,
-			Host:       bf.Host,
-			MatchedAt:  bf.MatchedAt,
-			Info: types.NucleiInfo{
-				Name:     bf.Name,
-				Severity: bf.Severity,
-				Tags:     orEmpty(bf.Tags),
-			},
+	if len(b.Findings) > 0 {
+		type pendingFinding struct {
+			bf   types.ScanBundleFinding
+			prep preparedOccurrence
 		}
-		if len(bf.CVE) > 0 {
-			f.Info.Classification = &types.NucleiClassification{CVEID: bf.CVE}
+		pendings := make([]pendingFinding, 0, len(b.Findings))
+		dedupKeys := make([]string, 0, len(b.Findings))
+		seenKeys := make(map[string]struct{}, len(b.Findings))
+		for _, bf := range b.Findings {
+			f := types.NucleiFinding{
+				TemplateID: bf.TemplateID,
+				Type:       bf.Type,
+				Host:       bf.Host,
+				MatchedAt:  bf.MatchedAt,
+				Info: types.NucleiInfo{
+					Name:     bf.Name,
+					Severity: bf.Severity,
+					Tags:     orEmpty(bf.Tags),
+				},
+			}
+			if len(bf.CVE) > 0 {
+				f.Info.Classification = &types.NucleiClassification{CVEID: bf.CVE}
+			}
+			prep, prepErr := prepareOccurrence(f, bf.Raw)
+			if prepErr != nil {
+				return nil, fmt.Errorf("scan bundle: prepare finding %q/%q: %w", bf.TemplateID, bf.MatchedAt, prepErr)
+			}
+			pendings = append(pendings, pendingFinding{bf: bf, prep: prep})
+			if _, ok := seenKeys[prep.key]; !ok {
+				seenKeys[prep.key] = struct{}{}
+				dedupKeys = append(dedupKeys, prep.key)
+			}
 		}
-		prep, prepErr := prepareOccurrence(f, bf.Raw)
-		if prepErr != nil {
-			return nil, fmt.Errorf("scan bundle: prepare finding %q/%q: %w", bf.TemplateID, bf.MatchedAt, prepErr)
+		// Lock the union of finding-derived and (when trusted) coverage-derived
+		// lifecycle rows in one ascending pass, so the finding loop and the
+		// later applyScanCoverage step together hold the lifecycle rows in the
+		// same global order as a concurrent DeleteScan. Without this, the loop
+		// would lock rows in bundle order and the coverage step would then try
+		// to lock the combined set ascending, acquiring a low id after a high
+		// one already held — a classic crossing order. Coverage arm mirrors
+		// applyScanCoverage's origin+skip guard (import_trusted + skipped==0);
+		// without the skip guard this would be a harmless superset, but
+		// mirroring keeps the lock set exact.
+		//
+		// Like DeleteScan, this is compute-then-lock: a lifecycle row committed
+		// by another transaction between key computation and this SELECT will be
+		// locked via the loop's ON CONFLICT update instead, outside the ordered
+		// pass. The window is tiny and inherent to the pattern.
+		shouldLockCoverage := coverageMode == ImportCoverageTrust && len(coveredJSON) > 0 && b.Scan.SkippedFindingCount == 0
+		if len(dedupKeys) > 0 || shouldLockCoverage {
+			coveredParam := "[]"
+			if shouldLockCoverage {
+				coveredParam = string(coveredJSON)
+			}
+			rows, err := tx.Query(ctx, `
+				WITH candidate_ids AS (
+				  SELECT id FROM finding_lifecycle WHERE dedup_key = ANY($1)
+				  UNION
+				  SELECT lifecycle.id
+				    FROM finding_lifecycle lifecycle
+				    CROSS JOIN LATERAL jsonb_array_elements($2::jsonb) AS pair
+				   WHERE jsonb_typeof(pair) = 'object'
+				     AND lifecycle.template_id = pair->>'template_id'
+				     AND lifecycle.endpoint_key = pair->>'endpoint'
+				     AND lifecycle.endpoint_key <> ''
+				)
+				SELECT id FROM finding_lifecycle WHERE id IN (SELECT id FROM candidate_ids) ORDER BY id FOR UPDATE
+			`, dedupKeys, coveredParam)
+			if err != nil {
+				return nil, fmt.Errorf("lock import lifecycle rows: %w", err)
+			}
+			for rows.Next() {
+				var dummy int64
+				if err := rows.Scan(&dummy); err != nil {
+					rows.Close()
+					return nil, fmt.Errorf("lock import lifecycle rows: %w", err)
+				}
+			}
+			rows.Close()
+			if err := rows.Err(); err != nil {
+				return nil, fmt.Errorf("lock import lifecycle rows: %w", err)
+			}
 		}
-		created, err := ingestFindingOccurrence(ctx, tx, scanID, scan.TargetID, b.Scan.CreatedAt, prep, bf.CreatedAt)
-		if err != nil {
-			return nil, fmt.Errorf("scan bundle: ingest finding %q/%q: %w", bf.TemplateID, bf.MatchedAt, err)
+		for _, p := range pendings {
+			created, err := ingestFindingOccurrence(ctx, tx, scanID, scan.TargetID, b.Scan.CreatedAt, p.prep, p.bf.CreatedAt)
+			if err != nil {
+				return nil, fmt.Errorf("scan bundle: ingest finding %q/%q: %w", p.bf.TemplateID, p.bf.MatchedAt, err)
+			}
+			if created {
+				result.LifecycleCreated++
+			} else {
+				result.LifecycleUpdated++
+			}
+			result.FindingsImported++
 		}
-		if created {
-			result.LifecycleCreated++
-		} else {
-			result.LifecycleUpdated++
-		}
-		result.FindingsImported++
 	}
 
 	// A completed import advances last_covering_scan only for lifecycle rows the
@@ -549,10 +624,17 @@ func applyScanCoverage(ctx context.Context, tx pgx.Tx, scanID string, trustClaim
 	query := fmt.Sprintf(`WITH completed_scan AS (
 		    SELECT id, target_id, covered_endpoints, coverage_origin, skipped_finding_count, created_at
 		      FROM scans WHERE id = $1
-		 ),%s
+		 ),%s,
+		 locked_candidates AS MATERIALIZED (
+		    SELECT lifecycle.id
+		      FROM finding_lifecycle lifecycle
+		      JOIN candidate_lifecycle candidate ON candidate.id = lifecycle.id
+		     ORDER BY lifecycle.id
+		       FOR UPDATE
+		 )
 		 UPDATE finding_lifecycle lifecycle
 		    SET last_covering_scan = completed_scan.id
-		   FROM completed_scan, candidate_lifecycle candidate
+		   FROM completed_scan, locked_candidates candidate
 		  WHERE lifecycle.id = candidate.id
 		    AND EXISTS (
 		        SELECT 1

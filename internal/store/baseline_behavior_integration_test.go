@@ -637,3 +637,733 @@ func TestBaselineDeleteScanOrdersSharedLifecycleLocksPostgres(t *testing.T) {
 			firstOccurrences, secondOccurrences, lifecycleRows, repairedRows)
 	}
 }
+
+// TestBaselineMarkCompleteOrdersSharedLifecycleLocksPostgres pins the
+// MarkComplete lock order (#242): completing a scan advances
+// last_covering_scan for every candidate lifecycle row of that scan. A
+// concurrent DeleteScan already locks those rows ascending after its own scan
+// row. If MarkComplete locked them in executor-chosen order it could hold a
+// high id while waiting for a low one the delete holds, deadlocking. The fix
+// orders MarkComplete's candidate acquisition ascending via a
+// locked_candidates CTE ahead of the mutation.
+//
+// Deterministic probe: helper holds the highest shared lifecycle id; the real
+// MarkComplete of a different scan covering both shared rows must block on that
+// high row while already owning the lowest, proved by FOR UPDATE NOWAIT from a
+// third session.
+func TestBaselineMarkCompleteOrdersSharedLifecycleLocksPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openIsolatedPostgres(t, ctx, dsn)
+
+	target, err := st.CreateTarget(ctx, Target{
+		Name:  "complete-lock-order-" + types.NewID(),
+		Hosts: []string{"complete-lock-order.invalid"},
+	})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	findings := []types.NucleiFinding{
+		{
+			TemplateID: "complete-order-one",
+			Host:       target.Hosts[0],
+			MatchedAt:  "https://one.complete-lock-order.invalid",
+			Type:       "http",
+			Info:       types.NucleiInfo{Name: "Complete order one", Severity: "high"},
+		},
+		{
+			TemplateID: "complete-order-two",
+			Host:       target.Hosts[0],
+			MatchedAt:  "https://two.complete-lock-order.invalid",
+			Type:       "http",
+			Info:       types.NucleiInfo{Name: "Complete order two", Severity: "medium"},
+		},
+	}
+	raws := make([][]byte, len(findings))
+	for i, f := range findings {
+		raw, err := json.Marshal(f)
+		if err != nil {
+			t.Fatalf("marshal finding %d: %v", i, err)
+		}
+		raws[i] = raw
+	}
+
+	// Seed two shared lifecycle rows with an initial completed scan.
+	seedScan, err := st.CreateScan(ctx, types.ScanSpec{Targets: target.Hosts}, ScanLink{TargetID: target.ID})
+	if err != nil {
+		t.Fatalf("create seed scan: %v", err)
+	}
+	for i, f := range findings {
+		if err := st.IngestFinding(ctx, seedScan, target.ID, f, raws[i]); err != nil {
+			t.Fatalf("ingest finding %d into seed scan: %v", i, err)
+		}
+	}
+	if err := st.MarkComplete(ctx, seedScan, "", ""); err != nil {
+		t.Fatalf("complete seed scan: %v", err)
+	}
+
+	// The scan under test will complete covering both shared rows (observed
+	// candidate path). Findings are ingested but the scan is left queued.
+	completingScan, err := st.CreateScan(ctx, types.ScanSpec{Targets: target.Hosts}, ScanLink{TargetID: target.ID})
+	if err != nil {
+		t.Fatalf("create completing scan: %v", err)
+	}
+	for i, f := range findings {
+		if err := st.IngestFinding(ctx, completingScan, target.ID, f, raws[i]); err != nil {
+			t.Fatalf("ingest finding %d into completing scan: %v", i, err)
+		}
+	}
+
+	var sharedIDs []int64
+	rows, err := st.pool.Query(ctx, `
+		SELECT DISTINCT f.finding_id
+		  FROM findings f
+		 WHERE f.scan_id IN ($1, $2)
+		   AND f.finding_id IS NOT NULL
+		 ORDER BY 1`, seedScan, completingScan)
+	if err != nil {
+		t.Fatalf("list shared lifecycle ids: %v", err)
+	}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			t.Fatalf("scan shared lifecycle id: %v", err)
+		}
+		sharedIDs = append(sharedIDs, id)
+	}
+	rows.Close()
+	if len(sharedIDs) != 2 {
+		t.Fatalf("shared lifecycle rows = %v, want exactly two", sharedIDs)
+	}
+	lowID, highID := sharedIDs[0], sharedIDs[1]
+
+	// Control row neither operation touches.
+	control := types.NucleiFinding{
+		TemplateID: "complete-order-control",
+		Host:       "control.invalid",
+		MatchedAt:  "https://control.invalid",
+		Type:       "http",
+		Info:       types.NucleiInfo{Name: "Complete order control", Severity: "low"},
+	}
+	controlRaw, err := json.Marshal(control)
+	if err != nil {
+		t.Fatalf("marshal control finding: %v", err)
+	}
+	controlScan, err := st.CreateScan(ctx, types.ScanSpec{}, ScanLink{})
+	if err != nil {
+		t.Fatalf("create control scan: %v", err)
+	}
+	if err := st.IngestFinding(ctx, controlScan, "", control, controlRaw); err != nil {
+		t.Fatalf("ingest control finding: %v", err)
+	}
+	if err := st.MarkComplete(ctx, controlScan, "", ""); err != nil {
+		t.Fatalf("complete control scan: %v", err)
+	}
+	var controlID int64
+	if err := st.pool.QueryRow(ctx,
+		`SELECT finding_id FROM findings WHERE scan_id = $1`, controlScan,
+	).Scan(&controlID); err != nil {
+		t.Fatalf("read control lifecycle id: %v", err)
+	}
+
+	helper, err := st.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin helper transaction: %v", err)
+	}
+	defer helper.Rollback(context.Background())
+	var helperPID int
+	if err := helper.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&helperPID); err != nil {
+		t.Fatalf("read helper pid: %v", err)
+	}
+	// Hold the highest shared lifecycle id out of order. With unordered
+	// completion locking this lets the completing MarkComplete grab the high
+	// row first and then wait for the low one, closing a cycle with a
+	// concurrent DeleteScan that already owns the low row.
+	if _, err := helper.Exec(ctx,
+		`SELECT id FROM finding_lifecycle WHERE id = $1 FOR UPDATE`, highID,
+	); err != nil {
+		t.Fatalf("helper lock highest shared lifecycle: %v", err)
+	}
+
+	completeErr := make(chan error, 1)
+	completeCtx, completeCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer completeCancel()
+	go func() {
+		completeErr <- st.MarkComplete(completeCtx, completingScan, "", "")
+	}()
+
+	var blocked bool
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := st.pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				  FROM pg_stat_activity
+				 WHERE pid <> pg_backend_pid()
+				   AND wait_event_type = 'Lock'
+				   AND $1 = ANY(pg_blocking_pids(pid))
+			)`, helperPID).Scan(&blocked); err != nil {
+			t.Fatalf("inspect blocked completion: %v", err)
+		}
+		if blocked {
+			break
+		}
+		if time.Now().After(deadline) {
+			if err := helper.Rollback(context.Background()); err != nil {
+				t.Fatalf("deadline rollback helper: %v", err)
+			}
+			select {
+			case err := <-completeErr:
+				t.Fatalf("MarkComplete did not block on the highest shared lifecycle row (its error: %v)", err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("MarkComplete did not block on the highest shared lifecycle row")
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	probeBlocked := func(lifecycleID int64) bool {
+		ptx, err := st.pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin lock probe: %v", err)
+		}
+		defer ptx.Rollback(context.Background())
+		_, err = ptx.Exec(ctx,
+			`SELECT id FROM finding_lifecycle WHERE id = $1 FOR UPDATE NOWAIT`, lifecycleID)
+		if err == nil {
+			return false
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) {
+			t.Fatalf("lock probe of lifecycle %d failed unexpectedly: %v", lifecycleID, err)
+		}
+		return pgErr.Code == "55P03"
+	}
+	if !probeBlocked(lowID) {
+		t.Fatal("MarkComplete reached the highest shared lifecycle row without holding the lowest one")
+	}
+	if probeBlocked(controlID) {
+		t.Fatal("unrelated lifecycle row was locked alongside the shared rows")
+	}
+
+	if err := helper.Rollback(context.Background()); err != nil {
+		t.Fatalf("rollback helper transaction: %v", err)
+	}
+	if err := <-completeErr; err != nil {
+		t.Fatalf("complete scan after ordered lifecycle locking: %v", err)
+	}
+
+	var completedState string
+	if err := st.pool.QueryRow(ctx, `SELECT state FROM scans WHERE id = $1`, completingScan).Scan(&completedState); err != nil {
+		t.Fatalf("read completing scan state: %v", err)
+	}
+	if completedState != string(types.ScanComplete) {
+		t.Fatalf("completing scan state = %q, want %q", completedState, types.ScanComplete)
+	}
+}
+
+// TestBaselineImportCoverageOrdersSharedLifecycleLocksPostgres pins the
+// bundle-import coverage lock order (#242). Importing a completed scan with
+// trustClaimedCoverage uses applyScanCoverage to advance last_covering_scan
+// over multiple lifecycle rows (coverage_pairs UNION observed). Without
+// ascending acquisition that multi-row UPDATE can deadlock against a
+// concurrent DeleteScan that already owns rows in ascending order.
+//
+// Probe: helper holds the highest shared lifecycle id; the real import of a
+// different scan covering both shared rows (via trusted covered_endpoints with
+// zero findings, so ingest does not pre-lock) must block on that high row
+// while already owning the lowest.
+func TestBaselineImportCoverageOrdersSharedLifecycleLocksPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openIsolatedPostgres(t, ctx, dsn)
+
+	target, err := st.CreateTarget(ctx, Target{
+		Name:  "import-lock-order-" + types.NewID(),
+		Hosts: []string{"import-lock-order.invalid"},
+	})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	findings := []types.NucleiFinding{
+		{
+			TemplateID: "import-order-one",
+			Host:       target.Hosts[0],
+			MatchedAt:  "https://one.import-lock-order.invalid",
+			Type:       "http",
+			Info:       types.NucleiInfo{Name: "Import order one", Severity: "high"},
+		},
+		{
+			TemplateID: "import-order-two",
+			Host:       target.Hosts[0],
+			MatchedAt:  "https://two.import-lock-order.invalid",
+			Type:       "http",
+			Info:       types.NucleiInfo{Name: "Import order two", Severity: "medium"},
+		},
+	}
+	raws := make([][]byte, len(findings))
+	for i, f := range findings {
+		raw, err := json.Marshal(f)
+		if err != nil {
+			t.Fatalf("marshal finding %d: %v", i, err)
+		}
+		raws[i] = raw
+	}
+
+	seedScan, err := st.CreateScan(ctx, types.ScanSpec{Targets: target.Hosts}, ScanLink{TargetID: target.ID})
+	if err != nil {
+		t.Fatalf("create seed scan: %v", err)
+	}
+	for i, f := range findings {
+		if err := st.IngestFinding(ctx, seedScan, target.ID, f, raws[i]); err != nil {
+			t.Fatalf("ingest finding %d into seed scan: %v", i, err)
+		}
+	}
+	// Persist exact endpoint evidence so the imported scan can claim it via
+	// coverage_pairs while still passing the associated-scope EXISTS filter.
+	seedCoverage := []types.EndpointCoverage{
+		{TemplateID: findings[0].TemplateID, Endpoint: types.EndpointKey(findings[0].MatchedAt, findings[0].Type)},
+		{TemplateID: findings[1].TemplateID, Endpoint: types.EndpointKey(findings[1].MatchedAt, findings[1].Type)},
+	}
+	if err := st.SetScanCoverage(ctx, seedScan, seedCoverage, ""); err != nil {
+		t.Fatalf("set seed coverage: %v", err)
+	}
+	if err := st.MarkComplete(ctx, seedScan, "", ""); err != nil {
+		t.Fatalf("complete seed scan: %v", err)
+	}
+
+	var sharedIDs []int64
+	rows, err := st.pool.Query(ctx, `
+		SELECT id FROM finding_lifecycle WHERE template_id IN ($1, $2) ORDER BY id`, findings[0].TemplateID, findings[1].TemplateID)
+	if err != nil {
+		t.Fatalf("list shared lifecycle ids: %v", err)
+	}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			t.Fatalf("scan shared lifecycle id: %v", err)
+		}
+		sharedIDs = append(sharedIDs, id)
+	}
+	rows.Close()
+	if len(sharedIDs) != 2 {
+		t.Fatalf("shared lifecycle rows = %v, want exactly two", sharedIDs)
+	}
+	lowID, highID := sharedIDs[0], sharedIDs[1]
+
+	control := types.NucleiFinding{
+		TemplateID: "import-order-control",
+		Host:       "control.invalid",
+		MatchedAt:  "https://control.invalid",
+		Type:       "http",
+		Info:       types.NucleiInfo{Name: "Import order control", Severity: "low"},
+	}
+	controlRaw, err := json.Marshal(control)
+	if err != nil {
+		t.Fatalf("marshal control finding: %v", err)
+	}
+	controlScan, err := st.CreateScan(ctx, types.ScanSpec{}, ScanLink{})
+	if err != nil {
+		t.Fatalf("create control scan: %v", err)
+	}
+	if err := st.IngestFinding(ctx, controlScan, "", control, controlRaw); err != nil {
+		t.Fatalf("ingest control finding: %v", err)
+	}
+	if err := st.MarkComplete(ctx, controlScan, "", ""); err != nil {
+		t.Fatalf("complete control scan: %v", err)
+	}
+	var controlID int64
+	if err := st.pool.QueryRow(ctx,
+		`SELECT finding_id FROM findings WHERE scan_id = $1`, controlScan,
+	).Scan(&controlID); err != nil {
+		t.Fatalf("read control lifecycle id: %v", err)
+	}
+
+	// Bundle that will be imported: complete, same target scope, zero findings,
+	// but two trusted endpoint claims that map to the shared lifecycle rows.
+	importCoverage := []types.EndpointCoverage{
+		{TemplateID: findings[0].TemplateID, Endpoint: types.EndpointKey(findings[0].MatchedAt, findings[0].Type)},
+		{TemplateID: findings[1].TemplateID, Endpoint: types.EndpointKey(findings[1].MatchedAt, findings[1].Type)},
+	}
+	bundle := &types.ScanBundle{
+		Format:        types.ScanBundleFormat,
+		FormatVersion: types.ScanBundleFormatVersion,
+		ExportedAt:    time.Now().UTC(),
+		Config:        types.ScanBundleConfig{TargetID: target.ID},
+		Scan: types.ScanBundleScan{
+			ID:               types.NewID(),
+			State:            string(types.ScanComplete),
+			Source:           "manual",
+			CreatedAt:        time.Now().UTC().Add(time.Minute),
+			Spec:             json.RawMessage(`{"targets":["import-lock-order.invalid"]}`),
+			CoveredEndpoints: importCoverage,
+			CoverageWarning:  "",
+		},
+		Findings: nil,
+	}
+	if err := bundle.Validate(); err != nil {
+		t.Fatalf("test bundle fails validation: %v", err)
+	}
+
+	helper, err := st.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin helper transaction: %v", err)
+	}
+	defer helper.Rollback(context.Background())
+	var helperPID int
+	if err := helper.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&helperPID); err != nil {
+		t.Fatalf("read helper pid: %v", err)
+	}
+	if _, err := helper.Exec(ctx,
+		`SELECT id FROM finding_lifecycle WHERE id = $1 FOR UPDATE`, highID,
+	); err != nil {
+		t.Fatalf("helper lock highest shared lifecycle: %v", err)
+	}
+
+	importErr := make(chan error, 1)
+	importCtx, importCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer importCancel()
+	go func() {
+		_, err := st.ImportScanBundle(importCtx, bundle, ImportConflictError, ImportCoverageTrust)
+		importErr <- err
+	}()
+
+	var blocked bool
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := st.pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				  FROM pg_stat_activity
+				 WHERE pid <> pg_backend_pid()
+				   AND wait_event_type = 'Lock'
+				   AND $1 = ANY(pg_blocking_pids(pid))
+			)`, helperPID).Scan(&blocked); err != nil {
+			t.Fatalf("inspect blocked import: %v", err)
+		}
+		if blocked {
+			break
+		}
+		if time.Now().After(deadline) {
+			if err := helper.Rollback(context.Background()); err != nil {
+				t.Fatalf("deadline rollback helper: %v", err)
+			}
+			select {
+			case err := <-importErr:
+				t.Fatalf("ImportScanBundle did not block on the highest shared lifecycle row (its error: %v)", err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("ImportScanBundle did not block on the highest shared lifecycle row")
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	probeBlocked := func(lifecycleID int64) bool {
+		ptx, err := st.pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin lock probe: %v", err)
+		}
+		defer ptx.Rollback(context.Background())
+		_, err = ptx.Exec(ctx,
+			`SELECT id FROM finding_lifecycle WHERE id = $1 FOR UPDATE NOWAIT`, lifecycleID)
+		if err == nil {
+			return false
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) {
+			t.Fatalf("lock probe of lifecycle %d failed unexpectedly: %v", lifecycleID, err)
+		}
+		return pgErr.Code == "55P03"
+	}
+	if !probeBlocked(lowID) {
+		t.Fatal("ImportScanBundle reached the highest shared lifecycle row without holding the lowest one")
+	}
+	if probeBlocked(controlID) {
+		t.Fatal("unrelated lifecycle row was locked alongside the shared rows")
+	}
+
+	if err := helper.Rollback(context.Background()); err != nil {
+		t.Fatalf("rollback helper transaction: %v", err)
+	}
+	if err := <-importErr; err != nil {
+		t.Fatalf("import bundle after ordered lifecycle locking: %v", err)
+	}
+
+	var coveringScan *string
+	if err := st.pool.QueryRow(ctx,
+		`SELECT last_covering_scan::text FROM finding_lifecycle WHERE id = $1`, lowID,
+	).Scan(&coveringScan); err != nil {
+		t.Fatalf("read low lifecycle covering scan: %v", err)
+	}
+	if coveringScan == nil || *coveringScan != bundle.Scan.ID {
+		t.Fatalf("low lifecycle last_covering_scan = %v, want %q", coveringScan, bundle.Scan.ID)
+	}
+}
+
+// TestBaselineImportFindingsOrdersSharedLifecycleLocksPostgres pins the
+// bundle-import finding-loop lock order (#242 follow-up). Importing a bundle
+// that carries findings runs a per-finding upsert loop inside the same
+// transaction as the later applyScanCoverage. Without pre-locking, the loop
+// locks lifecycle rows in bundle order (arbitrary vs id) and then the
+// coverage step locks the union ascending, letting a concurrent ascending
+// DeleteScan cross it (import holds high via the loop, wants low via
+// coverage; delete holds low, wants high). The finding loop now pre-locks
+// the union of dedup-derived and trusted-coverage-derived lifecycle rows
+// in one ascending FOR UPDATE pass before any upsert, so the whole import
+// transaction holds rows ascending.
+//
+// Probe: helper holds the highest shared lifecycle id; the real import of a
+// bundle with two findings covering both shared rows must block on that high
+// row while already owning the lowest.
+func TestBaselineImportFindingsOrdersSharedLifecycleLocksPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openIsolatedPostgres(t, ctx, dsn)
+
+	target, err := st.CreateTarget(ctx, Target{
+		Name:  "import-findings-lock-order-" + types.NewID(),
+		Hosts: []string{"import-findings-lock-order.invalid"},
+	})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	findings := []types.NucleiFinding{
+		{
+			TemplateID: "import-findings-one",
+			Host:       target.Hosts[0],
+			MatchedAt:  "https://one.import-findings-lock-order.invalid",
+			Type:       "http",
+			Info:       types.NucleiInfo{Name: "Import findings one", Severity: "high"},
+		},
+		{
+			TemplateID: "import-findings-two",
+			Host:       target.Hosts[0],
+			MatchedAt:  "https://two.import-findings-lock-order.invalid",
+			Type:       "http",
+			Info:       types.NucleiInfo{Name: "Import findings two", Severity: "medium"},
+		},
+	}
+	raws := make([][]byte, len(findings))
+	for i, f := range findings {
+		raw, err := json.Marshal(f)
+		if err != nil {
+			t.Fatalf("marshal finding %d: %v", i, err)
+		}
+		raws[i] = raw
+	}
+
+	seedScan, err := st.CreateScan(ctx, types.ScanSpec{Targets: target.Hosts}, ScanLink{TargetID: target.ID})
+	if err != nil {
+		t.Fatalf("create seed scan: %v", err)
+	}
+	for i, f := range findings {
+		if err := st.IngestFinding(ctx, seedScan, target.ID, f, raws[i]); err != nil {
+			t.Fatalf("ingest finding %d into seed scan: %v", i, err)
+		}
+	}
+	if err := st.MarkComplete(ctx, seedScan, "", ""); err != nil {
+		t.Fatalf("complete seed scan: %v", err)
+	}
+
+	var sharedIDs []int64
+	rows, err := st.pool.Query(ctx, `
+		SELECT id FROM finding_lifecycle WHERE template_id IN ($1, $2) ORDER BY id`, findings[0].TemplateID, findings[1].TemplateID)
+	if err != nil {
+		t.Fatalf("list shared lifecycle ids: %v", err)
+	}
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			t.Fatalf("scan shared lifecycle id: %v", err)
+		}
+		sharedIDs = append(sharedIDs, id)
+	}
+	rows.Close()
+	if len(sharedIDs) != 2 {
+		t.Fatalf("shared lifecycle rows = %v, want exactly two", sharedIDs)
+	}
+	lowID, highID := sharedIDs[0], sharedIDs[1]
+
+	control := types.NucleiFinding{
+		TemplateID: "import-findings-control",
+		Host:       "control.invalid",
+		MatchedAt:  "https://control.invalid",
+		Type:       "http",
+		Info:       types.NucleiInfo{Name: "Import findings control", Severity: "low"},
+	}
+	controlRaw, err := json.Marshal(control)
+	if err != nil {
+		t.Fatalf("marshal control finding: %v", err)
+	}
+	controlScan, err := st.CreateScan(ctx, types.ScanSpec{}, ScanLink{})
+	if err != nil {
+		t.Fatalf("create control scan: %v", err)
+	}
+	if err := st.IngestFinding(ctx, controlScan, "", control, controlRaw); err != nil {
+		t.Fatalf("ingest control finding: %v", err)
+	}
+	if err := st.MarkComplete(ctx, controlScan, "", ""); err != nil {
+		t.Fatalf("complete control scan: %v", err)
+	}
+	var controlID int64
+	if err := st.pool.QueryRow(ctx,
+		`SELECT finding_id FROM findings WHERE scan_id = $1`, controlScan,
+	).Scan(&controlID); err != nil {
+		t.Fatalf("read control lifecycle id: %v", err)
+	}
+
+	// Bundle carrying both shared findings in reverse bundle order (high id
+	// first). Without the ascending pre-lock the import transaction would lock
+	// high then low and cross a concurrent DeleteScan that locks low then high.
+	bundleFindings := []types.ScanBundleFinding{
+		{
+			TemplateID: findings[1].TemplateID,
+			Host:       findings[1].Host,
+			MatchedAt:  findings[1].MatchedAt,
+			Type:       findings[1].Type,
+			Severity:   findings[1].Info.Severity,
+			Name:       findings[1].Info.Name,
+			Tags:       findings[1].Info.Tags,
+			CreatedAt:  time.Now().UTC(),
+			Raw:        raws[1],
+		},
+		{
+			TemplateID: findings[0].TemplateID,
+			Host:       findings[0].Host,
+			MatchedAt:  findings[0].MatchedAt,
+			Type:       findings[0].Type,
+			Severity:   findings[0].Info.Severity,
+			Name:       findings[0].Info.Name,
+			Tags:       findings[0].Info.Tags,
+			CreatedAt:  time.Now().UTC().Add(time.Second),
+			Raw:        raws[0],
+		},
+	}
+	bundle := &types.ScanBundle{
+		Format:        types.ScanBundleFormat,
+		FormatVersion: types.ScanBundleFormatVersion,
+		ExportedAt:    time.Now().UTC(),
+		Config:        types.ScanBundleConfig{TargetID: target.ID},
+		Scan: types.ScanBundleScan{
+			ID:        types.NewID(),
+			State:     string(types.ScanComplete),
+			Source:    "manual",
+			CreatedAt: time.Now().UTC().Add(time.Minute),
+			Spec:      json.RawMessage(`{"targets":["import-findings-lock-order.invalid"]}`),
+		},
+		Findings: bundleFindings,
+	}
+	if err := bundle.Validate(); err != nil {
+		t.Fatalf("test bundle fails validation: %v", err)
+	}
+
+	helper, err := st.pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin helper transaction: %v", err)
+	}
+	defer helper.Rollback(context.Background())
+	var helperPID int
+	if err := helper.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&helperPID); err != nil {
+		t.Fatalf("read helper pid: %v", err)
+	}
+	if _, err := helper.Exec(ctx,
+		`SELECT id FROM finding_lifecycle WHERE id = $1 FOR UPDATE`, highID,
+	); err != nil {
+		t.Fatalf("helper lock highest shared lifecycle: %v", err)
+	}
+
+	importErr := make(chan error, 1)
+	importCtx, importCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer importCancel()
+	go func() {
+		_, err := st.ImportScanBundle(importCtx, bundle, ImportConflictError, ImportCoverageIgnore)
+		importErr <- err
+	}()
+
+	var blocked bool
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := st.pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				  FROM pg_stat_activity
+				 WHERE pid <> pg_backend_pid()
+				   AND wait_event_type = 'Lock'
+				   AND $1 = ANY(pg_blocking_pids(pid))
+			)`, helperPID).Scan(&blocked); err != nil {
+			t.Fatalf("inspect blocked import: %v", err)
+		}
+		if blocked {
+			break
+		}
+		if time.Now().After(deadline) {
+			if err := helper.Rollback(context.Background()); err != nil {
+				t.Fatalf("deadline rollback helper: %v", err)
+			}
+			select {
+			case err := <-importErr:
+				t.Fatalf("ImportScanBundle did not block on the highest shared lifecycle row (its error: %v)", err)
+			case <-time.After(10 * time.Second):
+				t.Fatal("ImportScanBundle did not block on the highest shared lifecycle row")
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	probeBlocked := func(lifecycleID int64) bool {
+		ptx, err := st.pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin lock probe: %v", err)
+		}
+		defer ptx.Rollback(context.Background())
+		_, err = ptx.Exec(ctx,
+			`SELECT id FROM finding_lifecycle WHERE id = $1 FOR UPDATE NOWAIT`, lifecycleID)
+		if err == nil {
+			return false
+		}
+		var pgErr *pgconn.PgError
+		if !errors.As(err, &pgErr) {
+			t.Fatalf("lock probe of lifecycle %d failed unexpectedly: %v", lifecycleID, err)
+		}
+		return pgErr.Code == "55P03"
+	}
+	if !probeBlocked(lowID) {
+		t.Fatal("ImportScanBundle reached the highest shared lifecycle row without holding the lowest one")
+	}
+	if probeBlocked(controlID) {
+		t.Fatal("unrelated lifecycle row was locked alongside the shared rows")
+	}
+
+	if err := helper.Rollback(context.Background()); err != nil {
+		t.Fatalf("rollback helper transaction: %v", err)
+	}
+	if err := <-importErr; err != nil {
+		t.Fatalf("import bundle after ordered lifecycle locking: %v", err)
+	}
+
+	var imported int
+	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM findings WHERE scan_id = $1`, bundle.Scan.ID).Scan(&imported); err != nil {
+		t.Fatalf("read imported occurrences: %v", err)
+	}
+	if imported != 2 {
+		t.Fatalf("imported occurrences = %d, want 2", imported)
+	}
+}

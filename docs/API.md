@@ -827,15 +827,19 @@ the application database. Cron dispatches identify their actor as `system`.
 | `event_id` | emitted when |
 |---|---|
 | `access_denied` | authentication is rejected (HTTP 401), or an audited mutation is rejected by authorization (HTTP 403) |
-| `config_changed` | a target, template set, or schedule is created / updated / deleted |
+| `config_changed` | a target, template set, or schedule is created / updated / deleted, or scan history and its archive are deleted |
 | `scan_dispatched` | a scan is submitted (ad-hoc) or a schedule is run |
 | `finding_triaged` | a finding's disposition or severity recast changes |
 | `service_account_changed` | a service-account token is created / rotated / revoked |
 | `session_revoked` | an admin revokes a session or all sessions for a subject |
 
+`config_changed` intentionally covers both ordinary configuration changes and destructive scan
+history deletion. Alerts specifically targeting evidence destruction should therefore match
+`event_id=config_changed` together with `action=scan.delete`.
+
 All audit events log at **INFO** — a denial or authentication failure is an enforcement result, not
-a backend fault — so alerting keys off `event_id` / `status`, not the log level. Tail them locally
-with:
+a backend fault — so alerting keys off `event_id` / `status` (and `action` when finer-grained
+filtering is needed), not the log level. Tail them locally with:
 
 ```sh
 docker compose logs -f backend | grep '"event":"audit"'

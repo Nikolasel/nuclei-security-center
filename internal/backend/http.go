@@ -124,12 +124,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/auth/me", s.requireAuth(s.handleMe))
 
 	// Scans. Mutations go through s.mutation (authz + a structured audit event);
-	// reads stay on requireRole. A scan submit is dispatch, not config.
+	// reads stay on requireRole. A scan submit is dispatch, while deleting scan
+	// history and its archived evidence is a configuration change.
 	mux.HandleFunc("GET /api/scans", s.requireRole(RoleViewer, s.handleListScans))
 	mux.HandleFunc("POST /api/scans", s.mutation(eventScanDispatched, "scan.create", "scan", RoleOperator, s.handleCreateScan))
 	mux.HandleFunc("GET /api/scans/{id}", s.requireRole(RoleViewer, s.handleGetScan))
 	mux.HandleFunc("POST /api/scans/{id}/cancel", s.mutation(eventScanDispatched, "scan.cancel", "scan", RoleOperator, s.handleCancelScan))
-	mux.HandleFunc("DELETE /api/scans/{id}", s.mutation(eventScanDispatched, "scan.delete", "scan", RoleAdmin, s.handleDeleteScan))
+	mux.HandleFunc("DELETE /api/scans/{id}", s.mutation(eventConfigChanged, "scan.delete", "scan", RoleAdmin, s.handleDeleteScan))
 	mux.HandleFunc("GET /api/scans/{id}/findings", s.requireRole(RoleViewer, s.handleListScanFindings))
 	mux.HandleFunc("GET /api/scans/{id}/raw", s.requireRole(RoleViewer, s.handleGetScanRaw))
 	mux.HandleFunc("GET /api/scans/{id}/log", s.requireRole(RoleViewer, s.handleGetScanLog))

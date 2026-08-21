@@ -151,15 +151,9 @@ func (s *Server) tryAcquireScanBundleImport() (func(), bool) {
 	}
 }
 
-// scanBundleZipDirectory describes the central directory after the importer
-// has checked it without constructing archive/zip's []*zip.File slice.
-type scanBundleZipDirectory struct {
-	entries  uint64
-	size     uint64
-	end      int64
-	declared uint64
-	offset   uint64
-}
+// scanZipBundleDirectory validates and counts the central directory without
+// constructing archive/zip's []*zip.File slice. It returns only an error;
+// callers discard the directory details.
 
 // readAtFull reads exactly p from r. ReaderAt implementations are allowed to
 // return a short read with io.EOF, so checking only the error is insufficient.
@@ -230,9 +224,9 @@ func readScanBundleZip64End(r io.ReaderAt, size, legacyEnd int64) (uint64, uint6
 // not trusted on its own: a malformed archive can claim a small count while
 // carrying a much larger directory, so the fixed-size directory headers are
 // walked as well.
-func scanZipBundleDirectory(r io.ReaderAt, size int64) (scanBundleZipDirectory, error) {
+func scanZipBundleDirectory(r io.ReaderAt, size int64) error {
 	if size < scanBundleZipEndLen {
-		return scanBundleZipDirectory{}, errors.New("zip bundle is too small")
+		return errors.New("zip bundle is too small")
 	}
 	tailLen := int64(scanBundleZipTailLen)
 	if tailLen > size {
@@ -244,11 +238,11 @@ func scanZipBundleDirectory(r io.ReaderAt, size int64) (scanBundleZipDirectory, 
 		if err == nil {
 			err = io.ErrUnexpectedEOF
 		}
-		return scanBundleZipDirectory{}, fmt.Errorf("read zip end record: %w", err)
+		return fmt.Errorf("read zip end record: %w", err)
 	}
 	endInTail := findScanBundleZipEnd(tail)
 	if endInTail < 0 {
-		return scanBundleZipDirectory{}, errors.New("zip end record is missing")
+		return errors.New("zip end record is missing")
 	}
 	legacyEnd := size - tailLen + int64(endInTail)
 	legacyEntries := uint64(binary.LittleEndian.Uint16(tail[endInTail+10 : endInTail+12]))
@@ -261,24 +255,27 @@ func scanZipBundleDirectory(r io.ReaderAt, size int64) (scanBundleZipDirectory, 
 	if legacyEntries == 0xffff || legacySize == 0xffffffff || legacyOffset == 0xffffffff {
 		entries, directorySize, directoryOffset, directoryEnd, err = readScanBundleZip64End(r, size, legacyEnd)
 		if err != nil {
-			return scanBundleZipDirectory{}, fmt.Errorf("invalid zip64 bundle: %w", err)
+			return fmt.Errorf("invalid zip64 bundle: %w", err)
 		}
 	}
 	maxEntries := uint64(types.ScanBundleMaxEntries)
 	if entries > maxEntries {
-		return scanBundleZipDirectory{}, fmt.Errorf("bundle exceeds %d zip entries", types.ScanBundleMaxEntries)
+		return fmt.Errorf("bundle exceeds %d zip entries", types.ScanBundleMaxEntries)
 	}
 	if directorySize > scanBundleZipMaxCentralDirectory {
-		return scanBundleZipDirectory{}, fmt.Errorf("bundle central directory exceeds the %d MiB limit", scanBundleZipMaxCentralDirectory>>20)
+		return fmt.Errorf("bundle central directory exceeds the %d MiB limit", scanBundleZipMaxCentralDirectory>>20)
 	}
 	if directoryEnd < 0 || directorySize > uint64(directoryEnd) || directoryEnd > size {
-		return scanBundleZipDirectory{}, errors.New("zip central directory is outside the bundle")
+		return errors.New("zip central directory is outside the bundle")
 	}
 	if directoryOffset > uint64(^uint64(0)>>1) || directoryOffset > uint64(size) {
-		return scanBundleZipDirectory{}, errors.New("zip central directory offset is invalid")
+		return errors.New("zip central directory offset is invalid")
 	}
 	directoryStart := directoryEnd - int64(directorySize)
 	baseOffset := directoryStart - int64(directoryOffset)
+	if baseOffset < 0 {
+		return errors.New("zip central directory offset is invalid")
+	}
 	if baseOffset > 0 {
 		// archive/zip has a compatibility fallback that ignores a positive
 		// prepended-data offset when the raw directory offset also begins with a
@@ -287,7 +284,7 @@ func scanZipBundleDirectory(r io.ReaderAt, size int64) (scanBundleZipDirectory, 
 		var rawHeader [4]byte
 		if err := readAtFull(r, rawHeader[:], int64(directoryOffset)); err == nil &&
 			binary.LittleEndian.Uint32(rawHeader[:]) == 0x02014b50 {
-			return scanBundleZipDirectory{}, errors.New("zip central directory offset is ambiguous")
+			return errors.New("zip central directory offset is ambiguous")
 		}
 	}
 	var header [scanBundleZipDirectoryHeaderLen]byte
@@ -296,56 +293,56 @@ func scanZipBundleDirectory(r io.ReaderAt, size int64) (scanBundleZipDirectory, 
 	for offset := directoryStart; offset < directoryEnd; {
 		remaining := directoryEnd - offset
 		if remaining < int64(len(signatureBytes)) {
-			return scanBundleZipDirectory{}, errors.New("zip central directory is truncated")
+			return errors.New("zip central directory is truncated")
 		}
 		if err := readAtFull(r, signatureBytes[:], offset); err != nil {
-			return scanBundleZipDirectory{}, fmt.Errorf("read zip central directory: %w", err)
+			return fmt.Errorf("read zip central directory: %w", err)
 		}
 		signature := binary.LittleEndian.Uint32(signatureBytes[:])
 		if signature == scanBundleZipDigitalSignature {
 			if remaining < 6 {
-				return scanBundleZipDirectory{}, errors.New("zip central directory digital signature is truncated")
+				return errors.New("zip central directory digital signature is truncated")
 			}
 			var digitalSize [2]byte
 			if err := readAtFull(r, digitalSize[:], offset+4); err != nil {
-				return scanBundleZipDirectory{}, fmt.Errorf("read zip digital signature: %w", err)
+				return fmt.Errorf("read zip digital signature: %w", err)
 			}
 			if uint64(6)+uint64(binary.LittleEndian.Uint16(digitalSize[:])) != uint64(remaining) {
-				return scanBundleZipDirectory{}, errors.New("zip central directory has trailing data")
+				return errors.New("zip central directory has trailing data")
 			}
 			break
 		}
 		if remaining < scanBundleZipDirectoryHeaderLen {
-			return scanBundleZipDirectory{}, errors.New("zip central directory is truncated")
+			return errors.New("zip central directory is truncated")
 		}
 		copy(header[0:4], signatureBytes[:])
 		if err := readAtFull(r, header[4:], offset+4); err != nil {
-			return scanBundleZipDirectory{}, fmt.Errorf("read zip central directory: %w", err)
+			return fmt.Errorf("read zip central directory: %w", err)
 		}
 		if signature != 0x02014b50 {
-			return scanBundleZipDirectory{}, errors.New("zip central directory entry is invalid")
+			return errors.New("zip central directory entry is invalid")
 		}
 		nameLen := uint64(binary.LittleEndian.Uint16(header[28:30]))
 		extraLen := uint64(binary.LittleEndian.Uint16(header[30:32]))
 		commentLen := uint64(binary.LittleEndian.Uint16(header[32:34]))
 		entrySize := uint64(scanBundleZipDirectoryHeaderLen) + nameLen + extraLen + commentLen
 		if entrySize > uint64(remaining) {
-			return scanBundleZipDirectory{}, errors.New("zip central directory entry is truncated")
+			return errors.New("zip central directory entry is truncated")
 		}
 		actualEntries++
 		if actualEntries > maxEntries {
-			return scanBundleZipDirectory{}, fmt.Errorf("bundle exceeds %d zip entries", types.ScanBundleMaxEntries)
+			return fmt.Errorf("bundle exceeds %d zip entries", types.ScanBundleMaxEntries)
 		}
 		offset += int64(entrySize)
 	}
 	if actualEntries != entries {
-		return scanBundleZipDirectory{}, fmt.Errorf("zip central directory contains %d entries, header declares %d", actualEntries, entries)
+		return fmt.Errorf("zip central directory contains %d entries, header declares %d", actualEntries, entries)
 	}
-	return scanBundleZipDirectory{entries: actualEntries, size: directorySize, end: directoryEnd, declared: entries, offset: directoryOffset}, nil
+	return nil
 }
 
 func openScanBundleManifest(r io.ReaderAt, size int64) (io.ReadCloser, error) {
-	if _, err := scanZipBundleDirectory(r, size); err != nil {
+	if err := scanZipBundleDirectory(r, size); err != nil {
 		return nil, fmt.Errorf("invalid zip bundle: %w", err)
 	}
 	zr, err := zip.NewReader(r, size)
@@ -384,16 +381,40 @@ func (r *scanBundleCountingReader) Read(p []byte) (int, error) {
 }
 
 func decodeScanBundleJSON(r io.Reader, maxBytes int64) (*types.ScanBundle, error) {
+	return decodeScanBundleJSONWithLimit(r, maxBytes, types.ScanBundleMaxFindings)
+}
+
+func decodeScanBundleJSONWithLimit(r io.Reader, maxBytes int64, maxFindings int) (*types.ScanBundle, error) {
 	counted := &scanBundleCountingReader{r: io.LimitReader(r, maxBytes+1)}
 	dec := json.NewDecoder(counted)
-	var b types.ScanBundle
-	if err := dec.Decode(&b); err != nil {
+
+	// Decode the bundle with findings as raw JSON so we can stream the
+	// findings array with a count bound. Decoding the full []ScanBundleFinding
+	// at once would amplify wire bytes ~70x (3 bytes "[{},"/wire vs ~200 bytes
+	// decoded), letting a 512 MiB / 128 MiB byte-capped body OOM via tens of
+	// millions of minimal objects. The envelope is first buffered as RawMessage
+	// (≤ maxBytes) and then the findings array is streamed element-by-element;
+	// peak heap is O(maxBytes) for the raw buffer plus O(ScanBundleMaxFindings)
+	// structs, so the 70x amplification is gone while wire bytes remain bounded
+	// by the byte ceilings.
+	var raw struct {
+		Format        string                 `json:"format"`
+		FormatVersion int                    `json:"format_version"`
+		ExportedAt    time.Time              `json:"exported_at"`
+		Scan          types.ScanBundleScan   `json:"scan"`
+		Config        types.ScanBundleConfig `json:"config"`
+		Findings      json.RawMessage        `json:"findings"`
+	}
+	if err := dec.Decode(&raw); err != nil {
 		if counted.n > maxBytes || (maxBytes == types.ScanBundleMaxUpload && isHTTPMaxBytesError(err)) {
 			return nil, scanBundleLimitError(maxBytes)
 		}
 		return nil, fmt.Errorf("invalid scan bundle: %w", err)
 	}
 	if err := ensureJSONEOF(dec); err != nil {
+		// isHTTPMaxBytesError only arises on the raw upload path where r wraps
+		// http.MaxBytesReader (maxBytes == ScanBundleMaxUpload); the manifest
+		// path reads from a spool *os.File, so only counted.n matters there.
 		if counted.n > maxBytes || (maxBytes == types.ScanBundleMaxUpload && isHTTPMaxBytesError(err)) {
 			return nil, scanBundleLimitError(maxBytes)
 		}
@@ -402,7 +423,49 @@ func decodeScanBundleJSON(r io.Reader, maxBytes int64) (*types.ScanBundle, error
 	if counted.n > maxBytes {
 		return nil, scanBundleLimitError(maxBytes)
 	}
-	return &b, nil
+
+	trimmed := bytes.TrimSpace(raw.Findings)
+	var findings []types.ScanBundleFinding
+	if len(trimmed) != 0 && !bytes.Equal(trimmed, []byte("null")) {
+		if trimmed[0] != '[' {
+			return nil, fmt.Errorf("invalid scan bundle: findings must be an array")
+		}
+		dec2 := json.NewDecoder(bytes.NewReader(trimmed))
+		tok, err := dec2.Token()
+		if err != nil {
+			return nil, fmt.Errorf("invalid scan bundle: %w", err)
+		}
+		if delim, ok := tok.(json.Delim); !ok || delim != '[' {
+			return nil, fmt.Errorf("invalid scan bundle: findings must be an array")
+		}
+		findings = make([]types.ScanBundleFinding, 0, 1024)
+		for dec2.More() {
+			if len(findings) >= maxFindings {
+				return nil, fmt.Errorf("scan bundle: %d findings exceeds the %d limit", len(findings)+1, maxFindings)
+			}
+			var f types.ScanBundleFinding
+			if err := dec2.Decode(&f); err != nil {
+				return nil, fmt.Errorf("invalid scan bundle: %w", err)
+			}
+			findings = append(findings, f)
+		}
+		if _, err := dec2.Token(); err != nil {
+			return nil, fmt.Errorf("invalid scan bundle: %w", err)
+		}
+		if err := ensureJSONEOF(dec2); err != nil {
+			return nil, fmt.Errorf("invalid scan bundle: %w", err)
+		}
+	}
+
+	b := &types.ScanBundle{
+		Format:        raw.Format,
+		FormatVersion: raw.FormatVersion,
+		ExportedAt:    raw.ExportedAt,
+		Scan:          raw.Scan,
+		Config:        raw.Config,
+		Findings:      findings,
+	}
+	return b, nil
 }
 
 func (s *Server) decodeScanBundleUpload(w http.ResponseWriter, r *http.Request) (*types.ScanBundle, error) {

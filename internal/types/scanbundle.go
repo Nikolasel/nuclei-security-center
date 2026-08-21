@@ -56,9 +56,10 @@ const (
 	// directory bounded before it is materialized.
 	ScanBundleMaxEntries = 25000
 	// ScanBundleMaxFindings caps the occurrence count a manifest may carry. It
-	// is a sanity limit on the already-decoded manifest (the JSON decoder must
-	// materialize the slice before Validate can check it); the actual decode-time
-	// memory bound is the upload/manifest ceilings above.
+	// is enforced at decode time by streaming the findings array (the decoded
+	// slice never exceeds this many elements; the raw findings bytes remain
+	// bounded by the upload/manifest ceilings) and as a post-decode check in
+	// Validate.
 	ScanBundleMaxFindings = 1 << 20
 )
 

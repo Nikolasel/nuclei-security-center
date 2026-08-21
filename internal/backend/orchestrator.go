@@ -411,8 +411,20 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec, node st
 		o.failScan(ctx, scanID, "dispatch: "+err.Error(), "", "")
 		return
 	}
-	if err := o.store.MarkRunning(ctx, scanID, nodeScanID); err != nil {
+	markedRunning, err := o.store.MarkRunning(ctx, scanID, nodeScanID)
+	if err != nil {
 		log.Error("mark running", "err", err)
+		o.abortNodeScan(ctx, client, nodeScanID)
+		o.failScan(ctx, scanID, "mark running: "+err.Error(), "", spec.Templates.TemplatesCommit)
+		return
+	}
+	if !markedRunning {
+		// Cancellation can win while the scan is still queued. The node has
+		// already accepted the work, so stop and reclaim it instead of polling
+		// a scan whose durable row is no longer runnable.
+		log.Info("scan cancelled before node dispatch", "node_scan_id", nodeScanID)
+		o.abortNodeScan(ctx, client, nodeScanID)
+		return
 	}
 	log.Info("scan dispatched", "node_scan_id", nodeScanID)
 
@@ -449,6 +461,12 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec, node st
 	// on failure). pollToDone only returns on a terminal node state, so the log
 	// is complete on the node by now. Best-effort, like the raw archive.
 	o.archiveLog(ctx, client, scanID, nodeScanID)
+	if status.State == types.ScanCancelled {
+		// The backend already recorded cancellation before signalling the node;
+		// do not ingest partial output or attempt to mark the scan complete.
+		o.cleanupNodeScan(ctx, client, nodeScanID)
+		return
+	}
 	if status.State == types.ScanFailed {
 		// The node reports its nuclei version before running the scan (see
 		// Runner.run), so it's already known even though the run itself failed
@@ -614,7 +632,7 @@ func (o *Orchestrator) pollToDone(ctx context.Context, client *ScannerClient, sc
 		}
 		o.setProgress(scanID, st.Progress)
 		o.setDiscovered(scanID, st.DiscoveredTargets)
-		if st.State == types.ScanComplete || st.State == types.ScanFailed {
+		if st.State == types.ScanComplete || st.State == types.ScanFailed || st.State == types.ScanCancelled {
 			return st, nil
 		}
 	}
@@ -750,6 +768,22 @@ func (o *Orchestrator) SignalNodeCancel(ctx context.Context, nodeScanID string) 
 			o.log.Warn("signal node cancel", "node", n.Name, "node_scan_id", nodeScanID, "err", err)
 		}
 	}
+}
+
+// abortNodeScan stops and reclaims a node scan that was created before the
+// backend could durably claim the queued scan as running. It uses a detached,
+// bounded context because the normal run budget may be near expiry, while the
+// node must still get a chance to kill its process group before DELETE.
+func (o *Orchestrator) abortNodeScan(ctx context.Context, client *ScannerClient, nodeScanID string) {
+	if nodeScanID == "" {
+		return
+	}
+	actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	if err := client.Cancel(actx, nodeScanID); err != nil {
+		o.log.Warn("abort node scan", "node_scan_id", nodeScanID, "err", err)
+	}
+	o.cleanupNodeScan(actx, client, nodeScanID)
 }
 
 func (o *Orchestrator) failScan(ctx context.Context, scanID, reason, nucleiVersion, templatesCommit string) {

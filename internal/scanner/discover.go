@@ -126,12 +126,7 @@ func (r *Runner) discover(ctx context.Context, spec types.ScanSpec, targetsFile,
 func (r *Runner) runNaabu(ctx context.Context, phase string, args []string, stdout, logw io.Writer, tally *discoveryTally) error {
 	cmd := exec.CommandContext(ctx, r.naabuPath, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process != nil {
-			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
-		return nil
-	}
+	cmd.Cancel = killProcessGroup(cmd)
 	dw := &discoveryWriter{inner: logw, tally: tally}
 	cmd.Stdout = stdout
 	cmd.Stderr = dw

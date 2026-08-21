@@ -209,6 +209,31 @@ func validateNodeEndpoint(endpoint string) error {
 	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return errBadRequest("endpoint must be an absolute http or https URL")
 	}
+	if u.User != nil {
+		return errBadRequest("endpoint must not contain credentials")
+	}
+	if u.Fragment != "" {
+		return errBadRequest("endpoint must not contain a fragment")
+	}
+	if strings.Contains(endpoint, " ") || strings.Contains(endpoint, "\n") || strings.Contains(endpoint, "\r") || strings.Contains(endpoint, "\t") {
+		return errBadRequest("endpoint must not contain whitespace")
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return errBadRequest("endpoint must not target localhost")
+	}
+	// Literal-IP checks are DNS-free (consistent with target validation):
+	// a hostname that resolves to loopback/link-local bypasses this, which is
+	// acceptable for an admin-only, defense-in-depth check. Private networks
+	// (10/8, 172.16/12, 192.168/16, fc00::/7) remain allowed because scanner
+	// nodes commonly live there; the most sensitive link-local target
+	// (169.254.169.254, fe80::) is blocked.
+	hostWithoutZone := strings.Split(host, "%")[0] // strip IPv6 zone e.g. fe80::1%eth0
+	if ip := net.ParseIP(hostWithoutZone); ip != nil {
+		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast() {
+			return errBadRequest("endpoint must not target a loopback or link-local address")
+		}
+	}
 	return nil
 }
 

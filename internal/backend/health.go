@@ -2,9 +2,12 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
@@ -108,7 +111,7 @@ func (m *HealthMonitor) poll(ctx context.Context) {
 			rec.Caps = caps
 			rec.LastErr = ""
 		} else {
-			rec.LastErr = err.Error()
+			rec.LastErr = sanitizeHealthError(err)
 		}
 		m.health[n.ID] = rec // record exists after first attempt ⇒ "known"
 		m.mu.Unlock()
@@ -146,4 +149,55 @@ func (m *HealthMonitor) Get(nodeID string) (NodeHealth, bool) {
 
 func (m *HealthMonitor) healthyLocked(h nodeHealth) bool {
 	return !h.LastSeen.IsZero() && m.now().Sub(h.LastSeen) <= m.ttl
+}
+
+// sanitizeHealthError strips the upstream response body that statusErr
+// includes (up to 2048 bytes) so a viewer-readable health_error never
+// reflects bytes from the polled destination. Full detail remains in the
+// structured log line emitted by poll. It operates structurally: if the
+// error wraps an httpStatusError (produced by statusErr), only the HTTP
+// status is kept; otherwise the generic error is truncated. This avoids
+// brittle string parsing of the "capabilities: <status>: <body>" format.
+func sanitizeHealthError(err error) string {
+	if err == nil {
+		return ""
+	}
+	var se *httpStatusError
+	if errors.As(err, &se) {
+		// The error is a wrapped httpStatusError (e.g. from
+		// fmt.Errorf("capabilities: %w", statusErr(resp))). Reconstruct only
+		// the prefix and status, dropping the body. The prefix is determined
+		// from the outer error's string to preserve "capabilities: " vs other
+		// ops, but the body stripping is structural.
+		msg := err.Error()
+		const capPrefix = "capabilities: "
+		if strings.HasPrefix(msg, capPrefix) {
+			return truncate512(capPrefix + se.Status)
+		}
+		// Fallback for any other httpStatusError wrapper (e.g. "status: ").
+		// Keep only the status line.
+		return truncate512(se.Status)
+	}
+	return truncate512(err.Error())
+}
+
+// truncate512 caps a string to 512 bytes on a UTF-8 rune boundary so the
+// JSON-serialized health_error never splits a multi-byte rune.
+func truncate512(s string) string {
+	if len(s) <= 512 {
+		return s
+	}
+	truncated := s[:512]
+	// Back up only while the final rune is an invalid single byte. This
+	// handles a split multi-byte sequence at the 512-byte boundary without
+	// discarding the entire message if an earlier byte was already invalid
+	// (which would cause ValidString to stay false all the way to "").
+	for len(truncated) > 0 {
+		r, size := utf8.DecodeLastRuneInString(truncated)
+		if r != utf8.RuneError || size != 1 {
+			break
+		}
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated
 }

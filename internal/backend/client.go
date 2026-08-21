@@ -19,6 +19,23 @@ import (
 // holds its active template tree. Pre-dispatch top-up waits and retries it.
 var ErrScannerBusy = errors.New("scanner node busy")
 
+// httpStatusError is the structured form of a non-2xx scanner response.
+// Status is the HTTP status line (e.g. "500 Internal Server Error") and Body
+// is the truncated response body. Keeping them separate lets the health
+// monitor strip the body before exposing it to viewers while still logging
+// it server-side.
+type httpStatusError struct {
+	Status string
+	Body   string
+}
+
+func (e *httpStatusError) Error() string {
+	if e.Body == "" {
+		return e.Status
+	}
+	return e.Status + ": " + e.Body
+}
+
 // ScannerClient talks to one scanner node's /v1 API using a bearer service token.
 // When tlsCfg is set (per-node mTLS, #26) it is applied to every request the
 // client makes — including the long-lived results fetch — so a node in an
@@ -204,9 +221,9 @@ func (c *ScannerClient) StartScan(ctx context.Context, spec types.ScanSpec) (str
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusAccepted {
 		if resp.StatusCode == http.StatusTooManyRequests {
-			return "", fmt.Errorf("%w: start scan: %s", ErrScanCapacity, statusErr(resp))
+			return "", fmt.Errorf("%w: start scan: %w", ErrScanCapacity, statusErr(resp))
 		}
-		return "", fmt.Errorf("start scan: %s", statusErr(resp))
+		return "", fmt.Errorf("start scan: %w", statusErr(resp))
 	}
 	var out types.StartScanResponse
 	if err := decodeScannerJSON(resp.Body, &out); err != nil {
@@ -230,7 +247,7 @@ func (c *ScannerClient) Status(ctx context.Context, nodeScanID string) (types.Sc
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return types.ScanStatus{}, fmt.Errorf("status: %s", statusErr(resp))
+		return types.ScanStatus{}, fmt.Errorf("status: %w", statusErr(resp))
 	}
 	var st types.ScanStatus
 	if err := decodeScannerJSON(resp.Body, &st); err != nil {
@@ -256,7 +273,7 @@ func (c *ScannerClient) Capabilities(ctx context.Context) (types.Capabilities, e
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return types.Capabilities{}, fmt.Errorf("capabilities: %s", statusErr(resp))
+		return types.Capabilities{}, fmt.Errorf("capabilities: %w", statusErr(resp))
 	}
 	var caps types.Capabilities
 	if err := decodeScannerJSON(resp.Body, &caps); err != nil {
@@ -286,7 +303,7 @@ func (c *ScannerClient) ValidateTemplate(ctx context.Context, yaml []byte) (type
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return types.TemplateValidationResult{}, fmt.Errorf("validate template: %s", statusErr(resp))
+		return types.TemplateValidationResult{}, fmt.Errorf("validate template: %w", statusErr(resp))
 	}
 	var result types.TemplateValidationResult
 	if err := decodeScannerJSON(resp.Body, &result); err != nil {
@@ -312,7 +329,7 @@ func (c *ScannerClient) ValidateTemplateBatch(ctx context.Context, bundle []byte
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return types.TemplateBatchValidationResult{}, fmt.Errorf("validate template batch: %s", statusErr(resp))
+		return types.TemplateBatchValidationResult{}, fmt.Errorf("validate template batch: %w", statusErr(resp))
 	}
 	var result types.TemplateBatchValidationResult
 	if err := decodeScannerJSON(resp.Body, &result); err != nil {
@@ -347,9 +364,9 @@ func (c *ScannerClient) PushBundle(ctx context.Context, bundle []byte) (types.Te
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == http.StatusConflict {
-			return types.TemplateBundleStatus{}, fmt.Errorf("%w: %s", ErrScannerBusy, statusErr(resp))
+			return types.TemplateBundleStatus{}, fmt.Errorf("%w: %w", ErrScannerBusy, statusErr(resp))
 		}
-		return types.TemplateBundleStatus{}, fmt.Errorf("push bundle: %s", statusErr(resp))
+		return types.TemplateBundleStatus{}, fmt.Errorf("push bundle: %w", statusErr(resp))
 	}
 	var st types.TemplateBundleStatus
 	if err := decodeScannerJSON(resp.Body, &st); err != nil {
@@ -376,7 +393,7 @@ func (c *ScannerClient) Cancel(ctx context.Context, nodeScanID string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
-		return fmt.Errorf("cancel: %s", statusErr(resp))
+		return fmt.Errorf("cancel: %w", statusErr(resp))
 	}
 	return nil
 }
@@ -396,7 +413,7 @@ func (c *ScannerClient) DeleteScan(ctx context.Context, nodeScanID string) error
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
-		return fmt.Errorf("delete scan: %s", statusErr(resp))
+		return fmt.Errorf("delete scan: %w", statusErr(resp))
 	}
 	return nil
 }
@@ -420,7 +437,7 @@ func (c *ScannerClient) Results(ctx context.Context, nodeScanID string) (io.Read
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		return nil, fmt.Errorf("results: %s", statusErr(resp))
+		return nil, fmt.Errorf("results: %w", statusErr(resp))
 	}
 	return resp.Body, nil
 }
@@ -439,16 +456,16 @@ func (c *ScannerClient) Log(ctx context.Context, nodeScanID string) (io.ReadClos
 	}
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
-		return nil, fmt.Errorf("log: %s", statusErr(resp))
+		return nil, fmt.Errorf("log: %w", statusErr(resp))
 	}
 	return resp.Body, nil
 }
 
-func statusErr(resp *http.Response) string {
+func statusErr(resp *http.Response) error {
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 	msg := strings.TrimSpace(string(b))
 	if msg == "" {
-		return resp.Status
+		return &httpStatusError{Status: resp.Status}
 	}
-	return fmt.Sprintf("%s: %s", resp.Status, msg)
+	return &httpStatusError{Status: resp.Status, Body: msg}
 }

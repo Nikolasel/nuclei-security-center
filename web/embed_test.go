@@ -68,3 +68,39 @@ func TestHandlerFromEmbeddedFSDoesNotPanic(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 }
+
+func assertSecurityHeaders(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	csp := rec.Header().Get("Content-Security-Policy")
+	if csp == "" {
+		t.Fatalf("missing Content-Security-Policy header")
+	}
+	if !strings.Contains(csp, "frame-ancestors 'none'") {
+		t.Fatalf("CSP = %q, want frame-ancestors 'none'", csp)
+	}
+	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Fatalf("X-Content-Type-Options = %q, want nosniff", got)
+	}
+	if got := rec.Header().Get("X-Frame-Options"); got != "DENY" {
+		t.Fatalf("X-Frame-Options = %q, want DENY", got)
+	}
+	if got := rec.Header().Get("Referrer-Policy"); got == "" {
+		t.Fatalf("missing Referrer-Policy header")
+	}
+}
+
+func TestHandlerSecurityHeaders(t *testing.T) {
+	h := handlerFor(built())
+
+	for _, path := range []string{"/", "/assets/index-abc123.js", "/findings/123"} {
+		rec := get(t, h, path)
+		assertSecurityHeaders(t, rec)
+	}
+
+	// The no-build fallback must also be hardened.
+	onlyGitkeep := fstest.MapFS{".gitkeep": &fstest.MapFile{}}
+	for _, path := range []string{"/", "/findings"} {
+		rec := get(t, handlerFor(onlyGitkeep), path)
+		assertSecurityHeaders(t, rec)
+	}
+}

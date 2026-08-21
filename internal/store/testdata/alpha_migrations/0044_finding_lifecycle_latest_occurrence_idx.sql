@@ -1,0 +1,1 @@
+CREATE INDEX finding_lifecycle_latest_occurrence_idx ON finding_lifecycle USING btree (latest_occurrence_id);

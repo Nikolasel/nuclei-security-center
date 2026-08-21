@@ -376,6 +376,11 @@ CREATE INDEX finding_lifecycle_last_covering_scan_idx ON finding_lifecycle USING
 
 CREATE INDEX finding_lifecycle_last_seen_idx ON finding_lifecycle USING btree (last_seen_scan);
 
+-- Backs finding_lifecycle_latest_occurrence_id_fkey (ON DELETE SET NULL): scan
+-- deletion and retention sweeps run one referential-integrity update per
+-- deleted occurrence, which would otherwise seq-scan this table each time.
+CREATE INDEX finding_lifecycle_latest_occurrence_idx ON finding_lifecycle USING btree (latest_occurrence_id);
+
 CREATE INDEX finding_lifecycle_severity_idx ON finding_lifecycle USING btree (severity);
 
 CREATE INDEX finding_lifecycle_tags_idx ON finding_lifecycle USING gin (tags);
@@ -407,6 +412,11 @@ CREATE UNIQUE INDEX scanner_nodes_name_key ON scanner_nodes USING btree (name);
 CREATE INDEX scans_complete_target_created_idx ON scans USING btree (target_id, created_at) WHERE (state = 'complete'::text);
 
 CREATE INDEX schedules_due_idx ON schedules USING btree (next_run_at) WHERE enabled;
+
+-- Backs schedules_last_scan_id_fkey (ON DELETE SET NULL): scan deletion and
+-- retention sweeps run a referential-integrity update per deleted scan, which
+-- would otherwise seq-scan schedules each time.
+CREATE INDEX schedules_last_scan_id_idx ON schedules USING btree (last_scan_id);
 
 CREATE UNIQUE INDEX schedules_name_key ON schedules USING btree (lower(name));
 

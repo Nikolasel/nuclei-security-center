@@ -462,11 +462,13 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec, node st
 			log.Warn("partial ingest after scan failure", "err", err)
 		}
 		o.failScan(ctx, scanID, "node reported failure: "+status.Error, status.NucleiVersion, status.TemplatesCommit)
+		o.cleanupNodeScan(ctx, client, nodeScanID)
 		return
 	}
 
 	if err := o.ingest(ctx, client, scanID, targetID, nodeScanID); err != nil {
 		o.failScan(ctx, scanID, "ingest: "+err.Error(), status.NucleiVersion, status.TemplatesCommit)
+		o.cleanupNodeScan(ctx, client, nodeScanID)
 		return
 	}
 
@@ -477,6 +479,7 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec, node st
 		log.Error("mark complete", "err", err)
 	}
 	log.Info("scan complete", "findings", status.FindingCount)
+	o.cleanupNodeScan(ctx, client, nodeScanID)
 }
 
 // ensureTemplateBundle tops up a stale node before scan dispatch. Staleness is
@@ -756,6 +759,26 @@ func (o *Orchestrator) failScan(ctx context.Context, scanID, reason, nucleiVersi
 	})
 	if err != nil {
 		o.log.Error("mark failed", "scan_id", scanID, "err", err)
+	}
+}
+
+// cleanupNodeScan best-effort reclaims a terminal scan's work dir and job
+// record on the node (#204). It runs after results and log have been pulled,
+// so the scan's data is already durable in Postgres/object storage. A 404 or
+// 409 from the node is not an error — the reaper will eventually reclaim it.
+func (o *Orchestrator) cleanupNodeScan(ctx context.Context, client *ScannerClient, nodeScanID string) {
+	if nodeScanID == "" {
+		return
+	}
+	// Use a short timeout so a slow/unreachable node does not block the run
+	// goroutine longer than needed; the reaper is the fallback. Decouple from
+	// the run ctx (which may be near its pollWait+ingestTail deadline for long
+	// scans) so the eager reclaim actually fires for the scans that need it
+	// most.
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err := client.DeleteScan(cctx, nodeScanID); err != nil {
+		o.log.Warn("cleanup node scan", "node_scan_id", nodeScanID, "err", err)
 	}
 }
 

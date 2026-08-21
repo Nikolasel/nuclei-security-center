@@ -37,6 +37,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/scans/{id}/results", s.auth(s.handleResults))
 	mux.HandleFunc("GET /v1/scans/{id}/log", s.auth(s.handleLog))
 	mux.HandleFunc("POST /v1/scans/{id}/cancel", s.auth(s.handleCancel))
+	mux.HandleFunc("DELETE /v1/scans/{id}", s.auth(s.handleDelete))
 	mux.HandleFunc("GET /v1/capabilities", s.auth(s.handleCapabilities))
 	mux.HandleFunc("POST /v1/templates/bundle", s.auth(s.handleApplyBundle))
 	mux.HandleFunc("POST /v1/templates/validate", s.auth(s.handleValidateTemplate))
@@ -232,6 +233,24 @@ func (s *Server) handleLog(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	if !s.runner.Cancel(r.PathValue("id")) {
 		http.Error(w, "scan not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	err := s.runner.DeleteScan(id)
+	if err != nil {
+		if errors.Is(err, ErrScanNotFound) {
+			http.Error(w, "scan not found", http.StatusNotFound)
+			return
+		}
+		if errors.Is(err, ErrScanNotTerminal) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

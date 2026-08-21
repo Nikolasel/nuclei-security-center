@@ -381,6 +381,26 @@ func (c *ScannerClient) Cancel(ctx context.Context, nodeScanID string) error {
 	return nil
 }
 
+// DeleteScan asks the node to reclaim a terminal scan's work dir and job
+// record (#204). A 404 means already reclaimed; a 409 means still running
+// (the backend polled terminal, so this should not happen). Both are treated
+// as non-fatal by callers.
+func (c *ScannerClient) DeleteScan(ctx context.Context, nodeScanID string) error {
+	req, err := c.newReq(ctx, http.MethodDelete, "/v1/scans/"+nodeScanID, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("delete scan: %s", statusErr(resp))
+	}
+	return nil
+}
+
 // resultsClientTimeout bounds the entire results fetch, including streaming the
 // body. It backstops the run context so a node that accepts the request but then
 // dribbles or stalls the stream can't hold the fetch open indefinitely.

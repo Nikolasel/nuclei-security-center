@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,6 +34,9 @@ type Runner struct {
 	mu        sync.Mutex
 	scans     map[string]*job
 	admission *scanAdmission
+	log       *slog.Logger
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 type job struct {
@@ -41,10 +45,37 @@ type job struct {
 	phase       types.ScanPhase // current stage; stamped onto every progress snapshot (#86)
 	resultsPath string
 	logPath     string // Nuclei's stdout/stderr for this run (#94)
+	dir         string // per-scan work dir under workRoot (#204)
+	finishedAt  time.Time
 	cancel      context.CancelFunc
 }
 
 const coverageDrainTimeout = 5 * time.Second
+
+// scanRetention is how long a terminal scan's work dir and job record are kept
+// before the background reaper removes them (#204). The clock starts when the
+// scan reaches a terminal state (complete/failed), so it only needs to cover
+// the worst-case backend delay between pollToDone returning terminal and the
+// backend fetching results.jsonl/scan.log. That window is normally seconds, but
+// Postgres stalls (e.g. Aurora auto-pause during SetScanDiscovered/
+// SetScanCoverage, orchestrator.go:440-451) can stretch it, so 1h is generous
+// and bounds disk/RSS to one hour of scans. If violated, the reaper deletes
+// results out from under a backend that then 404s on fetch and fails ingest.
+const scanRetention = time.Hour
+
+// Exported for the backend coupling test (scanRetention must exceed
+// ingestTail+nodeOverhead).
+const ScanRetention = scanRetention
+
+// scanCleanupInterval controls how often the reaper sweeps for expired scans
+// and orphaned work dirs.
+const scanCleanupInterval = 15 * time.Minute
+
+// ErrScanNotFound is returned when a scan id is unknown.
+var ErrScanNotFound = fmt.Errorf("scan not found")
+
+// ErrScanNotTerminal is returned when deletion is requested for a still-running scan.
+var ErrScanNotTerminal = fmt.Errorf("scan still running")
 
 // NewRunner prepares a Runner. workRoot is where per-scan temp dirs live.
 // naabuPath is the naabu binary used for the optional port-discovery pre-pass
@@ -62,7 +93,7 @@ func NewRunner(nucleiPath, naabuPath, scanType, workRoot string, maxConcurrentSc
 	if err != nil {
 		return nil, err
 	}
-	return &Runner{
+	r := &Runner{
 		nucleiPath: nucleiPath,
 		naabuPath:  naabuPath,
 		scanType:   normalizeScanType(scanType),
@@ -70,7 +101,17 @@ func NewRunner(nucleiPath, naabuPath, scanType, workRoot string, maxConcurrentSc
 		bundle:     bundle,
 		scans:      make(map[string]*job),
 		admission:  newScanAdmission(maxConcurrentScans),
-	}, nil
+		log:        slog.Default(),
+		done:       make(chan struct{}),
+	}
+	// Remove any orphaned per-scan dirs left from a previous process lifetime
+	// on a persistent SCANNER_WORK_DIR volume. The bundle subtree is preserved.
+	// Startup is concurrency-free (pre-serving), so no age gate is needed.
+	if err := r.cleanupOrphanedDirs(false); err != nil && r.log != nil {
+		r.log.Warn("cleanup orphaned dirs", "err", err)
+	}
+	go r.reapLoop()
+	return r, nil
 }
 
 // ApplyBundle verifies and activates a template bundle pushed by the backend
@@ -112,6 +153,7 @@ func (r *Runner) Start(spec types.ScanSpec) (string, error) {
 		},
 		resultsPath: filepath.Join(dir, "results.jsonl"),
 		logPath:     filepath.Join(dir, "scan.log"),
+		dir:         dir,
 	}
 	r.mu.Lock()
 	r.scans[id] = j
@@ -172,6 +214,167 @@ func (r *Runner) Cancel(id string) bool {
 		cancel()
 	}
 	return true
+}
+
+// DeleteScan removes a terminal scan's job record and work directory. It fails
+// if the scan is still running so the backend never races a live Nuclei/naabu
+// process against a directory removal. Callers treat ErrScanNotFound as
+// already-reclaimed (e.g. the reaper beat them). A failed RemoveAll is
+// logged and surfaced as an error so the HTTP layer can return 500 and the
+// reaper/or orphan sweep can retry.
+func (r *Runner) DeleteScan(id string) error {
+	r.mu.Lock()
+	j, ok := r.scans[id]
+	if !ok {
+		r.mu.Unlock()
+		return ErrScanNotFound
+	}
+	j.mu.Lock()
+	terminal := isTerminal(j.status.State)
+	j.mu.Unlock()
+	if !terminal {
+		r.mu.Unlock()
+		return ErrScanNotTerminal
+	}
+	dir := j.dir
+	delete(r.scans, id)
+	r.mu.Unlock()
+	if dir != "" {
+		if err := os.RemoveAll(dir); err != nil {
+			if r.log != nil {
+				r.log.Warn("scan work dir removal failed", "scan_id", id, "dir", dir, "err", err)
+			}
+			return fmt.Errorf("remove scan dir: %w", err)
+		}
+	}
+	return nil
+}
+
+// cleanupExpired removes terminal scans whose retention window has elapsed.
+// It is called by the background reaper and is also exposed for tests.
+func (r *Runner) cleanupExpired() {
+	now := time.Now()
+	type pending struct {
+		id  string
+		dir string
+	}
+	var toRemove []pending
+	r.mu.Lock()
+	for id, j := range r.scans {
+		j.mu.Lock()
+		terminal := isTerminal(j.status.State)
+		finishedAt := j.finishedAt
+		dir := j.dir
+		j.mu.Unlock()
+		if !terminal || finishedAt.IsZero() {
+			continue
+		}
+		if now.Sub(finishedAt) < scanRetention {
+			continue
+		}
+		delete(r.scans, id)
+		if dir != "" {
+			toRemove = append(toRemove, pending{id: id, dir: dir})
+		}
+	}
+	r.mu.Unlock()
+	for _, p := range toRemove {
+		if err := os.RemoveAll(p.dir); err != nil && r.log != nil {
+			r.log.Warn("scan work dir removal failed", "scan_id", p.id, "dir", p.dir, "err", err)
+		}
+	}
+}
+
+// cleanupOrphanedDirs removes any per-scan work dirs that are not tracked in
+// the in-memory map. This reclaims orphaned disk from a previous process
+// lifetime when SCANNER_WORK_DIR is a persistent volume, and from a panic or
+// crash that left a scan dir untracked. The bundle subtree ("_bundle") is
+// preserved; everything else under workRoot is considered a stale scan or
+// validation temp dir. It is called at startup (enforceAge=false, no live
+// work to protect) and periodically by reapLoop (enforceAge=true). The
+// periodic case is age-gated to avoid deleting a live validation temp dir
+// (ValidateTemplate/ValidateTemplateBatch use MkdirTemp under workRoot and
+// never register in r.scans) or a scan dir that is between MkdirAll and map
+// publish (Start:140 vs 157). The gate (now.Sub(ModTime) < scanRetention)
+// is safe because scanRetention (1h) comfortably exceeds the longest live
+// untracked dir lifetime (template validation timeouts 30s / 2m) — if that
+// timeout ever grows toward scanRetention, validation temps should be given a
+// preserved prefix like _bundle instead of relying on age.
+func (r *Runner) cleanupOrphanedDirs(enforceAge bool) error {
+	entries, err := os.ReadDir(r.workRoot)
+	if err != nil {
+		return err
+	}
+	r.mu.Lock()
+	tracked := make(map[string]struct{}, len(r.scans))
+	for _, j := range r.scans {
+		if j.dir != "" {
+			tracked[filepath.Base(j.dir)] = struct{}{}
+		}
+	}
+	r.mu.Unlock()
+	now := time.Now()
+	for _, e := range entries {
+		name := e.Name()
+		if name == "_bundle" {
+			continue
+		}
+		if _, ok := tracked[name]; ok {
+			continue
+		}
+		// Only remove directories (scan work dirs and temp validation dirs). A
+		// stray file at the workRoot is left alone to avoid surprising deletes.
+		if !e.IsDir() {
+			continue
+		}
+		path := filepath.Join(r.workRoot, name)
+		if enforceAge {
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			if now.Sub(info.ModTime()) < scanRetention {
+				continue
+			}
+		}
+		if err := os.RemoveAll(path); err != nil && r.log != nil {
+			r.log.Warn("orphan work dir removal failed", "dir", path, "err", err)
+		}
+	}
+	return nil
+}
+
+func (r *Runner) reapLoop() {
+	ticker := time.NewTicker(scanCleanupInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			r.cleanupExpired()
+			if err := r.cleanupOrphanedDirs(true); err != nil && r.log != nil {
+				r.log.Warn("periodic orphan sweep failed", "err", err)
+			}
+		case <-r.done:
+			return
+		}
+	}
+}
+
+// Close stops the background reaper. It is safe to call concurrently and
+// multiple times.
+func (r *Runner) Close() {
+	r.closeOnce.Do(func() { close(r.done) })
+}
+
+func isTerminal(s types.ScanState) bool {
+	return s == types.ScanComplete || s == types.ScanFailed
+}
+
+// ScanCount returns the number of tracked jobs (for tests).
+func (r *Runner) ScanCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.scans)
 }
 
 func (r *Runner) run(j *job, spec types.ScanSpec, dir string, templates []lockedTemplate, unlockTemplates func()) {
@@ -510,6 +713,7 @@ func (j *job) fail(err error) {
 	j.mu.Lock()
 	j.status.State = types.ScanFailed
 	j.status.Error = err.Error()
+	j.finishedAt = time.Now()
 	j.mu.Unlock()
 }
 
@@ -517,6 +721,7 @@ func (j *job) complete(count int) {
 	j.mu.Lock()
 	j.status.State = types.ScanComplete
 	j.status.FindingCount = count
+	j.finishedAt = time.Now()
 	j.mu.Unlock()
 }
 

@@ -16,7 +16,7 @@ ARG NAABU_VERSION=2.6.1
 # Pinned to the native build platform so the Go toolchain never runs under
 # emulation; GOOS/GOARCH come from buildx and produce a static binary for the
 # target arch.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src

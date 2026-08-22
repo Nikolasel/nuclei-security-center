@@ -71,6 +71,38 @@ func (in scannerNodeInput) storeNode(defaultMaxConcurrentScans int) store.Scanne
 	}
 }
 
+// effectiveNodeForUpdate resolves the effective ScannerNode that will be
+// persisted and validated for a PUT /api/nodes/{id}. It merges keep-on-blank
+// fields (max_concurrent_scans, tls_client_key) with the existing row and
+// normalizes TLS material so the caller can validate and persist the same
+// object. Extracted for testability — tests should call this helper instead
+// of copying the resolution logic (#198).
+func effectiveNodeForUpdate(existing store.ScannerNode, payload scannerNodeInput, defaultMaxConcurrentScans int) store.ScannerNode {
+	in := payload.storeNode(defaultMaxConcurrentScans)
+	if payload.MaxConcurrentScans == nil {
+		in.MaxConcurrentScans = existing.MaxConcurrentScans
+	}
+	// Resolve effective TLS material: tls_server_ca and tls_client_cert are
+	// cleared when blank, while tls_client_key is paired with the cert.
+	// A blank cert means no client cert is configured, so the paired key must
+	// be cleared as well — this is what lets an mTLS node transition to plain
+	// http:// (UI sends blank CA/cert + omitted key, see NodesPage.tsx) without
+	// leaving an orphaned key that would make the new http+key invalid (#198).
+	rawCA := strings.TrimSpace(payload.TLSServerCA)
+	rawCert := strings.TrimSpace(payload.TLSClientCert)
+	rawKey := strings.TrimSpace(payload.TLSClientKey)
+	in.TLSServerCA = rawCA
+	in.TLSClientCert = rawCert
+	if rawCert == "" {
+		in.TLSClientKey = ""
+	} else if rawKey != "" {
+		in.TLSClientKey = rawKey
+	} else {
+		in.TLSClientKey = existing.TLSClientKey
+	}
+	return in
+}
+
 // nodeView builds the API view of a node, merging in its health record. The
 // bearer token and the mTLS client key are always blanked (write-only secrets);
 // the server CA and client cert are public and returned as-is.
@@ -149,28 +181,7 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 		s.writeStoreErr(w, err)
 		return
 	}
-	in := payload.storeNode(types.DefaultMaxConcurrentScans)
-	if payload.MaxConcurrentScans == nil {
-		in.MaxConcurrentScans = existing.MaxConcurrentScans
-	}
-	// Resolve effective TLS material: tls_server_ca and tls_client_cert are
-	// cleared when blank, while tls_client_key is paired with the cert.
-	// A blank cert means no client cert is configured, so the paired key must
-	// be cleared as well — this is what lets an mTLS node transition to plain
-	// http:// (UI sends blank CA/cert + omitted key, see NodesPage.tsx) without
-	// leaving an orphaned key that would make the new http+key invalid (#198).
-	rawCA := strings.TrimSpace(payload.TLSServerCA)
-	rawCert := strings.TrimSpace(payload.TLSClientCert)
-	rawKey := strings.TrimSpace(payload.TLSClientKey)
-	in.TLSServerCA = rawCA
-	in.TLSClientCert = rawCert
-	if rawCert == "" {
-		in.TLSClientKey = ""
-	} else if rawKey != "" {
-		in.TLSClientKey = rawKey
-	} else {
-		in.TLSClientKey = existing.TLSClientKey
-	}
+	in := effectiveNodeForUpdate(existing, payload, types.DefaultMaxConcurrentScans)
 	// Token optional on update: a blank one keeps the stored value (it's
 	// write-only, so the admin can't re-supply it when editing other fields).
 	// store.UpdateScannerNode keeps it via COALESCE, so leave in.Token as-is

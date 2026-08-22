@@ -261,20 +261,7 @@ func TestUpdateNodeHTTPTransitionClearsKey(t *testing.T) {
 		TLSServerCA: "", TLSClientCert: "", TLSClientKey: "",
 		CIDRs: []string{" 10.0.0.0/8 "},
 	}
-	in := payload.storeNode(types.DefaultMaxConcurrentScans)
-	in.MaxConcurrentScans = existing.MaxConcurrentScans
-	rawCA := strings.TrimSpace(payload.TLSServerCA)
-	rawCert := strings.TrimSpace(payload.TLSClientCert)
-	rawKey := strings.TrimSpace(payload.TLSClientKey)
-	in.TLSServerCA = rawCA
-	in.TLSClientCert = rawCert
-	if rawCert == "" {
-		in.TLSClientKey = ""
-	} else if rawKey != "" {
-		in.TLSClientKey = rawKey
-	} else {
-		in.TLSClientKey = existing.TLSClientKey
-	}
+	in := effectiveNodeForUpdate(existing, payload, types.DefaultMaxConcurrentScans)
 	if err := validateNode(&in, false); err != nil {
 		t.Fatalf("transition to http plain should be allowed, got %v", err)
 	}
@@ -286,6 +273,11 @@ func TestUpdateNodeHTTPTransitionClearsKey(t *testing.T) {
 	}
 	if len(in.CIDRs) != 1 || in.CIDRs[0] != "10.0.0.0/8" {
 		t.Fatalf("CIDRs should be trimmed, got %v", in.CIDRs)
+	}
+	// Also verify the store assignment clears the key: updating with this
+	// effective object should set tls_client_key to "" (not COALESCE-keep).
+	if in.TLSClientKey != "" {
+		t.Fatalf("effective key should be empty for http plain transition, got %q", in.TLSClientKey)
 	}
 }
 
@@ -302,25 +294,16 @@ func TestUpdateNodeKeepsKeyWhenCertPresent(t *testing.T) {
 		TLSServerCA: "", TLSClientCert: cert, TLSClientKey: "",
 		CIDRs: []string{"10.0.0.0/8"},
 	}
-	in := payload.storeNode(types.DefaultMaxConcurrentScans)
-	in.MaxConcurrentScans = existing.MaxConcurrentScans
-	rawCA := strings.TrimSpace(payload.TLSServerCA)
-	rawCert := strings.TrimSpace(payload.TLSClientCert)
-	rawKey := strings.TrimSpace(payload.TLSClientKey)
-	in.TLSServerCA = rawCA
-	in.TLSClientCert = rawCert
-	if rawCert == "" {
-		in.TLSClientKey = ""
-	} else if rawKey != "" {
-		in.TLSClientKey = rawKey
-	} else {
-		in.TLSClientKey = existing.TLSClientKey
-	}
+	in := effectiveNodeForUpdate(existing, payload, types.DefaultMaxConcurrentScans)
 	if err := validateNode(&in, false); err != nil {
 		t.Fatalf("keeping TLS with cert+kept key should be allowed on https, got %v", err)
 	}
 	if strings.TrimSpace(in.TLSClientKey) != strings.TrimSpace(key) {
 		t.Fatalf("key should be kept, got %q want %q", in.TLSClientKey, key)
+	}
+	// Also verify CA is cleared but cert kept
+	if in.TLSServerCA != "" || in.TLSClientCert != strings.TrimSpace(cert) {
+		t.Fatalf("CA should be cleared but cert kept, got CA=%q cert=%q", in.TLSServerCA, in.TLSClientCert)
 	}
 }
 

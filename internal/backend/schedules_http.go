@@ -56,23 +56,36 @@ func (s *Server) handleGetSchedule(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
-	in := store.Schedule{Enabled: true}
-	if !decodeJSON(w, r, &in) {
+	id := r.PathValue("id")
+	var req struct {
+		Name         string `json:"name"`
+		ScanPolicyID string `json:"scan_policy_id"`
+		TargetID     string `json:"target_id"`
+		Cron         string `json:"cron"`
+		Enabled      *bool  `json:"enabled"`
+	}
+	if !decodeJSON(w, r, &req) {
 		return
+	}
+	in := store.Schedule{
+		Name:         req.Name,
+		ScanPolicyID: req.ScanPolicyID,
+		TargetID:     req.TargetID,
+		Cron:         req.Cron,
 	}
 	if err := validateSchedule(&in); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// Recompute the next fire time from the (possibly changed) cron/enabled so an
-	// edit takes effect immediately and toggling off clears the next run.
-	next, err := scheduleNextRun(in.Cron, in.Enabled, time.Now())
+	// Recompute the next fire time for the enabled-true case; the store
+	// derives the effective next_run_at atomically from COALESCE(enabled).
+	nextTrue, err := scheduleNextRun(in.Cron, true, time.Now())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	in.NextRunAt = next
-	sc, err := s.store.UpdateSchedule(r.Context(), r.PathValue("id"), in)
+	in.NextRunAt = nextTrue
+	sc, err := s.store.UpdateSchedule(r.Context(), id, in, req.Enabled)
 	if err != nil {
 		s.writeScheduleErr(w, err)
 		return

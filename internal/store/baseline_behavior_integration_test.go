@@ -228,7 +228,8 @@ func TestBaselineTargetIndependentPolicyOwnershipPostgres(t *testing.T) {
 		t.Fatalf("reuse policy with second target: %v", err)
 	}
 	secondSchedule.Cron = "0 6 * * *"
-	if _, err := st.UpdateSchedule(ctx, secondSchedule.ID, secondSchedule); err != nil {
+	enabled := secondSchedule.Enabled
+	if _, err := st.UpdateSchedule(ctx, secondSchedule.ID, secondSchedule, &enabled); err != nil {
 		t.Fatalf("update second-target schedule: %v", err)
 	}
 

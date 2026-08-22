@@ -5,10 +5,15 @@ import (
 	"time"
 )
 
+// MaxScanRetentionDays is the inclusive upper bound for the retention window.
+// 36500 = 100 years, comfortably above any operational need but well below the
+// ~106752-day int64-nanosecond overflow threshold (CWE-190, #192).
+const MaxScanRetentionDays = 36500
+
 // AppSettings is the single-row global settings record (#95). Today it carries
 // only the scan-retention policy. ScanRetentionDays is a pointer so "unset"
 // (NULL) is distinct from 0; retention is active only when RetentionEnabled is
-// true AND ScanRetentionDays is a positive integer.
+// true AND ScanRetentionDays is a valid window within [1, MaxScanRetentionDays].
 type AppSettings struct {
 	RetentionEnabled      bool      `json:"retention_enabled"`
 	ScanRetentionDays     *int      `json:"scan_retention_days"`
@@ -18,10 +23,23 @@ type AppSettings struct {
 }
 
 // RetentionActive reports whether automated scan deletion should run: enabled
-// with a positive day window. Keeps the "when does the sweeper act" rule in one
+// with a valid day window. Keeps the "when does the sweeper act" rule in one
 // place, shared by the sweeper and (potentially) the API.
 func (a AppSettings) RetentionActive() bool {
-	return a.RetentionEnabled && a.ScanRetentionDays != nil && *a.ScanRetentionDays > 0
+	return a.RetentionEnabled && a.ScanRetentionDays != nil && *a.ScanRetentionDays > 0 && *a.ScanRetentionDays <= MaxScanRetentionDays
+}
+
+// RetentionCutoff returns the exclusive age cutoff for retention: scans with
+// created_at < cutoff are eligible. It uses calendar arithmetic (AddDate) so the
+// conversion cannot overflow int64 nanoseconds (CWE-190, #192), and it fails
+// closed by returning a zero time when the window is not active or invalid.
+// Callers must not issue a retention query when the returned cutoff is zero or
+// not in the past.
+func (a AppSettings) RetentionCutoff(now time.Time) time.Time {
+	if !a.RetentionActive() {
+		return time.Time{}
+	}
+	return now.AddDate(0, 0, -*a.ScanRetentionDays)
 }
 
 // GetAppSettings returns the singleton settings row. The baseline seeds it, so

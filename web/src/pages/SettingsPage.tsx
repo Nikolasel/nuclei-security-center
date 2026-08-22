@@ -30,7 +30,7 @@ export function SettingsPage() {
   }, [settings.data]);
 
   const daysNum = Number(days);
-  const daysValid = days.trim() !== "" && Number.isInteger(daysNum) && daysNum > 0;
+  const daysValid = days.trim() !== "" && Number.isInteger(daysNum) && daysNum > 0 && daysNum <= 36500;
   // Enabling retention requires a valid window; disabled retention may leave the
   // window blank (it's simply ignored until re-enabled).
   const invalid = enabled && !daysValid;
@@ -90,6 +90,7 @@ export function SettingsPage() {
             <Input
               type="number"
               min={1}
+              max={36500}
               value={days}
               disabled={!enabled}
               placeholder="e.g. 90"
@@ -99,7 +100,7 @@ export function SettingsPage() {
           </Field>
           {enabled && !daysValid && (
             <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
-              Enter a positive whole number of days.
+              Enter a whole number between 1 and 36500.
             </p>
           )}
 

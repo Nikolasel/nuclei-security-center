@@ -34,12 +34,12 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if req.ScanRetentionDays != nil && *req.ScanRetentionDays <= 0 {
-		http.Error(w, "scan_retention_days must be a positive integer (or null to unset)", http.StatusBadRequest)
+	if req.ScanRetentionDays != nil && (*req.ScanRetentionDays <= 0 || *req.ScanRetentionDays > store.MaxScanRetentionDays) {
+		http.Error(w, "scan_retention_days must be between 1 and 36500 (or null to unset)", http.StatusBadRequest)
 		return
 	}
-	if req.RetentionEnabled && (req.ScanRetentionDays == nil || *req.ScanRetentionDays <= 0) {
-		http.Error(w, "scan_retention_days must be set to a positive integer when retention is enabled", http.StatusBadRequest)
+	if req.RetentionEnabled && (req.ScanRetentionDays == nil || *req.ScanRetentionDays <= 0 || *req.ScanRetentionDays > store.MaxScanRetentionDays) {
+		http.Error(w, "scan_retention_days must be between 1 and 36500 when retention is enabled", http.StatusBadRequest)
 		return
 	}
 

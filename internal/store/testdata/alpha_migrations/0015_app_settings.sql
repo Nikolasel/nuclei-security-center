@@ -18,7 +18,7 @@
 CREATE TABLE IF NOT EXISTS app_settings (
     id                      BOOLEAN PRIMARY KEY DEFAULT true CHECK (id),  -- single row
     retention_enabled       BOOLEAN NOT NULL DEFAULT false,
-    scan_retention_days     INTEGER,                                      -- NULL = unset
+    scan_retention_days     INTEGER CHECK (scan_retention_days IS NULL OR (scan_retention_days > 0 AND scan_retention_days <= 36500)), -- bounded to prevent overflow (#192)
     retention_include_adhoc BOOLEAN NOT NULL DEFAULT false,
     updated_by              TEXT,                                         -- OIDC subject / service account
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()

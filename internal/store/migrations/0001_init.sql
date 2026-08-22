@@ -9,7 +9,8 @@ CREATE TABLE app_settings (
     retention_include_adhoc boolean DEFAULT false NOT NULL,
     updated_by text,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT app_settings_id_check CHECK (id)
+    CONSTRAINT app_settings_id_check CHECK (id),
+    CONSTRAINT app_settings_scan_retention_days_check CHECK (scan_retention_days IS NULL OR (scan_retention_days > 0 AND scan_retention_days <= 36500))
 );
 
 CREATE TABLE auth_flows (

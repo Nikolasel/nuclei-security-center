@@ -124,7 +124,8 @@ func (s *Scheduler) dispatch(ctx context.Context, sc store.Schedule, now time.Ti
 		log.Error("invalid cron on due schedule; disabling", "cron", sc.Cron, "err", err)
 		sc.Enabled = false
 		sc.NextRunAt = nil
-		if _, uerr := s.store.UpdateSchedule(ctx, sc.ID, sc); uerr != nil {
+		disabled := false
+		if _, uerr := s.store.UpdateSchedule(ctx, sc.ID, sc, &disabled); uerr != nil {
 			log.Error("disable broken schedule", "err", uerr)
 		}
 		return

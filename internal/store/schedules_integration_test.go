@@ -61,10 +61,11 @@ func TestScheduleNamesAreCaseInsensitivePostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSchedule(distinct): %v", err)
 	}
+	enabled := true
 	if _, err := st.UpdateSchedule(ctx, second.ID, Schedule{
 		Name: "NIGHTLY SCAN", ScanPolicyID: policyID, TargetID: targetID,
-		Cron: "0 6 * * *", Enabled: true, NextRunAt: &next,
-	}); !errors.Is(err, ErrConflict) {
+		Cron: "0 6 * * *", NextRunAt: &next,
+	}, &enabled); !errors.Is(err, ErrConflict) {
 		t.Fatalf("UpdateSchedule(case duplicate of %s) = %v, want ErrConflict", first.ID, err)
 	}
 }

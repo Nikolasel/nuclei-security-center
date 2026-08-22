@@ -103,14 +103,25 @@ func (s *Store) ListSchedules(ctx context.Context) ([]Schedule, error) {
 }
 
 // UpdateSchedule updates a schedule's mutable fields and returns the fresh row.
-// NextRunAt is recomputed by the caller from the (possibly changed) cron/enabled.
-func (s *Store) UpdateSchedule(ctx context.Context, id string, in Schedule) (Schedule, error) {
+// NextRunAt is recomputed by the caller for the enabled-true case (in.NextRunAt).
+// enabled controls the enabled column atomically: nil preserves the stored value
+// (so an omitted JSON key does not clobber a concurrent disable), non-nil sets it
+// explicitly. next_run_at is derived from the effective enabled value so a
+// concurrent disable cannot be resurrected via a stale next_run_at.
+func (s *Store) UpdateSchedule(ctx context.Context, id string, in Schedule, enabled *bool) (Schedule, error) {
+	var enabledParam any
+	if enabled != nil {
+		enabledParam = *enabled
+	}
 	row := s.pool.QueryRow(ctx,
 		`UPDATE schedules
-		 SET name = $2, scan_policy_id = $3, target_id = $4, cron = $5, enabled = $6, next_run_at = $7, updated_at = now()
+		 SET name = $2, scan_policy_id = $3, target_id = $4, cron = $5,
+		     enabled = COALESCE($6::boolean, enabled),
+		     next_run_at = CASE WHEN COALESCE($6::boolean, enabled) THEN $7::timestamptz ELSE NULL END,
+		     updated_at = now()
 		 WHERE id = $1
 		 RETURNING `+scheduleCols,
-		id, in.Name, in.ScanPolicyID, in.TargetID, in.Cron, in.Enabled, in.NextRunAt,
+		id, in.Name, in.ScanPolicyID, in.TargetID, in.Cron, enabledParam, in.NextRunAt,
 	)
 	out, err := scanSchedule(row)
 	if err != nil {

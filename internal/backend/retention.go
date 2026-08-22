@@ -72,7 +72,12 @@ func (s *RetentionSweeper) tick(ctx context.Context) {
 	if !settings.RetentionActive() {
 		return
 	}
-	cutoff := time.Now().Add(-time.Duration(*settings.ScanRetentionDays) * 24 * time.Hour)
+	now := time.Now()
+	cutoff := settings.RetentionCutoff(now)
+	if cutoff.IsZero() || !cutoff.Before(now) {
+		s.log.Error("retention: invalid cutoff, skipping sweep", "retention_days", *settings.ScanRetentionDays, "cutoff", cutoff, "now", now)
+		return
+	}
 	ids, err := s.store.ScansForRetention(ctx, cutoff, settings.RetentionIncludeAdhoc, maxRetentionDeletePerTick)
 	if err != nil {
 		s.log.Error("list scans for retention", "err", err)

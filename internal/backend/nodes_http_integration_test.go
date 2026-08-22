@@ -23,17 +23,10 @@ func TestUpdateNodeHandlerHTTPAndStoreIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	st := openScanRequestTestStore(t, ctx, dsn)
-	s := &Server{store: st, log: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))}
+	s := &Server{store: st, orch: &Orchestrator{}, log: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))}
 
 	cert, key := selfSignedPEM(t)
 	ca, _ := selfSignedPEM(t)
-
-	// Create a node with mTLS on https.
-	createPayload := scannerNodeInput{
-		Name: "node-mtls", Endpoint: "https://scanner-mtls:8081", Token: "tok-" + ca[:8],
-		TLSServerCA: ca, TLSClientCert: cert, TLSClientKey: key,
-		CIDRs: []string{"10.10.0.0/16"},
-	}
 	// Use Server handler directly to exercise validation and store.
 	created, err := st.CreateScannerNode(ctx, store.ScannerNode{
 		Name: "node-mtls", Endpoint: "https://scanner-mtls:8081", Token: "tok-" + ca[:8],
@@ -143,5 +136,4 @@ func TestUpdateNodeHandlerHTTPAndStoreIntegration(t *testing.T) {
 	if afterBad.TLSServerCA == "" {
 		t.Fatalf("TLS should remain after rejected http+TLS, got empty CA")
 	}
-	_ = createPayload
 }

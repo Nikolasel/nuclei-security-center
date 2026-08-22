@@ -110,18 +110,20 @@ func (s *Server) nodeView(n store.ScannerNode) nodeView {
 	n.Token = ""
 	n.TLSClientKey = ""
 	v := nodeView{ScannerNode: n}
-	if h := s.orch.Health(); h != nil {
-		if rec, known := h.Get(n.ID); known {
-			healthy := rec.Healthy
-			v.Healthy = &healthy
-			if !rec.LastSeen.IsZero() {
-				ls := rec.LastSeen
-				v.LastSeen = &ls
-			}
-			v.NucleiVersion = rec.Capabilities.NucleiVersion
-			v.TemplatesCommit = rec.Capabilities.TemplatesCommit
-			if !rec.Healthy {
-				v.HealthError = rec.LastError
+	if s.orch != nil {
+		if h := s.orch.Health(); h != nil {
+			if rec, known := h.Get(n.ID); known {
+				healthy := rec.Healthy
+				v.Healthy = &healthy
+				if !rec.LastSeen.IsZero() {
+					ls := rec.LastSeen
+					v.LastSeen = &ls
+				}
+				v.NucleiVersion = rec.Capabilities.NucleiVersion
+				v.TemplatesCommit = rec.Capabilities.TemplatesCommit
+				if !rec.Healthy {
+					v.HealthError = rec.LastError
+				}
 			}
 		}
 	}

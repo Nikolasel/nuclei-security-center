@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -152,6 +153,9 @@ func validateNodeConfig(nodes []store.ScannerNode) error {
 		if n.MaxConcurrentScans < 1 || n.MaxConcurrentScans > types.MaxConcurrentScansCeiling {
 			return fmt.Errorf("SCAN_ZONES: zone %q: max_concurrent_scans must be between 1 and %d", n.Name, types.MaxConcurrentScansCeiling)
 		}
+		if err := validateNodeTLSForConfig(n); err != nil {
+			return fmt.Errorf("SCAN_ZONES: zone %q: %w", n.Name, err)
+		}
 		for _, cidr := range n.CIDRs {
 			_, ipnet, err := net.ParseCIDR(cidr)
 			if err != nil {
@@ -191,6 +195,17 @@ func effectiveMaxConcurrentScans(value int) int {
 		return types.DefaultMaxConcurrentScans
 	}
 	return value
+}
+
+func validateNodeTLSForConfig(n store.ScannerNode) error {
+	if strings.TrimSpace(n.TLSServerCA) == "" && strings.TrimSpace(n.TLSClientCert) == "" && strings.TrimSpace(n.TLSClientKey) == "" {
+		return nil
+	}
+	u, err := url.Parse(strings.TrimSpace(n.Endpoint))
+	if err == nil && u.Scheme == "http" {
+		return fmt.Errorf("TLS configuration requires an https endpoint")
+	}
+	return nil
 }
 
 func sameStringSet(a, b []string) bool {

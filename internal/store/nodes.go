@@ -117,7 +117,10 @@ func (s *Store) CreateScannerNode(ctx context.Context, in ScannerNode) (ScannerN
 // (ErrConflict) or a CIDR overlap with a *different* node (ErrNodeOverlap). A
 // blank Token keeps the stored one — the token is write-only at the API (never
 // returned), so an admin editing other fields can't re-supply it and shouldn't
-// have to.
+// have to. TLS fields are set directly from the validated effective object
+// (see handleUpdateNode): tls_server_ca and tls_client_cert are cleared
+// when blank, and tls_client_key is cleared when no client cert is configured
+// (so https+mTLS → http plain correctly drops the orphaned key, #198).
 func (s *Store) UpdateScannerNode(ctx context.Context, id string, in ScannerNode) (ScannerNode, error) {
 	in.CIDRs = orEmpty(in.CIDRs)
 	in.Tags = orEmpty(in.Tags)
@@ -141,7 +144,7 @@ func (s *Store) UpdateScannerNode(ctx context.Context, id string, in ScannerNode
 		   max_concurrent_scans = $7,
 		   tls_server_ca = $8,
 		   tls_client_cert = $9,
-		   tls_client_key = COALESCE(NULLIF($10, ''), tls_client_key),
+		   tls_client_key = $10,
 		   updated_at = now()
 		 WHERE id = $1
 		 RETURNING `+nodeColumns,

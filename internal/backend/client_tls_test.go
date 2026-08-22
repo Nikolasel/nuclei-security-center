@@ -107,6 +107,30 @@ func TestClientForNodeAppliesTLS(t *testing.T) {
 	}
 }
 
+func TestNodeTLSConfigRequiresHTTPS(t *testing.T) {
+	cert, key := selfSignedPEM(t)
+	ca, _ := selfSignedPEM(t)
+
+	if _, err := nodeTLSConfig(store.ScannerNode{Endpoint: "http://scanner:8081", TLSServerCA: ca}); err == nil {
+		t.Fatal("http+CA should be rejected")
+	}
+	if _, err := nodeTLSConfig(store.ScannerNode{Endpoint: "http://scanner:8081", TLSClientCert: cert, TLSClientKey: key}); err == nil {
+		t.Fatal("http+cert should be rejected")
+	}
+	if _, err := nodeTLSConfig(store.ScannerNode{Endpoint: "http://scanner:8081", TLSClientCert: cert}); err == nil {
+		t.Fatal("http+cert-only should be rejected as https requirement, not just missing key")
+	}
+	if cfg, err := nodeTLSConfig(store.ScannerNode{Endpoint: "http://scanner:8081"}); err != nil || cfg != nil {
+		t.Fatalf("http without TLS should be nil, got cfg=%v err=%v", cfg, err)
+	}
+	if cfg, err := nodeTLSConfig(store.ScannerNode{Endpoint: "https://scanner:8081", TLSServerCA: ca}); err != nil || cfg == nil {
+		t.Fatalf("https with CA should succeed, got err=%v", err)
+	}
+	if cfg, err := nodeTLSConfig(store.ScannerNode{Endpoint: "https://scanner:8081", TLSClientCert: cert, TLSClientKey: key}); err != nil || cfg == nil {
+		t.Fatalf("https with cert should succeed, got err=%v", err)
+	}
+}
+
 func TestWithTLSNilIsNoop(t *testing.T) {
 	c := NewScannerClient("http://n:8081", "tok")
 	if c.WithTLS(nil) != c {

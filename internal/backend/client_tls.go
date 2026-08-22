@@ -4,6 +4,8 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 )
@@ -45,8 +47,11 @@ func clientForNode(n store.ScannerNode) (*ScannerClient, error) {
 // TLSClientKey are the cert the backend presents (both required together);
 // TLSServerCA pins the node's server cert (optional — falls back to system roots).
 func nodeTLSConfig(n store.ScannerNode) (*tls.Config, error) {
-	if n.TLSServerCA == "" && n.TLSClientCert == "" && n.TLSClientKey == "" {
+	if strings.TrimSpace(n.TLSServerCA) == "" && strings.TrimSpace(n.TLSClientCert) == "" && strings.TrimSpace(n.TLSClientKey) == "" {
 		return nil, nil
+	}
+	if u, err := url.Parse(strings.TrimSpace(n.Endpoint)); err == nil && u.Scheme == "http" {
+		return nil, fmt.Errorf("TLS configuration requires an https endpoint")
 	}
 	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
 	if n.TLSClientCert != "" || n.TLSClientKey != "" {

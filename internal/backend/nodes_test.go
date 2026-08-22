@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -184,6 +185,65 @@ func TestValidateNodeTLS(t *testing.T) {
 			t.Fatal("cert/key from different keypairs should be rejected")
 		}
 	})
+}
+
+func TestValidateNodeTLSRequiresHTTPS(t *testing.T) {
+	cert, key := selfSignedPEM(t)
+	ca, _ := selfSignedPEM(t)
+
+	cases := []struct {
+		name    string
+		node    store.ScannerNode
+		wantErr bool
+	}{
+		{"http no tls ok", store.ScannerNode{Name: "n", Endpoint: "http://scanner:8081", Token: "tok", MaxConcurrentScans: types.DefaultMaxConcurrentScans}, false},
+		{"https no tls ok", store.ScannerNode{Name: "n", Endpoint: "https://scanner:8081", Token: "tok", MaxConcurrentScans: types.DefaultMaxConcurrentScans}, false},
+		{"https with ca ok", store.ScannerNode{Name: "n", Endpoint: "https://scanner:8081", Token: "tok", MaxConcurrentScans: types.DefaultMaxConcurrentScans, TLSServerCA: ca}, false},
+		{"https with cert+key ok", store.ScannerNode{Name: "n", Endpoint: "https://scanner:8081", Token: "tok", MaxConcurrentScans: types.DefaultMaxConcurrentScans, TLSClientCert: cert, TLSClientKey: key}, false},
+		{"https with all tls ok", store.ScannerNode{Name: "n", Endpoint: "https://scanner:8081", Token: "tok", MaxConcurrentScans: types.DefaultMaxConcurrentScans, TLSServerCA: ca, TLSClientCert: cert, TLSClientKey: key}, false},
+		{"http with ca rejected", store.ScannerNode{Name: "n", Endpoint: "http://scanner:8081", Token: "tok", MaxConcurrentScans: types.DefaultMaxConcurrentScans, TLSServerCA: ca}, true},
+		{"http with cert+key rejected", store.ScannerNode{Name: "n", Endpoint: "http://scanner:8081", Token: "tok", MaxConcurrentScans: types.DefaultMaxConcurrentScans, TLSClientCert: cert, TLSClientKey: key}, true},
+		{"http with cert only rejected", store.ScannerNode{Name: "n", Endpoint: "http://scanner:8081", Token: "tok", MaxConcurrentScans: types.DefaultMaxConcurrentScans, TLSClientCert: cert}, true},
+		{"http with key only rejected", store.ScannerNode{Name: "n", Endpoint: "http://scanner:8081", Token: "tok", MaxConcurrentScans: types.DefaultMaxConcurrentScans, TLSClientKey: key}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateNode(&tc.node, true)
+			if tc.wantErr && err == nil {
+				t.Fatalf("validateNode should have failed for %q", tc.name)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("validateNode unexpectedly failed for %q: %v", tc.name, err)
+			}
+			if tc.wantErr && !strings.Contains(err.Error(), "https") {
+				t.Fatalf("error %q should mention https, got %q", tc.name, err.Error())
+			}
+		})
+	}
+}
+
+func TestParseNodeConfigTLSRequiresHTTPS(t *testing.T) {
+	cert, key := selfSignedPEM(t)
+	ca, _ := selfSignedPEM(t)
+
+	zonesCA, _ := json.Marshal([]ScanZoneConfig{{Name: "a", URL: "http://a:8081", Token: "t", TLSServerCA: ca}})
+	if _, err := parseNodeConfig("https://d:8081", "tok", string(zonesCA)); err == nil {
+		t.Fatal("parseNodeConfig http+CA should be rejected")
+	} else if !strings.Contains(err.Error(), "https") {
+		t.Fatalf("want https error, got %v", err)
+	}
+
+	zonesCert, _ := json.Marshal([]ScanZoneConfig{{Name: "a", URL: "http://a:8081", Token: "t", TLSClientCert: cert, TLSClientKey: key}})
+	if _, err := parseNodeConfig("https://d:8081", "tok", string(zonesCert)); err == nil {
+		t.Fatal("parseNodeConfig http+cert should be rejected")
+	} else if !strings.Contains(err.Error(), "https") {
+		t.Fatalf("want https error, got %v", err)
+	}
+
+	zonesOK, _ := json.Marshal([]ScanZoneConfig{{Name: "a", URL: "https://a:8081", Token: "t", TLSServerCA: ca}})
+	if _, err := parseNodeConfig("https://d:8081", "tok", string(zonesOK)); err != nil {
+		t.Fatalf("https+CA should be accepted, got %v", err)
+	}
 }
 
 func TestSameStringSet(t *testing.T) {

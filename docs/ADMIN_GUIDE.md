@@ -209,7 +209,7 @@ for targeted termination. The page polls `GET /api/sessions` and calls the same
 | `S3_ACCESS_KEY_ID` | unset | Static access key. Leave empty to use the ambient AWS credential chain. |
 | `S3_SECRET_ACCESS_KEY` | unset | Static secret key. |
 | `S3_REGION` | `us-east-1` | S3 region. |
-| `S3_USE_SSL` | `false` | TLS for the S3 endpoint. Enable in production. |
+| `S3_USE_SSL` | `true` | TLS for the S3 endpoint. Set `false` only for local plaintext HTTP (e.g. MinIO in `docker compose`). |
 
 The backend archives byte-exact raw Nuclei output and execution logs best-effort. PostgreSQL remains
 the system of record: an archive upload failure is logged but does not discard successfully ingested

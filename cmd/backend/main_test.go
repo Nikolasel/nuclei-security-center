@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/backend"
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
@@ -49,6 +52,62 @@ func TestSecureCookieEnabled(t *testing.T) {
 		if got := secureCookieEnabled(); got != want {
 			t.Errorf("COOKIE_SECURE=%q -> %v, want %v", val, got, want)
 		}
+	}
+}
+
+// TestObjectStoreUseSSL verifies the object-storage TLS flag is secure-by-default,
+// disabled only by an explicit S3_USE_SSL=false (issue #197).
+func TestObjectStoreUseSSL(t *testing.T) {
+	cases := map[string]bool{
+		"":      true,  // unset -> TLS (fail closed)
+		"true":  true,  // explicit on
+		"TRUE":  true,  // case-sensitive opt-out: only exact "false" disables
+		"1":     true,  // misspelled value must not silently select plaintext
+		"True":  true,  // no longer silently insecure
+		"false": false, // the one explicit opt-out
+	}
+	for val, want := range cases {
+		t.Setenv("S3_USE_SSL", val)
+		if got := objectStoreUseSSL(); got != want {
+			t.Errorf("S3_USE_SSL=%q -> %v, want %v", val, got, want)
+		}
+	}
+}
+
+// TestBuildObjectStorePlaintextWarning verifies buildObjectStore emits a warning
+// when plaintext is explicitly selected and emits nothing when TLS is active.
+// The S3 endpoint is an unreachable address (127.0.0.1:1) so bucket creation
+// fails fast; the warning is emitted before any network call and is captured
+// via the slog handler.
+func TestBuildObjectStorePlaintextWarning(t *testing.T) {
+	t.Setenv("S3_ENDPOINT", "127.0.0.1:1")
+	t.Setenv("S3_BUCKET", "test")
+	t.Setenv("S3_REGION", "us-east-1")
+
+	cases := []struct {
+		name     string
+		useSSL   string
+		wantWarn bool
+	}{
+		{name: "explicit false warns", useSSL: "false", wantWarn: true},
+		{name: "unset does not warn", useSSL: "", wantWarn: false},
+		{name: "true does not warn", useSSL: "true", wantWarn: false},
+		{name: "misspelled TRUE does not warn (fail closed)", useSSL: "TRUE", wantWarn: false},
+		{name: "1 does not warn (fail closed)", useSSL: "1", wantWarn: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("S3_USE_SSL", tc.useSSL)
+			var buf bytes.Buffer
+			log := slog.New(slog.NewJSONHandler(&buf, nil))
+			ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			defer cancel()
+			_, _ = buildObjectStore(ctx, log)
+			got := strings.Contains(buf.String(), "S3_USE_SSL=false")
+			if got != tc.wantWarn {
+				t.Fatalf("S3_USE_SSL=%q warning present %v, want %v; log=%q", tc.useSSL, got, tc.wantWarn, buf.String())
+			}
+		})
 	}
 }
 

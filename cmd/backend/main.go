@@ -350,6 +350,13 @@ func secureCookieEnabled() bool {
 	return os.Getenv("COOKIE_SECURE") != "false"
 }
 
+// objectStoreUseSSL defaults the S3 TLS flag to true, so a remote object store
+// is secure even if the flag is forgotten or misspelled. It is disabled only by
+// an explicit S3_USE_SSL=false, matching secureCookieEnabled.
+func objectStoreUseSSL() bool {
+	return os.Getenv("S3_USE_SSL") != "false"
+}
+
 // buildObjectStore wires the S3-compatible archive from the environment. If
 // S3_ENDPOINT is unset it returns (nil, nil) — archiving is disabled and scans
 // still ingest normally (dev mode). When set, the bucket is created if absent.
@@ -365,7 +372,10 @@ func buildObjectStore(ctx context.Context, log *slog.Logger) (backend.ObjectStor
 		AccessKey: os.Getenv("S3_ACCESS_KEY_ID"),
 		SecretKey: os.Getenv("S3_SECRET_ACCESS_KEY"),
 		Region:    envOr("S3_REGION", "us-east-1"),
-		UseSSL:    os.Getenv("S3_USE_SSL") == "true",
+		UseSSL:    objectStoreUseSSL(),
+	}
+	if !cfg.UseSSL {
+		log.Warn("S3_USE_SSL=false — object storage traffic will be sent over plaintext HTTP; use only with a private/trusted network or local dev")
 	}
 	store, err := backend.NewObjectStore(ctx, cfg)
 	if err != nil {

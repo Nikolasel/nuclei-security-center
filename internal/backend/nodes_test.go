@@ -246,6 +246,84 @@ func TestParseNodeConfigTLSRequiresHTTPS(t *testing.T) {
 	}
 }
 
+func TestUpdateNodeHTTPTransitionClearsKey(t *testing.T) {
+	cert, key := selfSignedPEM(t)
+	ca, _ := selfSignedPEM(t)
+	existing := store.ScannerNode{
+		Name: "n", Endpoint: "https://scanner:8081", Token: "tok",
+		MaxConcurrentScans: types.DefaultMaxConcurrentScans,
+		TLSServerCA:        ca, TLSClientCert: cert, TLSClientKey: key,
+		CIDRs: []string{"10.0.0.0/8"},
+	}
+	// UI payload for https+mTLS -> http plain: blank CA/cert + omitted key, endpoint with whitespace
+	payload := scannerNodeInput{
+		Name: " n ", Endpoint: " http://scanner:8081 ",
+		TLSServerCA: "", TLSClientCert: "", TLSClientKey: "",
+		CIDRs: []string{" 10.0.0.0/8 "},
+	}
+	in := payload.storeNode(types.DefaultMaxConcurrentScans)
+	in.MaxConcurrentScans = existing.MaxConcurrentScans
+	rawCA := strings.TrimSpace(payload.TLSServerCA)
+	rawCert := strings.TrimSpace(payload.TLSClientCert)
+	rawKey := strings.TrimSpace(payload.TLSClientKey)
+	in.TLSServerCA = rawCA
+	in.TLSClientCert = rawCert
+	if rawCert == "" {
+		in.TLSClientKey = ""
+	} else if rawKey != "" {
+		in.TLSClientKey = rawKey
+	} else {
+		in.TLSClientKey = existing.TLSClientKey
+	}
+	if err := validateNode(&in, false); err != nil {
+		t.Fatalf("transition to http plain should be allowed, got %v", err)
+	}
+	if in.TLSServerCA != "" || in.TLSClientCert != "" || in.TLSClientKey != "" {
+		t.Fatalf("TLS should be cleared, got CA=%q cert len %d key len %d", in.TLSServerCA, len(in.TLSClientCert), len(in.TLSClientKey))
+	}
+	if in.Name != "n" || in.Endpoint != "http://scanner:8081" {
+		t.Fatalf("should be trimmed, got name=%q endpoint=%q", in.Name, in.Endpoint)
+	}
+	if len(in.CIDRs) != 1 || in.CIDRs[0] != "10.0.0.0/8" {
+		t.Fatalf("CIDRs should be trimmed, got %v", in.CIDRs)
+	}
+}
+
+func TestUpdateNodeKeepsKeyWhenCertPresent(t *testing.T) {
+	cert, key := selfSignedPEM(t)
+	existing := store.ScannerNode{
+		Name: "n", Endpoint: "https://scanner:8081", Token: "tok",
+		MaxConcurrentScans: types.DefaultMaxConcurrentScans,
+		TLSClientCert:      cert, TLSClientKey: key,
+	}
+	// Edit unrelated field (CIDR) while keeping TLS: UI resends CA/cert but omits key
+	payload := scannerNodeInput{
+		Name: "n", Endpoint: "https://scanner:8081",
+		TLSServerCA: "", TLSClientCert: cert, TLSClientKey: "",
+		CIDRs: []string{"10.0.0.0/8"},
+	}
+	in := payload.storeNode(types.DefaultMaxConcurrentScans)
+	in.MaxConcurrentScans = existing.MaxConcurrentScans
+	rawCA := strings.TrimSpace(payload.TLSServerCA)
+	rawCert := strings.TrimSpace(payload.TLSClientCert)
+	rawKey := strings.TrimSpace(payload.TLSClientKey)
+	in.TLSServerCA = rawCA
+	in.TLSClientCert = rawCert
+	if rawCert == "" {
+		in.TLSClientKey = ""
+	} else if rawKey != "" {
+		in.TLSClientKey = rawKey
+	} else {
+		in.TLSClientKey = existing.TLSClientKey
+	}
+	if err := validateNode(&in, false); err != nil {
+		t.Fatalf("keeping TLS with cert+kept key should be allowed on https, got %v", err)
+	}
+	if strings.TrimSpace(in.TLSClientKey) != strings.TrimSpace(key) {
+		t.Fatalf("key should be kept, got %q want %q", in.TLSClientKey, key)
+	}
+}
+
 func TestSameStringSet(t *testing.T) {
 	cases := []struct {
 		a, b []string

@@ -142,36 +142,42 @@ func (s *Server) handleUpdateNode(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &payload) {
 		return
 	}
+	// Update needs the existing row to resolve keep-on-blank fields and to
+	// compute the effective TLS state that will be persisted and validated.
+	existing, err := s.store.GetScannerNode(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeStoreErr(w, err)
+		return
+	}
 	in := payload.storeNode(types.DefaultMaxConcurrentScans)
-	// Load existing for keep-on-blank fields (max_concurrent_scans, tls_client_key).
-	var existing *store.ScannerNode
-	if payload.MaxConcurrentScans == nil || strings.TrimSpace(payload.TLSClientKey) == "" {
-		n, err := s.store.GetScannerNode(r.Context(), r.PathValue("id"))
-		if err != nil {
-			s.writeStoreErr(w, err)
-			return
-		}
-		existing = &n
-		if payload.MaxConcurrentScans == nil {
-			in.MaxConcurrentScans = n.MaxConcurrentScans
-		}
+	if payload.MaxConcurrentScans == nil {
+		in.MaxConcurrentScans = existing.MaxConcurrentScans
+	}
+	// Resolve effective TLS material: tls_server_ca and tls_client_cert are
+	// cleared when blank, while tls_client_key is paired with the cert.
+	// A blank cert means no client cert is configured, so the paired key must
+	// be cleared as well — this is what lets an mTLS node transition to plain
+	// http:// (UI sends blank CA/cert + omitted key, see NodesPage.tsx) without
+	// leaving an orphaned key that would make the new http+key invalid (#198).
+	rawCA := strings.TrimSpace(payload.TLSServerCA)
+	rawCert := strings.TrimSpace(payload.TLSClientCert)
+	rawKey := strings.TrimSpace(payload.TLSClientKey)
+	in.TLSServerCA = rawCA
+	in.TLSClientCert = rawCert
+	if rawCert == "" {
+		in.TLSClientKey = ""
+	} else if rawKey != "" {
+		in.TLSClientKey = rawKey
+	} else {
+		in.TLSClientKey = existing.TLSClientKey
 	}
 	// Token optional on update: a blank one keeps the stored value (it's
 	// write-only, so the admin can't re-supply it when editing other fields).
-	// Validate the effective TLS state: tls_client_key is keep-on-blank, while
-	// tls_server_ca/tls_client_cert are cleared when blank (see store.UpdateScannerNode).
-	if existing != nil && strings.TrimSpace(payload.TLSClientKey) == "" {
-		effective := in
-		effective.TLSClientKey = existing.TLSClientKey
-		if err := validateNode(&effective, false); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	} else {
-		if err := validateNode(&in, false); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
+	// store.UpdateScannerNode keeps it via COALESCE, so leave in.Token as-is
+	// (blank) for that path; validation allows it when requireToken is false.
+	if err := validateNode(&in, false); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 	node, err := s.store.UpdateScannerNode(r.Context(), r.PathValue("id"), in)
 	if err != nil {

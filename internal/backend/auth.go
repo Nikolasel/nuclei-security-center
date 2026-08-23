@@ -198,6 +198,7 @@ func (a *Authenticator) handleLogin(w http.ResponseWriter, r *http.Request) {
 // (with PKCE), verifies the ID token + nonce, maps roles, and establishes a
 // server-side session delivered as an httpOnly cookie.
 func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	state := r.URL.Query().Get("state")
 	if !authStateMatches(r, state) {
 		http.Error(w, "invalid or expired login state", http.StatusBadRequest)
@@ -207,6 +208,7 @@ func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 	a.clearAuthStateCookie(w)
 
 	if e := r.URL.Query().Get("error"); e != "" {
+		a.recordCallbackFailure(r, start)
 		http.Error(w, "identity provider error: "+e, http.StatusUnauthorized)
 		return
 	}
@@ -221,6 +223,7 @@ func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 		oauth2.VerifierOption(flow.PKCEVerifier))
 	if err != nil {
 		a.log.Warn("code exchange failed", "err", err)
+		a.recordCallbackFailure(r, start)
 		http.Error(w, "code exchange failed", http.StatusUnauthorized)
 		return
 	}
@@ -232,10 +235,12 @@ func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 	idToken, err := a.verifier.Verify(r.Context(), rawID)
 	if err != nil {
 		a.log.Warn("id token verify failed", "err", err)
+		a.recordCallbackFailure(r, start)
 		http.Error(w, "invalid id token", http.StatusUnauthorized)
 		return
 	}
 	if idToken.Nonce != flow.Nonce {
+		a.recordCallbackFailure(r, start)
 		http.Error(w, "nonce mismatch", http.StatusUnauthorized)
 		return
 	}
@@ -267,6 +272,33 @@ func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 	dest := firstNonEmpty(safeReturnTo(flow.ReturnTo), a.cfg.PostLogin, "/")
 	http.Redirect(w, r, dest, http.StatusFound)
+}
+
+// recordCallbackFailure emits a structured authentication-denial audit event for
+// the public OIDC callback. The callback is registered outside requireAuth
+// (internal/backend/http.go), so its 401s are not covered by the shared
+// middleware; each IdP error, code-exchange failure, token-verification failure,
+// and nonce failure must emit the same event_id=access_denied trail as the
+// protected routes. auth_method is a bounded, non-secret value and no query
+// values (code, state, error, nonce) are logged, mirroring
+// Server.recordAuthenticationFailure.
+func (a *Authenticator) recordCallbackFailure(r *http.Request, start time.Time) {
+	if a.log == nil {
+		return
+	}
+	attrs := []slog.Attr{
+		slog.String("event", "audit"),
+		slog.String("event_id", eventAccessDenied),
+		slog.String("action", "auth.authenticate"),
+		slog.String("actor_subject", "unknown"),
+		slog.String("actor_type", "unknown"),
+		slog.String("auth_method", "oidc_callback"),
+		slog.String("method", r.Method),
+		slog.String("path", r.URL.Path),
+		slog.Int("status", http.StatusUnauthorized),
+		slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+	}
+	a.log.LogAttrs(r.Context(), slog.LevelInfo, "audit auth.authenticate", attrs...)
 }
 
 // handleLogout clears the server-side session and the cookie.

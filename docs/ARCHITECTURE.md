@@ -419,6 +419,11 @@ trade; the native-services path only wins if you're committed to one cloud forev
   absent); `same-site` is not accepted because sibling subdomains may be untrusted. JSON-body
   mutations require `Content-Type: application/json`. Explicit service-account bearer callers
   do not depend on ambient browser cookies and are exempt from the browser-origin header.
+  `GET /api/auth/logout` is a tightly scoped exception that additionally accepts a direct
+  browser navigation (`Sec-Fetch-Site: none` with no `Origin`, e.g. address-bar/bookmark) so a
+  user-initiated top-level visit still clears the local and IdP sessions, while site-controlled
+  `cross-site`/`same-site` navigations remain blocked; both logout endpoints fail closed when
+  `APP_BASE_URL` is missing or malformed.
 - **Service-token hygiene:** backend→node bearer tokens are per-node secrets, rotatable,
   TLS-only; mTLS is the upgrade when you want mutual auth.
 - **Secrets:** target auth creds (if any) never in the DB plaintext or templates —

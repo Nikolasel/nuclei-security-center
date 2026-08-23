@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -116,6 +117,8 @@ type Authenticator struct {
 	verifier *oidc.IDTokenVerifier
 	oauth    *oauth2.Config
 
+	endSessionEndpoint string
+
 	loginAdmissionOnce sync.Once
 	loginAdmission     *loginAdmission
 	trustedProxies     trustedProxySet
@@ -152,13 +155,18 @@ func NewAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger, cf
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery: %w", err)
 	}
+	endSession := discoverEndSessionEndpoint(provider)
+	if endSession != "" && log != nil {
+		log.Info("oidc end_session_endpoint discovered", "endpoint", endSession)
+	}
 	return &Authenticator{
-		store:          st,
-		log:            log,
-		cfg:            cfg,
-		provider:       provider,
-		verifier:       provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
-		trustedProxies: trustedProxies,
+		store:              st,
+		log:                log,
+		cfg:                cfg,
+		provider:           provider,
+		verifier:           provider.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
+		endSessionEndpoint: endSession,
+		trustedProxies:     trustedProxies,
 		oauth: &oauth2.Config{
 			ClientID:     cfg.ClientID,
 			ClientSecret: cfg.ClientSecret,
@@ -167,6 +175,73 @@ func NewAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger, cf
 			Scopes:       cfg.Scopes,
 		},
 	}, nil
+}
+
+// providerEndSessionClaims is the minimal OIDC discovery document subset we
+// need to locate the RP-initiated logout endpoint. The spec defines
+// end_session_endpoint as OPTIONAL; a missing field means the IdP does not
+// advertise RP-initiated logout and local-only logout is the correct fallback.
+type providerEndSessionClaims struct {
+	EndSessionEndpoint string `json:"end_session_endpoint"`
+}
+
+func discoverEndSessionEndpoint(p *oidc.Provider) string {
+	if p == nil {
+		return ""
+	}
+	var c providerEndSessionClaims
+	if err := p.Claims(&c); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(c.EndSessionEndpoint)
+}
+
+// endSessionURL builds the RP-initiated logout URL for the browser to visit
+// after the local NSC session has been cleared. It appends client_id and
+// post_logout_redirect_uri so the IdP can validate the return and terminate
+// its own SSO cookie. The IdP session is the reason a shared-workstation
+// attacker could otherwise re-mint an NSC session with one click after the
+// victim's local logout — this URL drives the IdP to clear it. When the
+// provider does not advertise an end_session_endpoint the caller must fall
+// back to local-only logout.
+func (a *Authenticator) endSessionURL() string {
+	ep := strings.TrimSpace(a.endSessionEndpoint)
+	if ep == "" {
+		return ""
+	}
+	u, err := url.Parse(ep)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	// Restrict to HTTP(S) so a compromised or misconfigured discovery document
+	// cannot inject javascript:, data:, or other schemes that would reach
+	// window.location.assign on the SPA.
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return ""
+	}
+	q := u.Query()
+	q.Set("client_id", a.cfg.ClientID)
+	// post_logout_redirect_uri must be an absolute URL whitelisted at the IdP.
+	// Prefer the configured public origin; fall back to PostLogin when it is
+	// itself an absolute URL. Relative values are resolved against PublicOrigin.
+	redirect := strings.TrimSpace(a.cfg.PostLogin)
+	if redirect == "" || (!strings.HasPrefix(redirect, "http://") && !strings.HasPrefix(redirect, "https://")) {
+		base := strings.TrimSpace(a.cfg.PublicOrigin)
+		if base == "" {
+			base = "http://localhost:8080"
+		}
+		if redirect == "" || redirect == "/" {
+			redirect = strings.TrimSuffix(base, "/") + "/"
+		} else if strings.HasPrefix(redirect, "/") {
+			redirect = strings.TrimSuffix(base, "/") + redirect
+		} else {
+			redirect = strings.TrimSuffix(base, "/") + "/" + redirect
+		}
+	}
+	q.Set("post_logout_redirect_uri", redirect)
+	u.RawQuery = q.Encode()
+	return u.String()
 }
 
 const (
@@ -324,13 +399,47 @@ func (a *Authenticator) recordCallbackFailure(r *http.Request, start time.Time) 
 	a.log.LogAttrs(r.Context(), slog.LevelInfo, "audit auth.authenticate", attrs...)
 }
 
-// handleLogout clears the server-side session and the cookie.
+// handleLogout clears the server-side session and the cookie and, when the
+// provider advertises an end_session_endpoint, returns the RP-initiated logout
+// URL for the SPA to follow. Local session deletion is always performed;
+// the IdP redirect is an additional step to clear the IdP's SSO cookie so a
+// subsequent visit to /api/auth/login does not silently re-mint a session
+// from the still-live IdP session (CWE-613 — shared-workstation reuse).
+// When no end_session_endpoint is advertised the response is 204 and the
+// caller falls back to a local-only logout (the correct behavior for IdPs
+// that do not support RP-initiated logout).
 func (a *Authenticator) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(a.sessionCookieName()); err == nil {
-		_ = a.store.DeleteSession(r.Context(), c.Value)
+	if a.store != nil {
+		if c, err := r.Cookie(a.sessionCookieName()); err == nil {
+			_ = a.store.DeleteSession(r.Context(), c.Value)
+		}
 	}
 	a.clearSessionCookie(w)
+	if dest := a.endSessionURL(); dest != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]string{"end_session_url": dest})
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleLogoutRedirect is the GET counterpart for browser-initiated navigations.
+// It clears the local session and then redirects the top-level browser to the
+// IdP's end_session_endpoint when known, otherwise to "/" — so a user who
+// navigates to /api/auth/logout directly still terminates both sessions.
+func (a *Authenticator) handleLogoutRedirect(w http.ResponseWriter, r *http.Request) {
+	if a.store != nil {
+		if c, err := r.Cookie(a.sessionCookieName()); err == nil {
+			_ = a.store.DeleteSession(r.Context(), c.Value)
+		}
+	}
+	a.clearSessionCookie(w)
+	if dest := a.endSessionURL(); dest != "" {
+		http.Redirect(w, r, dest, http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 // identityFromRequest resolves the session cookie to a live identity.

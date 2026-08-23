@@ -30,6 +30,49 @@ func (s *Server) sameOrigin(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// logoutRedirectOriginAllowed is the CSRF gate for GET /api/auth/logout.
+//
+// POST /api/auth/logout stays strict sameOrigin (Sec-Fetch-Site: same-origin or
+// exact Origin match). GET additionally allows direct browser navigations —
+// address-bar or bookmark visits that browsers signal as Sec-Fetch-Site: none
+// with no Origin — so a user who navigates to /api/auth/logout directly still
+// terminates both the local session and, when advertised, the IdP SSO cookie.
+// Site-controlled cross-origin navigations (Sec-Fetch-Site: cross-site or
+// same-site, e.g. an attacker <a> link) remain blocked, preserving logout CSRF
+// protection. Bearer-token callers and auth-disabled dev mode bypass the check
+// like mutationOriginAllowed.
+func (s *Server) logoutRedirectOriginAllowed(r *http.Request) bool {
+	if s.auth == nil || bearerTokenPresent(r) {
+		return true
+	}
+	if sameOriginRequest(r, s.auth.cfg.PublicOrigin) {
+		return true
+	}
+	// Direct user navigation: no Origin header and Sec-Fetch-Site: none.
+	// Forbidden headers cannot be set by site-controlled fetch(), so only a
+	// genuine top-level browser navigation can produce this signal.
+	// Explicitly fail closed when the configured public origin is missing or
+	// malformed — sameOriginRequest would reject it, so the `none` exception
+	// must not bypass that. Both logout endpoints fail closed per docs/API.md.
+	if len(r.Header.Values("Origin")) == 0 && strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "none") {
+		if _, ok := canonicalOrigin(s.auth.cfg.PublicOrigin, true); !ok {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+func (s *Server) sameOriginOrDirect(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.logoutRedirectOriginAllowed(r) {
+			http.Error(w, "forbidden origin", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
 func bearerTokenPresent(r *http.Request) bool {
 	_, ok := bearerToken(r)
 	return ok

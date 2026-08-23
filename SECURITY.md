@@ -47,7 +47,11 @@ In short:
   endpoint. Cookie-authenticated mutations additionally require an exact `Origin` match to
   `APP_BASE_URL` (or `Sec-Fetch-Site: same-origin` when `Origin` is absent), and JSON bodies must
   declare `Content-Type: application/json`; service-account bearer callers are explicit and do
-  not rely on ambient cookies.
+  not rely on ambient cookies. `GET /api/auth/logout` is the only tightly scoped exception: it
+  additionally accepts a direct browser navigation (`Sec-Fetch-Site: none` with no `Origin`) so an
+  address-bar/bookmark visit still terminates both sessions, while site-controlled
+  `cross-site`/`same-site` navigations remain blocked; both logout endpoints fail closed when
+  `APP_BASE_URL` is missing or malformed.
 - **Audit trail:** every mutating call is emitted as a structured log event to stdout for the
   platform's log aggregator, off the app database.
 

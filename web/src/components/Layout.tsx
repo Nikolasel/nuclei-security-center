@@ -108,7 +108,26 @@ function paneLinkClass(isActive: boolean, collapsed: boolean) {
 }
 
 async function logout() {
-  await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
+  try {
+    const res = await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => null);
+      const url =
+        data && typeof (data as { end_session_url?: unknown }).end_session_url === "string"
+          ? (data as { end_session_url: string }).end_session_url
+          : "";
+      if (url) {
+        window.location.assign(url);
+        return;
+      }
+    }
+  } catch {
+    // Network or parse error — fall through to local redirect.
+  }
   window.location.assign("/");
 }
 

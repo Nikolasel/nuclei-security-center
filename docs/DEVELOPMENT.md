@@ -17,11 +17,11 @@ handlers return plain-text errors plus an appropriate status.
 
 ### Database migrations
 
-`internal/store/migrations/0001_init.sql` is the consolidated fresh-deployment baseline, including
-the final alpha schema. Alpha databases are intentionally rejected; do not add compatibility or
-upgrade logic for them.
+`internal/store/migrations/0001_init.sql` is the consolidated fresh-deployment baseline, frozen at
+the beta release with the schema carried over from the final alpha. It is now immutable; do not edit
+it. Alpha databases are intentionally rejected; do not add compatibility or upgrade logic for them.
 
-After beta, each schema change goes in a new numbered SQL file. The runner serializes startup
+From beta onward, each schema change goes in a new numbered SQL file. The runner serializes startup
 migration work per database/schema, validates the complete recorded history, and applies unseen files
 plus their history records in one transaction. Files run in filename order and use SHA-256 checksums
 in `schema_migrations`. Applied files are immutable: never edit one after a database may have recorded

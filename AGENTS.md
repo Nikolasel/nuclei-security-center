@@ -12,7 +12,7 @@ Repo: `git@github.com:Nikolasel/nuclei-security-center.git`.
 architectural changes. `README.md` is the visitor-facing overview; the practical guides live
 under `docs/` (`ADMIN_GUIDE.md`, `API.md`, `DEVELOPMENT.md`).
 
-The product is a working alpha: a logged-in user manages targets/template-sets, runs scans
+The product is a working beta: a logged-in user manages targets/template-sets, runs scans
 (on demand or on a cron **schedule**), and triages a **Tenable-style finding lifecycle** (dedup +
 first/last-seen + detection state + dispositions/recast), exporting the lifecycle list as
 JSON/CSV/SARIF/raw. OIDC/BFF auth with IdP-driven roles fronts a React SPA. Cross-cutting: a

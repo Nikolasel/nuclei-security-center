@@ -56,6 +56,12 @@ const MaxConfiguredLiveAuthFlows = 100_000
 
 const unsupportedMigrationHistory = "migration history is not supported by the current fresh-deployment baseline; deploy a new empty database and restore portable exports"
 
+// immutableMigrationChanged is the guidance for a checksum mismatch on an
+// already-applied migration. Since the beta baseline freeze, released migration
+// files are immutable: a mismatch means a file's bytes changed after a database
+// recorded it, which is a build/authoring error, not an operator upgrade path.
+const immutableMigrationChanged = "applied migrations are immutable; a released migration's contents must never change after it has been applied — revert the edit and add a new numbered forward migration for the schema change"
+
 // Open connects to Postgres and returns a Store. The caller must Close it.
 func Open(ctx context.Context, dsn string) (*Store, error) {
 	return OpenWithOptions(ctx, dsn, Options{})
@@ -261,8 +267,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 			)
 		case *recordedChecksum != migration.checksum:
 			return fmt.Errorf(
-				"migration %s checksum mismatch: %s (changed since this database was created; recorded %s, embedded %s)",
-				migration.name, unsupportedMigrationHistory, *recordedChecksum, migration.checksum,
+				"migration %s checksum mismatch: %s (recorded %s, embedded %s)",
+				migration.name, immutableMigrationChanged, *recordedChecksum, migration.checksum,
 			)
 		}
 	}

@@ -5,10 +5,12 @@ see the [API reference](API.md); for design rationale and security boundaries, s
 [Architecture](ARCHITECTURE.md).
 
 > [!IMPORTANT]
-> The current alpha supports **fresh deployments only**. Alpha databases are not upgradeable. Back
-> up any data you need to retain, deploy with a new empty Postgres database, and move portable data
-> with template/template-set exports and scan bundles. The backend rejects an unsupported migration
-> history at startup instead of attempting a partial upgrade.
+> Beta deployments start from an **empty Postgres database**. Alpha databases are not upgradeable to
+> beta: the schema baseline was frozen at the alpha→beta boundary, so back up any data you need to
+> retain, deploy with a new empty database, and move portable data with template/template-set exports
+> and scan bundles. The backend rejects an unsupported migration history at startup instead of
+> attempting a partial upgrade. From beta onward, schema changes ship as new numbered migrations that
+> apply forward on an existing database.
 
 ## 1. Deployment
 
@@ -459,9 +461,8 @@ There is deliberately no audit table in PostgreSQL. Configure the platform log c
   moving environments.
 - Rotate DB credentials through `DATABASE_PASSWORD_FILE` using a secret-rendering sidecar/agent.
   Leading/interior whitespace is preserved and trailing CR/LF is trimmed.
-- During alpha, schema changes are folded into the consolidated baseline and preserved alpha fixture
-  chain. After beta ships, migrations are ordered and checksum-immutable; never edit an applied
-  migration and add a new numbered forward migration instead.
+- The schema baseline (`0001_init.sql`) is frozen as of the beta release. Migrations are ordered and
+  checksum-immutable; never edit an applied migration — add a new numbered forward migration instead.
 - Do not point beta at an alpha database. The startup rejection is intentional; deploy fresh.
 
 ## 9. Troubleshooting

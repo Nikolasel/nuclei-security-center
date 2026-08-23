@@ -1,7 +1,7 @@
 {
   "name": "nuclei-security-center-web",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.4.0-beta",
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "scripts": {

@@ -282,7 +282,7 @@ func TestSessionsPaginationCursorAndSearchPostgres(t *testing.T) {
 	}
 
 	// Server-side search: q=alice should return only alice subjects globally.
-	req3 := httptest.NewRequest(http.MethodGet, "/api/sessions?q=alice-cursor&limit=10", nil)
+	req3 := httptest.NewRequest(http.MethodGet, "/api/sessions?q=alice&limit=10", nil)
 	req3.AddCookie(&http.Cookie{Name: "nsc_session", Value: adminCookie})
 	rr3 := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rr3, req3)

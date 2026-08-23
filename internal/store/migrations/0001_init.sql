@@ -206,7 +206,8 @@ CREATE TABLE service_accounts (
     created_by text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     expires_at timestamp with time zone,
-    last_used_at timestamp with time zone
+    last_used_at timestamp with time zone,
+    CONSTRAINT service_accounts_role_check CHECK ((role = ANY (ARRAY['viewer'::text, 'operator'::text, 'admin'::text])))
 );
 
 CREATE TABLE sessions (

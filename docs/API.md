@@ -34,6 +34,23 @@ See [Administration → Authentication](ADMIN_GUIDE.md#authentication-and-sessio
 The trusted-proxy setting is safe-by-default: without it, forwarded headers are ignored. When it is
 set, configure only proxy networks that sanitize `X-Forwarded-For` before forwarding requests.
 
+`POST /api/auth/logout` (cookie-authenticated, `Origin` or `Sec-Fetch-Site: same-origin` required)
+always clears the local `nsc_session` cookie and server-side session row. When the IdP's discovery
+document advertises an `end_session_endpoint` (optional per OIDC), the response is `200 JSON`
+`{"end_session_url":"https://idp.example.com/...?client_id=...&post_logout_redirect_uri=..."}`; the
+SPA follows it with a top-level navigation so the browser visits the IdP and its SSO cookie is
+cleared, preventing a subsequent `GET /api/auth/login` from silently re-minting a session on a shared
+workstation (CWE-613). When no endpoint is advertised or the discovered value is not an `http(s)`
+URL, the response is `204` (local-only logout, the correct fallback for IdPs that do not support
+RP-initiated logout).
+
+`GET /api/auth/logout` is the companion for direct browser navigations (address bar, bookmark):
+same `Origin`/`Sec-Fetch-Site: same-origin` allowance plus `Sec-Fetch-Site: none` (user-initiated
+top-level navigation, no `Origin`) are accepted; `cross-site`/`same-site` remain blocked so an
+attacker link cannot log the victim out. It clears the same local session and then `302` redirects
+to the `end_session_endpoint` when known or to `/` otherwise. Both endpoints fail closed when
+`APP_BASE_URL` is missing or malformed.
+
 ## Scans
 
 A scan is launched by selecting a **scan policy** (`scan_policy_id`) — the central, reusable

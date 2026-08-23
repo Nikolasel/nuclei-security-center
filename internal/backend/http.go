@@ -120,6 +120,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /api/auth/login", s.auth.handleLogin)
 		mux.HandleFunc("GET /api/auth/callback", s.auth.handleCallback)
 		mux.HandleFunc("POST /api/auth/logout", s.sameOrigin(s.auth.handleLogout))
+		mux.HandleFunc("GET /api/auth/logout", s.sameOriginOrDirect(s.auth.handleLogoutRedirect))
 	}
 	mux.HandleFunc("GET /api/auth/me", s.requireAuth(s.handleMe))
 

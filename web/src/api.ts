@@ -515,7 +515,12 @@ export interface Page<T> {
   items: T[];
   total: number;
   limit: number;
-  offset: number;
+  offset?: number;
+  next_cursor?: string;
+}
+
+export interface SessionPage extends Page<SessionInfo> {
+  next_cursor?: string;
 }
 
 // The structured findings filter grammar (#97): OR-of-AND groups — groups are
@@ -877,20 +882,26 @@ export const api = {
   // Sessions (admin only) — server-side BFF sessions (#189, #252). `id` is
   // the stored hash, not the raw cookie. Revoking by subject is the offboarding
   // path that terminates every live session for one subject without waiting
-  // for SESSION_TTL expiry. The endpoint is paginated (limit/offset, hard
-  // ceiling) — the wrapper normalizes both the current envelope and the legacy
-  // bare-array shape for backwards compatibility.
-  listSessions: (q: { limit?: number; offset?: number } = {}) => {
+  // for SESSION_TTL expiry. The endpoint is keyset-paginated (limit + cursor
+  // over (created_at DESC, id DESC)) with a hard ceiling and server-side `q`
+  // filtering. The envelope is `{items, total, limit, next_cursor}`; `offset`
+  // is only for the legacy shim and deprecated. The wrapper normalizes the
+  // legacy bare-array shape for backwards compatibility with an old backend.
+  listSessions: (q: { limit?: number; cursor?: string; q?: string } = {}) => {
     const p = new URLSearchParams();
     if (q.limit != null) p.set("limit", String(q.limit));
-    if (q.offset != null) p.set("offset", String(q.offset));
+    if (q.cursor) p.set("cursor", q.cursor);
+    if (q.q) p.set("q", q.q);
     const qs = p.toString();
     const path = qs ? `/api/sessions?${qs}` : "/api/sessions";
     return request<Page<SessionInfo> | SessionInfo[]>("GET", path).then((raw) => {
       if (Array.isArray(raw)) {
-        return { items: raw, total: raw.length, limit: raw.length, offset: 0 } as Page<SessionInfo>;
+        return { items: raw, total: raw.length, limit: raw.length, offset: 0, next_cursor: "" } as Page<SessionInfo>;
       }
-      return raw as Page<SessionInfo>;
+      // Normalize envelope: ensure next_cursor exists even for offset shim.
+      const page = raw as Page<SessionInfo>;
+      if (page.next_cursor === undefined) page.next_cursor = "";
+      return page;
     });
   },
   deleteSession: (id: string) => request<void>("DELETE", `/api/sessions/${encodeURIComponent(id)}`),

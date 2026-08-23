@@ -338,3 +338,66 @@ func TestParseNaabuResultsMissingFile(t *testing.T) {
 		t.Errorf("expected empty result, got %v", got)
 	}
 }
+
+func TestDiscoveryWriterBoundsPartialLine(t *testing.T) {
+	// Very long newline-free runs must not grow w.buf without bound (#216).
+	var mirror bytes.Buffer
+	tally := &discoveryTally{report: func(h, p int) {}}
+	w := &discoveryWriter{inner: &mirror, tally: tally}
+
+	// Single huge write without newline.
+	huge := bytes.Repeat([]byte("x"), discoveryLineMax*4)
+	if _, err := w.Write(huge); err != nil {
+		t.Fatalf("write huge: %v", err)
+	}
+	if got := len(w.buf); got > discoveryLineMax {
+		t.Fatalf("w.buf len = %d, want <= %d after huge write", got, discoveryLineMax)
+	}
+	if got := len(w.tailB); got > discoveryTailMax {
+		t.Fatalf("w.tailB len = %d, want <= %d after huge write", got, discoveryTailMax)
+	}
+
+	// Many small chunks without newline should stay bounded as well.
+	for i := 0; i < 10; i++ {
+		if _, err := w.Write(bytes.Repeat([]byte("y"), 1024)); err != nil {
+			t.Fatalf("write chunk %d: %v", i, err)
+		}
+		if len(w.buf) > discoveryLineMax {
+			t.Fatalf("w.buf len = %d after chunk %d, want <= %d", len(w.buf), i, discoveryLineMax)
+		}
+		if len(w.tailB) > discoveryTailMax {
+			t.Fatalf("w.tailB len = %d after chunk %d, want <= %d", len(w.tailB), i, discoveryTailMax)
+		}
+	}
+
+	// After the unbounded run, a valid tally line must still be counted.
+	// The preceding partial line is deliberately truncated, but the next
+	// newline-terminated line should be parsed.
+	var gotHosts int
+	tally2 := &discoveryTally{report: func(h, p int) { gotHosts = h }}
+	w2 := &discoveryWriter{inner: &bytes.Buffer{}, tally: tally2}
+	// Prime with a huge unterminated line.
+	if _, err := w2.Write(bytes.Repeat([]byte("z"), discoveryLineMax+500)); err != nil {
+		t.Fatalf("write prime: %v", err)
+	}
+	if len(w2.buf) > discoveryLineMax {
+		t.Fatalf("w2.buf len = %d after prime, want <= %d", len(w2.buf), discoveryLineMax)
+	}
+	// Now a valid line after a newline.
+	if _, err := w2.Write([]byte("\n[INF] Found alive host 1.2.3.4 (1.2.3.4)\n")); err != nil {
+		t.Fatalf("write tally line: %v", err)
+	}
+	if gotHosts != 1 {
+		t.Fatalf("tally after truncated partial line: got %d hosts, want 1", gotHosts)
+	}
+	if len(w2.buf) != 0 {
+		t.Fatalf("w2.buf not drained after valid line: len=%d buf=%q", len(w2.buf), w2.buf)
+	}
+	// Tail must remain bounded and contain recent output.
+	if len(w2.tailB) > discoveryTailMax {
+		t.Fatalf("w2.tailB len = %d, want <= %d", len(w2.tailB), discoveryTailMax)
+	}
+	if !bytes.Contains(w2.tailB, []byte("Found alive host")) {
+		t.Fatalf("tail should contain recent tally line, got %q", w2.tailB)
+	}
+}

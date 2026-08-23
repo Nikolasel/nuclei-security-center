@@ -346,6 +346,11 @@ var (
 // discoveryTailMax bounds the retained stderr tail used for error messages.
 const discoveryTailMax = 4096
 
+// discoveryLineMax bounds the partial-line carry buffer. Without a cap a
+// newline-free naabu stderr run would grow w.buf without bound; tailB alone
+// is not sufficient (#216).
+const discoveryLineMax = 4096
+
 // discoveryTally accumulates the live discovery counts ACROSS naabu passes (host
 // discovery then port scan), so the alive-host count found in pass 1 persists into
 // pass 2 while the port count fills in. report is invoked on every update (it hops
@@ -417,6 +422,9 @@ func (w *discoveryWriter) Write(p []byte) (int, error) {
 		}
 		w.handleLine(w.buf[:i])
 		w.buf = w.buf[i+1:]
+	}
+	if len(w.buf) > discoveryLineMax {
+		w.buf = w.buf[len(w.buf)-discoveryLineMax:]
 	}
 	return len(p), nil
 }

@@ -264,3 +264,59 @@ func TestCreateAuthFlowAdmissionDoesNotWaitForHeldLockPostgres(t *testing.T) {
 		t.Fatalf("held-lock admission error = %v, want ErrAuthFlowBusy", err)
 	}
 }
+
+// TestDeleteSessionIsIdempotentPostgres pins the load-bearing idempotence on
+// which the fail-closed logout depends (#268). DeleteSession must return nil
+// for a missing or already-swept row so a logout for an expired-already-
+// swept cookie can still complete with 204/200 rather than a spurious 503.
+func TestDeleteSessionIsIdempotentPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openIsolatedPostgres(t, ctx, dsn)
+
+	cookie := "missing-" + types.NewID()
+	if err := st.DeleteSession(ctx, cookie); err != nil {
+		t.Fatalf("DeleteSession(missing) = %v, want nil", err)
+	}
+	if err := st.DeleteSession(ctx, cookie); err != nil {
+		t.Fatalf("second DeleteSession(missing) = %v, want nil", err)
+	}
+
+	// Create, delete, then delete again — all must be nil.
+	id := "recheck-" + types.NewID()
+	if err := st.CreateSession(ctx, Session{
+		ID:        id,
+		Identity:  Identity{Subject: "sweeper-user"},
+		ExpiresAt: time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := st.DeleteSession(ctx, id); err != nil {
+		t.Fatalf("DeleteSession(present) = %v, want nil", err)
+	}
+	if err := st.DeleteSession(ctx, id); err != nil {
+		t.Fatalf("DeleteSession(already deleted) = %v, want nil", err)
+	}
+
+	// Expired row swept scenario: create an already-expired session and then
+	// sweep it, then DeleteSession for its cookie must still be nil.
+	expiredID := "expired-" + types.NewID()
+	if err := st.CreateSession(ctx, Session{
+		ID:        expiredID,
+		Identity:  Identity{Subject: "expired-sweeper-user"},
+		ExpiresAt: time.Now().Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("CreateSession(expired): %v", err)
+	}
+	if err := st.SweepExpiredAuth(ctx); err != nil {
+		t.Fatalf("SweepExpiredAuth: %v", err)
+	}
+	if err := st.DeleteSession(ctx, expiredID); err != nil {
+		t.Fatalf("DeleteSession(already swept) = %v, want nil", err)
+	}
+}

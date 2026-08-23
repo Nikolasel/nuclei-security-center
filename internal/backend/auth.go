@@ -108,9 +108,30 @@ func authStateCookiePath(secure bool) string {
 	return insecureAuthStateCookiePath
 }
 
+// authStore is the subset of store.Store used by the authenticator. It exists
+// so fault-injection tests can replace the real Postgres store with a fake that
+// fails DeleteSession without needing a live database (#268).
+//
+// DeleteSession on this interface must remain idempotent (nil on missing row);
+// see the extended comment on Store.DeleteSession — logout depends on it.
+type authStore interface {
+	CreateAuthFlow(ctx context.Context, f store.AuthFlow) error
+	TakeAuthFlow(ctx context.Context, state string) (store.AuthFlow, error)
+	UpsertUser(ctx context.Context, id store.Identity) error
+	CreateSession(ctx context.Context, sess store.Session) error
+	GetSession(ctx context.Context, id string) (store.Session, error)
+	DeleteSession(ctx context.Context, id string) error
+}
+
 // Authenticator runs the OIDC authorization-code + BFF session flow.
 type Authenticator struct {
-	store    *store.Store
+	// store is intentionally interface-typed for fault injection. It must be
+	// either a true nil interface (auth disabled / zero-value Authenticator in
+	// tests) or a genuine non-nil store value. Assigning a typed nil
+	// *store.Store would create a non-nil interface whose a.store != nil guard
+	// passes but whose method call panics (nil-pointer dereference) instead of
+	// taking the intended no-op path in handleLogout/Redirect/identityFromRequest.
+	store    authStore
 	log      *slog.Logger
 	cfg      AuthConfig
 	provider *oidc.Provider
@@ -408,10 +429,23 @@ func (a *Authenticator) recordCallbackFailure(r *http.Request, start time.Time) 
 // When no end_session_endpoint is advertised the response is 204 and the
 // caller falls back to a local-only logout (the correct behavior for IdPs
 // that do not support RP-initiated logout).
+//
+// If server-side revocation fails (e.g. a transient Postgres outage) the
+// handler fails closed: it returns 503 with Retry-After and preserves the
+// browser cookie so the caller can retry. A response presented as successful
+// logout therefore always means the session row is gone, so a copied cookie
+// cannot be replayed after the user saw success (#268).
 func (a *Authenticator) handleLogout(w http.ResponseWriter, r *http.Request) {
 	if a.store != nil {
-		if c, err := r.Cookie(a.sessionCookieName()); err == nil {
-			_ = a.store.DeleteSession(r.Context(), c.Value)
+		if c, err := r.Cookie(a.sessionCookieName()); err == nil && c.Value != "" {
+			if err := a.store.DeleteSession(r.Context(), c.Value); err != nil {
+				if a.log != nil {
+					a.log.Error("delete session", "err", err)
+				}
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, "logout temporarily unavailable", http.StatusServiceUnavailable)
+				return
+			}
 		}
 	}
 	a.clearSessionCookie(w)
@@ -428,10 +462,21 @@ func (a *Authenticator) handleLogout(w http.ResponseWriter, r *http.Request) {
 // It clears the local session and then redirects the top-level browser to the
 // IdP's end_session_endpoint when known, otherwise to "/" — so a user who
 // navigates to /api/auth/logout directly still terminates both sessions.
+//
+// Like handleLogout it fails closed on revocation errors: a 503 with
+// Retry-After, no cookie clearing and no redirect, so a transient store
+// failure cannot be mistaken for a successful logout (#268).
 func (a *Authenticator) handleLogoutRedirect(w http.ResponseWriter, r *http.Request) {
 	if a.store != nil {
-		if c, err := r.Cookie(a.sessionCookieName()); err == nil {
-			_ = a.store.DeleteSession(r.Context(), c.Value)
+		if c, err := r.Cookie(a.sessionCookieName()); err == nil && c.Value != "" {
+			if err := a.store.DeleteSession(r.Context(), c.Value); err != nil {
+				if a.log != nil {
+					a.log.Error("delete session", "err", err)
+				}
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, "logout temporarily unavailable", http.StatusServiceUnavailable)
+				return
+			}
 		}
 	}
 	a.clearSessionCookie(w)
@@ -454,6 +499,9 @@ func (a *Authenticator) handleLogoutRedirect(w http.ResponseWriter, r *http.Requ
 func (a *Authenticator) identityFromRequest(r *http.Request) (store.Identity, error) {
 	c, err := r.Cookie(a.sessionCookieName())
 	if err != nil || c.Value == "" {
+		return store.Identity{}, nil
+	}
+	if a.store == nil {
 		return store.Identity{}, nil
 	}
 	sess, err := a.store.GetSession(r.Context(), c.Value)

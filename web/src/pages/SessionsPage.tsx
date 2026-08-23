@@ -23,12 +23,17 @@ export function SessionsPage() {
   const isAdmin = hasRole(me.data ?? undefined, "admin");
   const qc = useQueryClient();
   const [query, setQuery] = useState("");
+  const [offset, setOffset] = useState(0);
+  const limit = 50;
 
   const q = useQuery({
-    queryKey: ["sessions"],
-    queryFn: () => api.listSessions(),
+    queryKey: ["sessions", offset],
+    queryFn: () => api.listSessions({ limit, offset }),
     enabled: isAdmin,
   });
+
+  const sessions = q.data?.items ?? [];
+  const total = q.data?.total ?? 0;
 
   const revokeOne = useMutation({
     mutationFn: (id: string) => api.deleteSession(id),
@@ -42,12 +47,12 @@ export function SessionsPage() {
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle || !q.data) return q.data ?? [];
-    return q.data.filter((s) => {
+    if (!needle || !sessions.length) return sessions;
+    return sessions.filter((s) => {
       const hay = `${s.subject} ${s.email ?? ""} ${s.name ?? ""} ${s.roles.join(" ")}`.toLowerCase();
       return hay.includes(needle);
     });
-  }, [q.data, query]);
+  }, [sessions, query]);
 
   const grouped = useMemo(() => groupBySubject(filtered), [filtered]);
 
@@ -86,7 +91,7 @@ export function SessionsPage() {
             className="max-w-sm"
           />
           <span className="text-xs text-neutral-400">
-            {q.data ? `${filtered.length} of ${q.data.length} sessions` : ""}
+            {q.data ? `${filtered.length} of ${sessions.length} shown · ${total} total` : ""}
           </span>
         </div>
         <p className="text-xs text-neutral-500">
@@ -109,10 +114,31 @@ export function SessionsPage() {
         <ErrorText error={q.error} />
       ) : filtered.length === 0 ? (
         <Card className="p-8 text-center text-sm text-neutral-500">
-          {q.data?.length ? "No sessions match this filter." : "No active sessions."}
+          {sessions.length ? "No sessions match this filter." : "No active sessions."}
         </Card>
       ) : (
         <div className="space-y-4">
+          {total > limit && (
+            <div className="flex items-center justify-between text-xs text-neutral-500">
+              <Button
+                variant="secondary"
+                disabled={offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - limit))}
+              >
+                Previous
+              </Button>
+              <span>
+                Showing {offset + 1}–{Math.min(offset + limit, total)} of {total}
+              </span>
+              <Button
+                variant="secondary"
+                disabled={offset + limit >= total}
+                onClick={() => setOffset(offset + limit)}
+              >
+                Next
+              </Button>
+            </div>
+          )}
           {Array.from(grouped.entries())
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([subject, sessions]) => {

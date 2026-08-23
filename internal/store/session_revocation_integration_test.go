@@ -36,12 +36,12 @@ func TestListAndRevokeSessionsPostgres(t *testing.T) {
 		}
 	}
 
-	rows, err := st.ListSessions(ctx)
+	rows, total, err := st.ListSessions(ctx, 50, 0)
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
-	if len(rows) != 3 {
-		t.Fatalf("ListSessions = %d, want 3", len(rows))
+	if len(rows) != 3 || total != 3 {
+		t.Fatalf("ListSessions = %d total %d, want 3", len(rows), total)
 	}
 	// Each row's ID must be the stored hash, not the raw cookie.
 	for _, r := range rows {
@@ -73,12 +73,12 @@ func TestListAndRevokeSessionsPostgres(t *testing.T) {
 	}
 
 	// Revoke bob's single session by its hashed ID (list -> delete).
-	rows, err = st.ListSessions(ctx)
+	rows, total, err = st.ListSessions(ctx, 50, 0)
 	if err != nil {
 		t.Fatalf("ListSessions after alice revoke: %v", err)
 	}
-	if len(rows) != 1 || rows[0].Subject != bob {
-		t.Fatalf("ListSessions after alice revoke = %+v, want 1 bob row", rows)
+	if len(rows) != 1 || total != 1 || rows[0].Subject != bob {
+		t.Fatalf("ListSessions after alice revoke = %+v total %d, want 1 bob row", rows, total)
 	}
 	hashedID := rows[0].ID
 	if err := st.DeleteSessionByID(ctx, hashedID); err != nil {
@@ -89,12 +89,12 @@ func TestListAndRevokeSessionsPostgres(t *testing.T) {
 	}
 
 	// All revoked — list must be empty.
-	rows, err = st.ListSessions(ctx)
+	rows, total, err = st.ListSessions(ctx, 50, 0)
 	if err != nil {
 		t.Fatalf("ListSessions final: %v", err)
 	}
-	if len(rows) != 0 {
-		t.Fatalf("ListSessions final = %d, want 0", len(rows))
+	if len(rows) != 0 || total != 0 {
+		t.Fatalf("ListSessions final = %d total %d, want 0", len(rows), total)
 	}
 }
 
@@ -117,12 +117,12 @@ func TestListSessionsExcludesExpiredPostgres(t *testing.T) {
 	if err := st.CreateSession(ctx, live); err != nil {
 		t.Fatalf("CreateSession(live): %v", err)
 	}
-	rows, err := st.ListSessions(ctx)
+	rows, total, err := st.ListSessions(ctx, 50, 0)
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
-	if len(rows) != 1 || rows[0].Subject != "carol" {
-		t.Fatalf("ListSessions with one expired = %+v, want 1 live", rows)
+	if len(rows) != 1 || total != 1 || rows[0].Subject != "carol" {
+		t.Fatalf("ListSessions with one expired = %+v total %d, want 1 live", rows, total)
 	}
 	// Expired cookie is already ErrNotFound.
 	if _, err := st.GetSession(ctx, expired.ID); err != ErrNotFound {

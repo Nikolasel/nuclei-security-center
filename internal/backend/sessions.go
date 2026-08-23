@@ -7,11 +7,22 @@ import (
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 )
 
-// handleListSessions returns all live sessions for admin inspection (#189).
+// handleListSessions returns live sessions for admin inspection (#189, #252).
 // Admin only; audited via the mutation wrapper is not needed for a read, but
 // the list itself is sensitive — keep it admin-gated.
+//
+// Pagination (#252): the endpoint is server-enforced paginated (limit/offset
+// with a hard ceiling of MaxSessionPageLimit) to prevent materializing an
+// unbounded session table into memory and the response. The envelope mirrors
+// GET /api/findings: {items, total, limit, offset}. Clients that omit
+// pagination params get the default page (limit=50, offset=0).
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.store.ListSessions(r.Context())
+	limit, offset := pageParams(r.URL.Query())
+	// Re-clamp to the tighter sessions ceiling (pageParams allows up to 500).
+	if limit > store.MaxSessionPageLimit {
+		limit = store.MaxSessionPageLimit
+	}
+	rows, total, err := s.store.ListSessions(r.Context(), limit, offset)
 	if err != nil {
 		s.serverError(w, "list sessions", err)
 		return
@@ -19,7 +30,15 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 	if rows == nil {
 		rows = []store.SessionInfo{}
 	}
-	writeJSON(w, http.StatusOK, rows)
+	writeJSON(w, http.StatusOK, sessionsPage{Items: rows, Total: total, Limit: limit, Offset: offset})
+}
+
+// sessionsPage is the paginated envelope for GET /api/sessions (#252).
+type sessionsPage struct {
+	Items  []store.SessionInfo `json:"items"`
+	Total  int                 `json:"total"`
+	Limit  int                 `json:"limit"`
+	Offset int                 `json:"offset"`
 }
 
 // handleDeleteSession revokes a single session by its stored hashed ID (#189).

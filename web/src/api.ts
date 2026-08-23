@@ -874,11 +874,25 @@ export const api = {
     request<ServiceAccountWithToken>("POST", `/api/service-accounts/${id}/rotate`, body),
   deleteServiceAccount: (id: string) => request<void>("DELETE", `/api/service-accounts/${id}`),
 
-  // Sessions (admin only) — server-side BFF sessions (#189). `id` is the
-  // stored hash, not the raw cookie. Revoking by subject is the offboarding
+  // Sessions (admin only) — server-side BFF sessions (#189, #252). `id` is
+  // the stored hash, not the raw cookie. Revoking by subject is the offboarding
   // path that terminates every live session for one subject without waiting
-  // for SESSION_TTL expiry.
-  listSessions: () => request<SessionInfo[]>("GET", "/api/sessions"),
+  // for SESSION_TTL expiry. The endpoint is paginated (limit/offset, hard
+  // ceiling) — the wrapper normalizes both the current envelope and the legacy
+  // bare-array shape for backwards compatibility.
+  listSessions: (q: { limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (q.limit != null) p.set("limit", String(q.limit));
+    if (q.offset != null) p.set("offset", String(q.offset));
+    const qs = p.toString();
+    const path = qs ? `/api/sessions?${qs}` : "/api/sessions";
+    return request<Page<SessionInfo> | SessionInfo[]>("GET", path).then((raw) => {
+      if (Array.isArray(raw)) {
+        return { items: raw, total: raw.length, limit: raw.length, offset: 0 } as Page<SessionInfo>;
+      }
+      return raw as Page<SessionInfo>;
+    });
+  },
   deleteSession: (id: string) => request<void>("DELETE", `/api/sessions/${encodeURIComponent(id)}`),
   deleteSessionsBySubject: (subject: string) =>
     request<{ revoked: number }>("DELETE", `/api/sessions?subject=${encodeURIComponent(subject)}`),

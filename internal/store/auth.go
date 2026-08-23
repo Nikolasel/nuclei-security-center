@@ -47,15 +47,61 @@ type Session struct {
 	ExpiresAt time.Time
 }
 
+// Session pagination and per-subject cap (#252).
+const (
+	DefaultSessionPageLimit   = 50
+	MaxSessionPageLimit       = 200
+	MaxLiveSessionsPerSubject = 20
+)
+
 // CreateSession stores a new session keyed by the opaque id.
+// It enforces a per-subject live-session cap (#252): at most
+// MaxLiveSessionsPerSubject unexpired sessions per subject are kept. When a
+// subject already has MaxLiveSessionsPerSubject live sessions, the oldest live
+// sessions are evicted to make room for the new one. Serialization is per
+// subject via a transaction-scoped advisory lock so concurrent logins for the
+// same subject cannot transiently exceed the cap.
 func (s *Store) CreateSession(ctx context.Context, sess Session) error {
-	_, err := s.pool.Exec(ctx,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin create session: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Serialize concurrent creations for the same subject.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, sess.Identity.Subject); err != nil {
+		return fmt.Errorf("lock session subject: %w", err)
+	}
+
+	var live int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE subject = $1 AND expires_at > now()`, sess.Identity.Subject).Scan(&live); err != nil {
+		return fmt.Errorf("count live sessions: %w", err)
+	}
+	if live >= MaxLiveSessionsPerSubject {
+		toDelete := live - MaxLiveSessionsPerSubject + 1
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM sessions WHERE id IN (
+				SELECT id FROM sessions
+				 WHERE subject = $1 AND expires_at > now()
+				 ORDER BY created_at ASC
+				 LIMIT $2
+			)`, sess.Identity.Subject, toDelete); err != nil {
+			return fmt.Errorf("evict oldest sessions: %w", err)
+		}
+	}
+
+	if _, err := tx.Exec(ctx,
 		`INSERT INTO sessions (id, subject, email, name, roles, expires_at)
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		hashSessionID(sess.ID), sess.Identity.Subject, nullStr(sess.Identity.Email),
 		nullStr(sess.Identity.Name), orEmpty(sess.Identity.Roles), sess.ExpiresAt,
-	)
-	return err
+	); err != nil {
+		return fmt.Errorf("insert session: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit create session: %w", err)
+	}
+	return nil
 }
 
 // GetSession returns a live (unexpired) session by id, or ErrNotFound. Expired
@@ -97,13 +143,28 @@ type SessionInfo struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// ListSessions returns all live (unexpired) sessions for admin inspection.
-func (s *Store) ListSessions(ctx context.Context) ([]SessionInfo, error) {
+// ListSessions returns a paginated view of live (unexpired) sessions for admin
+// inspection (#252). It enforces a hard page-size ceiling and returns the total
+// number of live sessions matching the filter (before limit/offset) so the caller
+// can render pagination. limit/offset are clamped to server-enforced bounds:
+// default DefaultSessionPageLimit, max MaxSessionPageLimit, offset >= 0.
+// Results are ordered by created_at DESC (newest first).
+func (s *Store) ListSessions(ctx context.Context, limit, offset int) ([]SessionInfo, int, error) {
+	if limit <= 0 || limit > MaxSessionPageLimit {
+		limit = DefaultSessionPageLimit
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE expires_at > now()`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, subject, email, name, roles, created_at, expires_at
-		   FROM sessions WHERE expires_at > now() ORDER BY created_at DESC`)
+		   FROM sessions WHERE expires_at > now() ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []SessionInfo
@@ -111,7 +172,7 @@ func (s *Store) ListSessions(ctx context.Context) ([]SessionInfo, error) {
 		var si SessionInfo
 		var email, name *string
 		if err := rows.Scan(&si.ID, &si.Subject, &email, &name, &si.Roles, &si.CreatedAt, &si.ExpiresAt); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		si.Email = deref(email)
 		si.Name = deref(name)
@@ -120,7 +181,10 @@ func (s *Store) ListSessions(ctx context.Context) ([]SessionInfo, error) {
 		}
 		out = append(out, si)
 	}
-	return out, rows.Err()
+	if out == nil {
+		out = []SessionInfo{}
+	}
+	return out, total, rows.Err()
 }
 
 // DeleteSessionByID removes a session by its stored hashed ID (admin

@@ -68,12 +68,20 @@ func TestAdminSessionRevocationInvalidatesCookiePostgres(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("list sessions status = %d, want 200", rr.Code)
 	}
-	var listed []store.SessionInfo
+	var listed struct {
+		Items  []store.SessionInfo `json:"items"`
+		Total  int                 `json:"total"`
+		Limit  int                 `json:"limit"`
+		Offset int                 `json:"offset"`
+	}
 	if err := json.NewDecoder(rr.Body).Decode(&listed); err != nil {
 		t.Fatalf("decode listed sessions: %v", err)
 	}
-	if len(listed) == 0 {
+	if len(listed.Items) == 0 {
 		t.Fatal("listed sessions empty, want alice")
+	}
+	if listed.Total == 0 {
+		t.Fatal("listed total == 0, want >0")
 	}
 
 	// Bulk revoke alice's subject.
@@ -115,7 +123,7 @@ func TestAdminSessionRevocationInvalidatesCookiePostgres(t *testing.T) {
 	if err := st.CreateSession(ctx, bob); err != nil {
 		t.Fatalf("CreateSession(bob): %v", err)
 	}
-	rows, err := st.ListSessions(ctx)
+	rows, _, err := st.ListSessions(ctx, 50, 0)
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}

@@ -129,6 +129,16 @@ func (s *Store) GetSession(ctx context.Context, id string) (Session, error) {
 }
 
 // DeleteSession removes a session (logout). Missing is not an error.
+//
+// This idempotence is load-bearing for the fail-closed logout contract
+// (#268): handleLogout/handleLogoutRedirect in internal/backend treat any
+// non-nil error as a transient store failure and return 503 with
+// Retry-After: 1 without clearing the browser cookie, so the caller can
+// retry. The background SweepExpiredAuth sweeper routinely deletes expired
+// sessions, so a logout for an already-swept (expired) cookie must still
+// succeed with 204/200 rather than a spurious 503 from which the user could
+// never complete a clean logout. Do not change this to return ErrNotFound
+// for a missing row without updating the logout handlers and their tests.
 func (s *Store) DeleteSession(ctx context.Context, id string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE id = $1`, hashSessionID(id))
 	return err

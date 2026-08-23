@@ -1,12 +1,16 @@
 package backend
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/Nikolasel/nuclei-security-center/internal/store"
 )
 
 func TestDiscoverEndSessionEndpointNilProvider(t *testing.T) {
@@ -459,5 +463,448 @@ func TestLogoutGETFallbackWhenNoEndpoint(t *testing.T) {
 	}
 	if loc := rr.Header().Get("Location"); loc != "/" {
 		t.Fatalf("fallback location = %q, want /", loc)
+	}
+}
+
+// faultyAuthStore is a minimal in-memory authStore for fault-injection tests
+// (#268). It tracks sessions in a map and can be configured to fail
+// DeleteSession to simulate a transient Postgres outage.
+type faultyAuthStore struct {
+	deleteErr error
+	sessions  map[string]store.Session
+}
+
+func (f *faultyAuthStore) DeleteSession(ctx context.Context, id string) error {
+	if f.deleteErr != nil {
+		return f.deleteErr
+	}
+	if f.sessions != nil {
+		delete(f.sessions, id)
+	}
+	return nil
+}
+func (f *faultyAuthStore) GetSession(ctx context.Context, id string) (store.Session, error) {
+	if f.sessions == nil {
+		return store.Session{}, store.ErrNotFound
+	}
+	sess, ok := f.sessions[id]
+	if !ok {
+		return store.Session{}, store.ErrNotFound
+	}
+	return sess, nil
+}
+func (f *faultyAuthStore) CreateSession(ctx context.Context, sess store.Session) error { return nil }
+func (f *faultyAuthStore) UpsertUser(ctx context.Context, id store.Identity) error     { return nil }
+func (f *faultyAuthStore) CreateAuthFlow(ctx context.Context, flow store.AuthFlow) error {
+	return nil
+}
+func (f *faultyAuthStore) TakeAuthFlow(ctx context.Context, state string) (store.AuthFlow, error) {
+	return store.AuthFlow{}, store.ErrNotFound
+}
+
+func hasClearSessionCookie(rr *httptest.ResponseRecorder) bool {
+	for _, c := range rr.Result().Cookies() {
+		if strings.Contains(c.Name, "nsc_session") && c.MaxAge == -1 {
+			return true
+		}
+	}
+	return false
+}
+
+// TestHandleLogoutFailsClosedOnStoreError verifies POST /api/auth/logout fails
+// closed when server-side revocation fails: 503 with Retry-After, no cookie
+// clearing, and no IdP URL leaked (#268).
+func TestHandleLogoutFailsClosedOnStoreError(t *testing.T) {
+	const cookieVal = "test-session-copy"
+	cases := []struct {
+		name     string
+		endpoint string
+	}{
+		{name: "with IdP endpoint", endpoint: "https://idp.example.com/logout"},
+		{name: "without IdP endpoint", endpoint: ""},
+		{name: "with javascript endpoint (treated as missing)", endpoint: "javascript:alert(1)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &Authenticator{
+				store:              &faultyAuthStore{deleteErr: errors.New("postgres unavailable")},
+				cfg:                AuthConfig{ClientID: "c", PublicOrigin: "https://nsc.example.com"},
+				endSessionEndpoint: tc.endpoint,
+			}
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+			req.AddCookie(&http.Cookie{Name: a.sessionCookieName(), Value: cookieVal})
+			a.handleLogout(rr, req)
+
+			if rr.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want %d", rr.Code, http.StatusServiceUnavailable)
+			}
+			if got := rr.Header().Get("Retry-After"); got != "1" {
+				t.Fatalf("Retry-After = %q, want 1", got)
+			}
+			if hasClearSessionCookie(rr) {
+				t.Fatalf("failure must not clear session cookie, got Set-Cookie %q", rr.Header().Get("Set-Cookie"))
+			}
+			body := rr.Body.String()
+			if strings.Contains(body, "end_session_url") || strings.Contains(body, "idp.example.com") {
+				t.Fatalf("failure must not leak end_session_url, body=%q", body)
+			}
+			if !strings.Contains(body, "logout temporarily unavailable") {
+				t.Fatalf("body = %q, want generic 503 message", body)
+			}
+		})
+	}
+
+	// No cookie → no deletion needed, so logout still succeeds even when
+	// the store is faulty (idempotent logout).
+	t.Run("no cookie still succeeds", func(t *testing.T) {
+		for _, endpoint := range []string{"", "https://idp.example.com/logout"} {
+			a := &Authenticator{
+				store:              &faultyAuthStore{deleteErr: errors.New("postgres unavailable")},
+				cfg:                AuthConfig{ClientID: "c", PublicOrigin: "https://nsc.example.com"},
+				endSessionEndpoint: endpoint,
+			}
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+			a.handleLogout(rr, req)
+			// Without a cookie there is nothing to revoke, so 204 (or 200 with endpoint) is correct.
+			want := http.StatusNoContent
+			if endpoint != "" {
+				want = http.StatusOK
+			}
+			if rr.Code != want {
+				t.Fatalf("no-cookie with endpoint %q status = %d, want %d", endpoint, rr.Code, want)
+			}
+			if !hasClearSessionCookie(rr) {
+				t.Fatalf("no-cookie success must still clear cookie")
+			}
+		}
+	})
+
+	// Empty cookie value is treated as missing.
+	t.Run("empty cookie still succeeds", func(t *testing.T) {
+		a := &Authenticator{
+			store: &faultyAuthStore{deleteErr: errors.New("boom")},
+			cfg:   AuthConfig{ClientID: "c", PublicOrigin: "https://nsc.example.com"},
+		}
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+		req.AddCookie(&http.Cookie{Name: a.sessionCookieName(), Value: ""})
+		a.handleLogout(rr, req)
+		if rr.Code != http.StatusNoContent {
+			t.Fatalf("empty cookie status = %d, want %d", rr.Code, http.StatusNoContent)
+		}
+	})
+}
+
+// TestHandleLogoutRedirectFailsClosedOnStoreError verifies GET /api/auth/logout
+// does not redirect (neither to IdP nor to "/") when revocation fails (#268).
+func TestHandleLogoutRedirectFailsClosedOnStoreError(t *testing.T) {
+	const cookieVal = "test-session-copy"
+	cases := []struct {
+		name     string
+		endpoint string
+	}{
+		{name: "with IdP endpoint", endpoint: "https://idp.example.com/end_session"},
+		{name: "without IdP endpoint", endpoint: ""},
+		{name: "with javascript endpoint", endpoint: "javascript:alert(1)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &Authenticator{
+				store:              &faultyAuthStore{deleteErr: errors.New("postgres unavailable")},
+				cfg:                AuthConfig{ClientID: "c", PublicOrigin: "https://nsc.example.com"},
+				endSessionEndpoint: tc.endpoint,
+			}
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/auth/logout", nil)
+			req.AddCookie(&http.Cookie{Name: a.sessionCookieName(), Value: cookieVal})
+			a.handleLogoutRedirect(rr, req)
+
+			if rr.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want %d", rr.Code, http.StatusServiceUnavailable)
+			}
+			if got := rr.Header().Get("Retry-After"); got != "1" {
+				t.Fatalf("Retry-After = %q, want 1", got)
+			}
+			if hasClearSessionCookie(rr) {
+				t.Fatalf("failure must not clear cookie, got %q", rr.Header().Get("Set-Cookie"))
+			}
+			if loc := rr.Header().Get("Location"); loc != "" {
+				t.Fatalf("failure must not redirect, got Location %q", loc)
+			}
+			if strings.Contains(rr.Body.String(), "idp.example.com") {
+				t.Fatalf("body leaked IdP endpoint: %q", rr.Body.String())
+			}
+		})
+	}
+
+	t.Run("no cookie still redirects", func(t *testing.T) {
+		a := &Authenticator{
+			store:              &faultyAuthStore{deleteErr: errors.New("boom")},
+			cfg:                AuthConfig{ClientID: "c", PublicOrigin: "https://nsc.example.com"},
+			endSessionEndpoint: "https://idp.example.com/end_session",
+		}
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/auth/logout", nil)
+		a.handleLogoutRedirect(rr, req)
+		if rr.Code != http.StatusFound {
+			t.Fatalf("no-cookie redirect status = %d, want %d", rr.Code, http.StatusFound)
+		}
+		if !hasClearSessionCookie(rr) {
+			t.Fatal("no-cookie success must still clear cookie")
+		}
+	})
+}
+
+// TestLogoutCopiedCookieAfterSuccessVsFailure ensures a response presented as
+// successful logout always means the session is gone, while a 503 preserves it
+// for retry — the core invariant behind #268.
+func TestLogoutCopiedCookieAfterSuccessVsFailure(t *testing.T) {
+	const cookieVal = "copied-session-123"
+	identity := store.Identity{Subject: "victim", Email: "victim@example.com", Roles: []string{RoleViewer}}
+
+	// 1. Failure case: DeleteSession errors, handler returns 503 and the
+	// copied cookie still authenticates (simulating attacker reuse until
+	// the victim retries after the outage recovers).
+	t.Run("failure preserves session", func(t *testing.T) {
+		fstore := &faultyAuthStore{
+			deleteErr: errors.New("transient pg failure"),
+			sessions:  map[string]store.Session{cookieVal: {ID: cookieVal, Identity: identity}},
+		}
+		a := &Authenticator{
+			store:              fstore,
+			cfg:                AuthConfig{ClientID: "c", PublicOrigin: "https://nsc.example.com"},
+			endSessionEndpoint: "https://idp.example.com/logout",
+		}
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+		req.AddCookie(&http.Cookie{Name: a.sessionCookieName(), Value: cookieVal})
+		a.handleLogout(rr, req)
+
+		if rr.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status = %d, want 503", rr.Code)
+		}
+		if hasClearSessionCookie(rr) {
+			t.Fatal("503 must not clear cookie")
+		}
+		if _, err := fstore.GetSession(context.Background(), cookieVal); err != nil {
+			t.Fatalf("session should still exist after failed logout, got err %v", err)
+		}
+		// identityFromRequest with the same cookie still resolves (attacker can still use it,
+		// but the victim was not told logout succeeded, so they will retry).
+		req2 := httptest.NewRequest(http.MethodGet, "/api/targets", nil)
+		req2.AddCookie(&http.Cookie{Name: a.sessionCookieName(), Value: cookieVal})
+		if got, err := a.identityFromRequest(req2); err != nil || got.Subject != "victim" {
+			t.Fatalf("identityFromRequest after failed logout = %#v err %v, want victim", got, err)
+		}
+	})
+
+	// 2. Success case: DeleteSession succeeds, handler returns 200 (with IdP URL)
+	// and the copied cookie is now invalid.
+	t.Run("success revokes copied cookie POST", func(t *testing.T) {
+		fstore := &faultyAuthStore{
+			sessions: map[string]store.Session{cookieVal: {ID: cookieVal, Identity: identity}},
+		}
+		a := &Authenticator{
+			store:              fstore,
+			cfg:                AuthConfig{ClientID: "c", PublicOrigin: "https://nsc.example.com"},
+			endSessionEndpoint: "https://idp.example.com/logout",
+		}
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+		req.AddCookie(&http.Cookie{Name: a.sessionCookieName(), Value: cookieVal})
+		a.handleLogout(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200", rr.Code)
+		}
+		if !hasClearSessionCookie(rr) {
+			t.Fatal("successful logout must clear cookie")
+		}
+		var payload map[string]string
+		if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if payload["end_session_url"] == "" {
+			t.Fatal("successful logout with endpoint must include end_session_url")
+		}
+		if _, err := fstore.GetSession(context.Background(), cookieVal); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("session should be gone after successful logout, got err %v", err)
+		}
+		req2 := httptest.NewRequest(http.MethodGet, "/api/targets", nil)
+		req2.AddCookie(&http.Cookie{Name: a.sessionCookieName(), Value: cookieVal})
+		if got, err := a.identityFromRequest(req2); err != nil {
+			t.Fatalf("identityFromRequest err %v", err)
+		} else if got.Subject != "" {
+			t.Fatalf("attacker reuse after successful logout: identity = %#v, want empty", got)
+		}
+	})
+
+	// 3. Success via GET also revokes.
+	t.Run("success revokes copied cookie GET", func(t *testing.T) {
+		fstore := &faultyAuthStore{
+			sessions: map[string]store.Session{cookieVal: {ID: cookieVal, Identity: identity}},
+		}
+		a := &Authenticator{
+			store:              fstore,
+			cfg:                AuthConfig{ClientID: "c", PublicOrigin: "https://nsc.example.com"},
+			endSessionEndpoint: "https://idp.example.com/end_session",
+		}
+		rr := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/auth/logout", nil)
+		req.AddCookie(&http.Cookie{Name: a.sessionCookieName(), Value: cookieVal})
+		a.handleLogoutRedirect(rr, req)
+
+		if rr.Code != http.StatusFound {
+			t.Fatalf("status = %d, want 302", rr.Code)
+		}
+		if !hasClearSessionCookie(rr) {
+			t.Fatal("successful GET logout must clear cookie")
+		}
+		if loc := rr.Header().Get("Location"); !strings.HasPrefix(loc, "https://idp.example.com/end_session") {
+			t.Fatalf("Location = %q, want IdP prefix", loc)
+		}
+		if _, err := fstore.GetSession(context.Background(), cookieVal); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("session should be gone after successful GET logout, got err %v", err)
+		}
+	})
+}
+
+// TestLogoutRecoveryRetry ensures a failed logout can be retried successfully
+// once the store recovers — the preserved cookie is reused.
+func TestLogoutRecoveryRetry(t *testing.T) {
+	const cookieVal = "retry-session-xyz"
+	identity := store.Identity{Subject: "alice", Roles: []string{RoleOperator}}
+	fstore := &faultyAuthStore{
+		deleteErr: errors.New("pg down"),
+		sessions:  map[string]store.Session{cookieVal: {ID: cookieVal, Identity: identity}},
+	}
+	a := &Authenticator{
+		store: fstore,
+		cfg:   AuthConfig{ClientID: "c", PublicOrigin: "https://nsc.example.com"},
+	}
+
+	// First attempt fails.
+	rr1 := httptest.NewRecorder()
+	req1 := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	req1.AddCookie(&http.Cookie{Name: a.sessionCookieName(), Value: cookieVal})
+	a.handleLogout(rr1, req1)
+	if rr1.Code != http.StatusServiceUnavailable {
+		t.Fatalf("first attempt status = %d, want 503", rr1.Code)
+	}
+	if hasClearSessionCookie(rr1) {
+		t.Fatal("first attempt must not clear cookie")
+	}
+
+	// Store recovers.
+	fstore.deleteErr = nil
+	rr2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+	req2.AddCookie(&http.Cookie{Name: a.sessionCookieName(), Value: cookieVal})
+	a.handleLogout(rr2, req2)
+	if rr2.Code != http.StatusNoContent {
+		t.Fatalf("retry status = %d, want 204", rr2.Code)
+	}
+	if !hasClearSessionCookie(rr2) {
+		t.Fatal("retry success must clear cookie")
+	}
+	if _, err := fstore.GetSession(context.Background(), cookieVal); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("session should be gone after retry, got %v", err)
+	}
+}
+
+// TestLogoutSucceedsWhenSessionAlreadyMissing documents the load-bearing
+// idempotence of DeleteSession (#268). The background SweepExpiredAuth sweeper
+// routinely deletes already-expired sessions, so a logout for a cookie whose
+// row was already removed must still return success (204/200 or 302) and clear
+// the browser cookie — not a spurious 503. A future store change that starts
+// returning ErrNotFound for missing rows would silently break logout for every
+// already-expired session.
+func TestLogoutSucceedsWhenSessionAlreadyMissing(t *testing.T) {
+	const missingCookie = "already-swept-session"
+	// faultyAuthStore with no sessions map entry simulates the sweeper having
+	// already deleted the row: DeleteSession returns nil (idempotent).
+	fstore := &faultyAuthStore{
+		sessions: map[string]store.Session{},
+	}
+	// Also verify the interface contract directly: missing DeleteSession must be nil.
+	if err := fstore.DeleteSession(context.Background(), missingCookie); err != nil {
+		t.Fatalf("DeleteSession(missing) = %v, want nil (idempotent)", err)
+	}
+	if err := fstore.DeleteSession(context.Background(), missingCookie); err != nil {
+		t.Fatalf("second DeleteSession(missing) = %v, want nil", err)
+	}
+
+	for _, tc := range []struct {
+		name     string
+		endpoint string
+	}{
+		{name: "POST without IdP endpoint", endpoint: ""},
+		{name: "POST with IdP endpoint", endpoint: "https://idp.example.com/logout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &Authenticator{
+				store:              fstore,
+				cfg:                AuthConfig{ClientID: "c", PublicOrigin: "https://nsc.example.com"},
+				endSessionEndpoint: tc.endpoint,
+			}
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
+			req.AddCookie(&http.Cookie{Name: a.sessionCookieName(), Value: missingCookie})
+			a.handleLogout(rr, req)
+
+			want := http.StatusNoContent
+			if tc.endpoint != "" {
+				want = http.StatusOK
+			}
+			if rr.Code != want {
+				t.Fatalf("status = %d, want %d (already-missing must succeed)", rr.Code, want)
+			}
+			if !hasClearSessionCookie(rr) {
+				t.Fatal("already-missing logout must still clear cookie")
+			}
+			if rr.Header().Get("Retry-After") != "" {
+				t.Fatalf("Retry-After = %q, want empty on success", rr.Header().Get("Retry-After"))
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name     string
+		endpoint string
+	}{
+		{name: "GET without IdP endpoint", endpoint: ""},
+		{name: "GET with IdP endpoint", endpoint: "https://idp.example.com/end_session"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := &Authenticator{
+				store:              fstore,
+				cfg:                AuthConfig{ClientID: "c", PublicOrigin: "https://nsc.example.com"},
+				endSessionEndpoint: tc.endpoint,
+			}
+			rr := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/auth/logout", nil)
+			req.AddCookie(&http.Cookie{Name: a.sessionCookieName(), Value: missingCookie})
+			a.handleLogoutRedirect(rr, req)
+
+			if rr.Code != http.StatusFound {
+				t.Fatalf("GET already-missing status = %d, want %d", rr.Code, http.StatusFound)
+			}
+			if !hasClearSessionCookie(rr) {
+				t.Fatal("GET already-missing logout must still clear cookie")
+			}
+			wantLoc := "/"
+			if tc.endpoint != "" {
+				wantLoc = tc.endpoint
+			}
+			loc := rr.Header().Get("Location")
+			if tc.endpoint != "" && !strings.HasPrefix(loc, wantLoc) {
+				t.Fatalf("Location = %q, want prefix %q", loc, wantLoc)
+			}
+			if tc.endpoint == "" && loc != wantLoc {
+				t.Fatalf("Location = %q, want %q", loc, wantLoc)
+			}
+		})
 	}
 }

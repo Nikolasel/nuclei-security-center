@@ -258,7 +258,7 @@ require `Content-Type: application/json`, preventing simple HTML form bodies fro
 decoders. Service-account bearer-token callers are explicit rather than ambient credentials and
 do not need browser-origin headers.
 
-`POST /api/auth/logout` always clears the local session; when the provider's discovery document
+`POST /api/auth/logout` on success clears the local session; when the provider's discovery document
 advertises an `end_session_endpoint` (optional per OIDC, scheme restricted to `http(s)` and host
 required) the backend returns `200 JSON {end_session_url}` with `client_id` and an absolute
 `post_logout_redirect_uri` (derived from `APP_BASE_URL`/`POST_LOGIN_REDIRECT` and whitelisted at
@@ -266,8 +266,11 @@ the IdP), which the SPA follows with a top-level navigation to terminate the IdP
 (CWE-613 — shared-workstation reuse). Otherwise it returns `204` local-only logout. `GET
 /api/auth/logout` is the direct-navigation companion: it accepts the same `same-origin` signal
 plus `Sec-Fetch-Site: none` (address-bar/bookmark, no `Origin`) so a user who navigates to the
-URL directly still clears both sessions, while site-controlled `cross-site`/`same-site` navigations
-remain blocked. See the API reference for the exact status codes.
+URL directly still clears both sessions on success, while site-controlled `cross-site`/`same-site`
+navigations remain blocked. If server-side session revocation fails (transient Postgres outage) both
+endpoints return `503 logout temporarily unavailable` with `Retry-After: 1`, preserve the browser
+cookie so logout can be retried, and do not return/redirect to an `end_session_url` — no success
+is presented until the session row is gone (#268). See the API reference for the exact status codes.
 
 ### Headless automation
 

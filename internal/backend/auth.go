@@ -52,8 +52,10 @@ type AuthConfig struct {
 }
 
 const (
-	defaultSessionCookieName = "nsc_session"
-	hostCookiePrefix         = "__Host-"
+	defaultSessionCookieName    = "nsc_session"
+	hostCookiePrefix            = "__Host-"
+	defaultAuthStateCookieName  = "nsc_auth_state"
+	insecureAuthStateCookiePath = "/api/auth"
 )
 
 // Session TTL bounds (#189): an unbounded SESSION_TTL keeps a revoked admin
@@ -80,6 +82,29 @@ func sessionCookieName(configured string, secure bool) string {
 		name = hostCookiePrefix + name
 	}
 	return name
+}
+
+// authStateCookieName returns the effective OIDC state cookie name. Secure
+// deployments use the __Host- prefix, which requires Secure, Path=/, and no
+// Domain attribute and therefore prevents a sibling subdomain from fixing the
+// login flow in the victim browser (login CSRF via cookie tossing).
+// Local plaintext development keeps the unprefixed name because browsers
+// reject __Host- cookies without Secure.
+func authStateCookieName(secure bool) string {
+	if secure {
+		return hostCookiePrefix + defaultAuthStateCookieName
+	}
+	return defaultAuthStateCookieName
+}
+
+// authStateCookiePath returns the effective OIDC state cookie path.
+// __Host- cookies require Path=/; the insecure fallback is scoped to
+// /api/auth which still covers /api/auth/callback but limits exposure.
+func authStateCookiePath(secure bool) string {
+	if secure {
+		return "/"
+	}
+	return insecureAuthStateCookiePath
 }
 
 // Authenticator runs the OIDC authorization-code + BFF session flow.
@@ -146,8 +171,6 @@ func NewAuthenticator(ctx context.Context, st *store.Store, log *slog.Logger, cf
 
 const (
 	authFlowTTL           = 10 * time.Minute
-	authStateCookieName   = "nsc_auth_state"
-	authStateCookiePath   = "/api/auth"
 	authStateCookieMaxAge = int(authFlowTTL / time.Second)
 )
 
@@ -200,7 +223,7 @@ func (a *Authenticator) handleLogin(w http.ResponseWriter, r *http.Request) {
 func (a *Authenticator) handleCallback(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	state := r.URL.Query().Get("state")
-	if !authStateMatches(r, state) {
+	if !a.authStateMatches(r, state) {
 		http.Error(w, "invalid or expired login state", http.StatusBadRequest)
 		return
 	}
@@ -362,19 +385,23 @@ func (a *Authenticator) setSessionCookie(w http.ResponseWriter, value string, ex
 	})
 }
 
-func authStateMatches(r *http.Request, state string) bool {
+func authStateMatches(r *http.Request, state string, secure bool) bool {
 	if state == "" {
 		return false
 	}
-	c, err := r.Cookie(authStateCookieName)
+	c, err := r.Cookie(authStateCookieName(secure))
 	return err == nil && c.Value != "" && c.Value == state
+}
+
+func (a *Authenticator) authStateMatches(r *http.Request, state string) bool {
+	return authStateMatches(r, state, a.cfg.SecureCookie)
 }
 
 func (a *Authenticator) setAuthStateCookie(w http.ResponseWriter, value string) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     authStateCookieName,
+		Name:     a.authStateCookieName(),
 		Value:    value,
-		Path:     authStateCookiePath,
+		Path:     a.authStateCookiePath(),
 		Expires:  time.Now().Add(authFlowTTL),
 		MaxAge:   authStateCookieMaxAge,
 		HttpOnly: true,
@@ -385,15 +412,23 @@ func (a *Authenticator) setAuthStateCookie(w http.ResponseWriter, value string) 
 
 func (a *Authenticator) clearAuthStateCookie(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
-		Name:     authStateCookieName,
+		Name:     a.authStateCookieName(),
 		Value:    "",
-		Path:     authStateCookiePath,
+		Path:     a.authStateCookiePath(),
 		Expires:  time.Unix(1, 0),
 		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   a.cfg.SecureCookie,
 		SameSite: http.SameSiteLaxMode,
 	})
+}
+
+func (a *Authenticator) authStateCookieName() string {
+	return authStateCookieName(a.cfg.SecureCookie)
+}
+
+func (a *Authenticator) authStateCookiePath() string {
+	return authStateCookiePath(a.cfg.SecureCookie)
 }
 
 func (a *Authenticator) clearSessionCookie(w http.ResponseWriter) {

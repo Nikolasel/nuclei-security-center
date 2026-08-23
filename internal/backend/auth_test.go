@@ -107,7 +107,7 @@ func TestCallbackRejectsUnboundAuthStateBeforeStoreAccess(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/auth/callback?state="+state, nil)
 			if tc.cookieState != "" {
-				req.AddCookie(&http.Cookie{Name: authStateCookieName, Value: tc.cookieState})
+				req.AddCookie(&http.Cookie{Name: authStateCookieName(false), Value: tc.cookieState})
 			}
 			rr := httptest.NewRecorder()
 			(&Authenticator{}).handleCallback(rr, req)
@@ -125,7 +125,7 @@ func TestCallbackRejectsUnboundAuthStateBeforeStoreAccess(t *testing.T) {
 func TestCallbackClearsBoundAuthStateBeforeWritingResponse(t *testing.T) {
 	const state = "expected-state"
 	req := httptest.NewRequest(http.MethodGet, "/api/auth/callback?state="+state+"&error=access_denied", nil)
-	req.AddCookie(&http.Cookie{Name: authStateCookieName, Value: state})
+	req.AddCookie(&http.Cookie{Name: authStateCookieName(false), Value: state})
 	rr := httptest.NewRecorder()
 	(&Authenticator{}).handleCallback(rr, req)
 
@@ -136,7 +136,7 @@ func TestCallbackClearsBoundAuthStateBeforeWritingResponse(t *testing.T) {
 	if len(cookies) != 1 {
 		t.Fatalf("client Set-Cookie count = %d, want 1", len(cookies))
 	}
-	if cookies[0].Name != authStateCookieName || cookies[0].MaxAge != -1 || cookies[0].Path != authStateCookiePath {
+	if cookies[0].Name != authStateCookieName(false) || cookies[0].MaxAge != -1 || cookies[0].Path != authStateCookiePath(false) {
 		t.Fatalf("client clear cookie = %#v, want expired auth-state cookie", cookies[0])
 	}
 }
@@ -156,20 +156,80 @@ func TestAuthStateCookieMatchesOnlyTheExpectedState(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/auth/callback?state="+state, nil)
 			if tc.cookieState != "" {
-				req.AddCookie(&http.Cookie{Name: authStateCookieName, Value: tc.cookieState})
+				req.AddCookie(&http.Cookie{Name: authStateCookieName(false), Value: tc.cookieState})
 			}
-			if got := authStateMatches(req, state); got != tc.want {
+			if got := authStateMatches(req, state, false); got != tc.want {
 				t.Fatalf("authStateMatches = %v, want %v", got, tc.want)
 			}
 		})
 	}
 }
 
+func TestAuthStateMatchesIsolatesSecureCookie(t *testing.T) {
+	const state = "expected-state"
+	legacyName := authStateCookieName(false)
+	hostName := authStateCookieName(true)
+	if legacyName == hostName {
+		t.Fatalf("legacy and host cookie names must differ: %q", legacyName)
+	}
+	cases := []struct {
+		name       string
+		secure     bool
+		cookieName string
+		cookieVal  string
+		want       bool
+	}{
+		{name: "secure accepts host cookie", secure: true, cookieName: hostName, cookieVal: state, want: true},
+		{name: "secure rejects legacy cookie even with matching value", secure: true, cookieName: legacyName, cookieVal: state, want: false},
+		{name: "secure rejects mismatched host cookie", secure: true, cookieName: hostName, cookieVal: "other-state", want: false},
+		{name: "insecure accepts legacy cookie", secure: false, cookieName: legacyName, cookieVal: state, want: true},
+		{name: "insecure rejects host cookie even with matching value", secure: false, cookieName: hostName, cookieVal: state, want: false},
+		{name: "missing cookie always false", secure: true, cookieName: "", cookieVal: "", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/auth/callback?state="+state, nil)
+			if tc.cookieName != "" {
+				req.AddCookie(&http.Cookie{Name: tc.cookieName, Value: tc.cookieVal})
+			}
+			if got := authStateMatches(req, state, tc.secure); got != tc.want {
+				t.Fatalf("authStateMatches(secure=%v, cookie %q=%q) = %v, want %v", tc.secure, tc.cookieName, tc.cookieVal, got, tc.want)
+			}
+		})
+	}
+
+	// HandleCallback in secure mode must also reject a legacy cookie before store access.
+	t.Run("secure handleCallback rejects legacy cookie", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/auth/callback?state="+state, nil)
+		req.AddCookie(&http.Cookie{Name: legacyName, Value: state})
+		rr := httptest.NewRecorder()
+		(&Authenticator{cfg: AuthConfig{SecureCookie: true}}).handleCallback(rr, req)
+		if rr.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+		}
+		if got := rr.Header().Get("Set-Cookie"); got != "" {
+			t.Fatalf("callback minted a cookie before state validation: %q", got)
+		}
+	})
+}
+
 func TestAuthStateCookiePathCoversCallbackRoute(t *testing.T) {
 	const callbackPath = "/api/auth/callback"
-	cookiePath := strings.TrimSuffix(authStateCookiePath, "/")
-	if authStateCookiePath == "" || !strings.HasPrefix(callbackPath, cookiePath+"/") {
-		t.Fatalf("auth-state cookie path %q does not cover callback route %q", authStateCookiePath, callbackPath)
+	for _, secure := range []bool{false, true} {
+		path := authStateCookiePath(secure)
+		cookiePath := strings.TrimSuffix(path, "/")
+		// "/" covers every path; the check below would otherwise require "/"+...
+		// Special-case the host-locked "/" which is the __Host- requirement.
+		if path == "/" {
+			continue
+		}
+		if path == "" || !strings.HasPrefix(callbackPath, cookiePath+"/") {
+			t.Fatalf("auth-state cookie path %q (secure=%v) does not cover callback route %q", path, secure, callbackPath)
+		}
+	}
+	// Explicitly verify the host-locked secure path is "/" as required by __Host-.
+	if got := authStateCookiePath(true); got != "/" {
+		t.Fatalf("secure auth-state cookie path = %q, want \"/\"", got)
 	}
 }
 
@@ -182,11 +242,13 @@ func TestAuthStateCookieAttributes(t *testing.T) {
 		t.Fatalf("Set-Cookie count = %d, want 1", len(cookies))
 	}
 	cookie := cookies[0]
-	if cookie.Name != authStateCookieName || cookie.Value != "expected-state" {
-		t.Fatalf("cookie identity = %q=%q, want %q=%q", cookie.Name, cookie.Value, authStateCookieName, "expected-state")
+	wantName := authStateCookieName(true)
+	wantPath := authStateCookiePath(true)
+	if cookie.Name != wantName || cookie.Value != "expected-state" {
+		t.Fatalf("cookie identity = %q=%q, want %q=%q", cookie.Name, cookie.Value, wantName, "expected-state")
 	}
-	if cookie.Path != authStateCookiePath || !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode {
-		t.Fatalf("cookie attributes = path %q, HttpOnly %v, Secure %v, SameSite %v", cookie.Path, cookie.HttpOnly, cookie.Secure, cookie.SameSite)
+	if cookie.Path != wantPath || !cookie.HttpOnly || !cookie.Secure || cookie.SameSite != http.SameSiteLaxMode || cookie.Domain != "" {
+		t.Fatalf("cookie attributes = path %q domain %q, HttpOnly %v, Secure %v, SameSite %v", cookie.Path, cookie.Domain, cookie.HttpOnly, cookie.Secure, cookie.SameSite)
 	}
 	if cookie.MaxAge <= 0 || !cookie.Expires.After(time.Now()) {
 		t.Fatalf("cookie lifetime = max-age %d, expires %v", cookie.MaxAge, cookie.Expires)
@@ -198,8 +260,56 @@ func TestAuthStateCookieAttributes(t *testing.T) {
 	if len(cleared) != 1 {
 		t.Fatalf("clear Set-Cookie count = %d, want 1", len(cleared))
 	}
-	if cleared[0].Name != authStateCookieName || cleared[0].Path != authStateCookiePath || cleared[0].MaxAge != -1 || !cleared[0].HttpOnly || !cleared[0].Secure || cleared[0].SameSite != http.SameSiteLaxMode {
-		t.Fatalf("clear cookie = %#v, want matching expired auth-state cookie", cleared[0])
+	if cleared[0].Name != wantName || cleared[0].Path != wantPath || cleared[0].MaxAge != -1 || !cleared[0].HttpOnly || !cleared[0].Secure || cleared[0].SameSite != http.SameSiteLaxMode || cleared[0].Domain != "" {
+		t.Fatalf("clear cookie = %#v, want matching expired host-locked cookie", cleared[0])
+	}
+}
+
+func TestAuthStateCookieAttributesInsecure(t *testing.T) {
+	a := &Authenticator{cfg: AuthConfig{SecureCookie: false}}
+	rr := httptest.NewRecorder()
+	a.setAuthStateCookie(rr, "expected-state")
+	cookies := rr.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("Set-Cookie count = %d, want 1", len(cookies))
+	}
+	cookie := cookies[0]
+	wantName := authStateCookieName(false)
+	wantPath := authStateCookiePath(false)
+	if cookie.Name != wantName || cookie.Value != "expected-state" {
+		t.Fatalf("cookie identity = %q=%q, want %q=%q", cookie.Name, cookie.Value, wantName, "expected-state")
+	}
+	if cookie.Path != wantPath || !cookie.HttpOnly || cookie.Secure || cookie.SameSite != http.SameSiteLaxMode || cookie.Domain != "" {
+		t.Fatalf("insecure cookie attributes = path %q domain %q, HttpOnly %v, Secure %v, SameSite %v", cookie.Path, cookie.Domain, cookie.HttpOnly, cookie.Secure, cookie.SameSite)
+	}
+
+	clear := httptest.NewRecorder()
+	a.clearAuthStateCookie(clear)
+	cleared := clear.Result().Cookies()
+	if len(cleared) != 1 {
+		t.Fatalf("clear Set-Cookie count = %d, want 1", len(cleared))
+	}
+	if cleared[0].Name != wantName || cleared[0].Path != wantPath || cleared[0].MaxAge != -1 {
+		t.Fatalf("clear cookie = %#v, want matching expired insecure cookie", cleared[0])
+	}
+}
+
+func TestAuthStateCookieUsesHostPrefixWhenSecure(t *testing.T) {
+	secureName := authStateCookieName(true)
+	securePath := authStateCookiePath(true)
+	if secureName != "__Host-nsc_auth_state" {
+		t.Fatalf("secure auth-state cookie name = %q, want __Host-nsc_auth_state", secureName)
+	}
+	if securePath != "/" {
+		t.Fatalf("secure auth-state cookie path = %q, want /", securePath)
+	}
+	insecureName := authStateCookieName(false)
+	insecurePath := authStateCookiePath(false)
+	if insecureName != "nsc_auth_state" {
+		t.Fatalf("insecure auth-state cookie name = %q, want nsc_auth_state", insecureName)
+	}
+	if insecurePath != "/api/auth" {
+		t.Fatalf("insecure auth-state cookie path = %q, want /api/auth", insecurePath)
 	}
 }
 
@@ -290,8 +400,10 @@ func TestHandleLoginBindsCookieToRedirectStatePostgres(t *testing.T) {
 	}
 
 	var stateCookie *http.Cookie
+	wantCookieName := authStateCookieName(true)
+	wantCookiePath := authStateCookiePath(true)
 	for _, cookie := range rr.Result().Cookies() {
-		if cookie.Name == authStateCookieName {
+		if cookie.Name == wantCookieName {
 			stateCookie = cookie
 			break
 		}
@@ -302,8 +414,8 @@ func TestHandleLoginBindsCookieToRedirectStatePostgres(t *testing.T) {
 	if stateCookie.Value != state {
 		t.Fatalf("auth-state cookie = %q, redirect state = %q", stateCookie.Value, state)
 	}
-	if stateCookie.Path != authStateCookiePath || !stateCookie.HttpOnly || !stateCookie.Secure || stateCookie.SameSite != http.SameSiteLaxMode {
-		t.Fatalf("login auth-state cookie attributes = %#v", stateCookie)
+	if stateCookie.Path != wantCookiePath || !stateCookie.HttpOnly || !stateCookie.Secure || stateCookie.SameSite != http.SameSiteLaxMode || stateCookie.Domain != "" {
+		t.Fatalf("login auth-state cookie attributes = %#v, want host-locked Secure HttpOnly SameSite=Lax Path=/", stateCookie)
 	}
 
 	flow, err := st.TakeAuthFlow(ctx, state)
@@ -320,7 +432,7 @@ func TestCallbackIdPErrorEmitsAccessDeniedAudit(t *testing.T) {
 	a := &Authenticator{log: slog.New(slog.NewJSONHandler(&buf, nil))}
 	const state = "expected-state"
 	req := httptest.NewRequest(http.MethodGet, "/api/auth/callback?state="+state+"&error=access_denied&error_description=evil", nil)
-	req.AddCookie(&http.Cookie{Name: authStateCookieName, Value: state})
+	req.AddCookie(&http.Cookie{Name: authStateCookieName(false), Value: state})
 	rr := httptest.NewRecorder()
 	a.handleCallback(rr, req)
 
@@ -475,7 +587,7 @@ func TestCallbackCodeExchangeEmitsAccessDeniedAudit(t *testing.T) {
 		t.Fatalf("create auth flow: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/auth/callback?state="+flow.State+"&code=secret-code", nil)
-	req.AddCookie(&http.Cookie{Name: authStateCookieName, Value: flow.State})
+	req.AddCookie(&http.Cookie{Name: authStateCookieName(false), Value: flow.State})
 	rr := httptest.NewRecorder()
 	a.handleCallback(rr, req)
 
@@ -567,7 +679,7 @@ func TestCallbackIDTokenVerifyEmitsAccessDeniedAudit(t *testing.T) {
 		t.Fatalf("create auth flow: %v", err)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/auth/callback?state="+flow.State+"&code=secret-code", nil)
-	req.AddCookie(&http.Cookie{Name: authStateCookieName, Value: flow.State})
+	req.AddCookie(&http.Cookie{Name: authStateCookieName(false), Value: flow.State})
 	rr := httptest.NewRecorder()
 	a.handleCallback(rr, req)
 

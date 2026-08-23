@@ -782,7 +782,23 @@ user early (offboarding, demotion), an administrator terminates their live sessi
 # copy it from the `subject` field in the list output or the mono line under
 # each subject group in the UI. Using an email here will match zero rows on
 # most IdPs and return 404.
-curl -sb jar.txt localhost:8080/api/sessions | jq
+# The endpoint is keyset-paginated (limit + cursor over (created_at DESC, id DESC))
+# with a hard ceiling (MaxSessionPageLimit=200, default 50) and a server-side
+# filter `q` across subject/email/name/roles. Responses are `{items, total, limit,
+# next_cursor}`; `next_cursor` is an opaque token for the next page (empty at EOF).
+curl -sb jar.txt "localhost:8080/api/sessions?limit=50" | jq
+# next page
+curl -sb jar.txt "localhost:8080/api/sessions?limit=50&cursor=$(jq -r .next_cursor page1.json)" | jq
+# server-side search (global, not just the current page)
+curl -sb jar.txt "localhost:8080/api/sessions?q=alice&limit=50" | jq
+# Iterate every page to collect all subjects for an offboarding script (do not
+# assume one call returns the full set):
+CURSOR=""; while true; do
+  RESP=$(curl -sb jar.txt -s "localhost:8080/api/sessions?limit=200&cursor=$CURSOR")
+  echo "$RESP" | jq -r '.items[].subject' >> subjects.txt
+  CURSOR=$(echo "$RESP" | jq -r '.next_cursor // empty')
+  [ -z "$CURSOR" ] && break
+done
 # revoke one session
 curl -sb jar.txt -X DELETE -H 'Origin: http://localhost:8080' localhost:8080/api/sessions/<hashed-id>  # => 204
 # revoke every session for a subject (offboarding) — copy `subject` from the list above
@@ -791,6 +807,19 @@ curl -sb jar.txt -X DELETE -H 'Origin: http://localhost:8080' "localhost:8080/ap
 #  offboarding scripts should treat 404 as already-clean — zero sessions is the
 #  desired end state, 404 just makes a typo/email-instead-of-sub obvious)
 ```
+
+The `GET /api/sessions` response before #252 was a bare JSON array and an unbounded
+`SELECT` before pagination. **This is a breaking change:** the endpoint now
+returns an envelope (`{items, total, limit, next_cursor}`) and enforces a hard
+page-size ceiling to prevent materializing the whole session table. API clients
+must read `.items` and iterate via `next_cursor` (do not expect the full set in one
+call). A cached SPA that still sends `?limit=&offset=` continues to work via a
+temporary offset shim (same hard ceiling and stable `(created_at DESC, id DESC)`
+ordering, response includes legacy `offset` plus `next_cursor`), but new clients
+must use `cursor` + `q` and will receive `next_cursor`. The per-subject live
+session cap is `MaxLiveSessionsPerSubject=20`; older sessions are evicted oldest-first
+(`created_at ASC, id ASC`) under a per-subject advisory lock so concurrent logins
+cannot transiently exceed the cap.
 
 A revoked cookie yields `401` on its next use. Both deletes are audited as
 `event_id=session_revoked` (`session.revoke` and `session.revoke_by_subject`);
@@ -802,7 +831,7 @@ stays bounded.
 
 | Method & path | Role | Purpose |
 |---|---|---|
-| `GET /api/sessions` | admin | list live sessions |
+| `GET /api/sessions?limit=&cursor=&q=` | admin | list live sessions (keyset-paginated, `q` filters globally; `limit` 1–200, default 50; `cursor` opaque, `next_cursor` in response; legacy `offset` shim still accepted) |
 | `DELETE /api/sessions/{id}` | admin | revoke one session by its hashed id |
 | `DELETE /api/sessions?subject=<subject>` | admin | revoke all sessions for a subject (`sub`, not email; 404 if none — treat as already-clean) |
 

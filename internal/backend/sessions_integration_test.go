@@ -68,12 +68,21 @@ func TestAdminSessionRevocationInvalidatesCookiePostgres(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("list sessions status = %d, want 200", rr.Code)
 	}
-	var listed []store.SessionInfo
+	var listed struct {
+		Items      []store.SessionInfo `json:"items"`
+		Total      int                 `json:"total"`
+		Limit      int                 `json:"limit"`
+		NextCursor string              `json:"next_cursor"`
+		Offset     int                 `json:"offset"`
+	}
 	if err := json.NewDecoder(rr.Body).Decode(&listed); err != nil {
 		t.Fatalf("decode listed sessions: %v", err)
 	}
-	if len(listed) == 0 {
+	if len(listed.Items) == 0 {
 		t.Fatal("listed sessions empty, want alice")
+	}
+	if listed.Total == 0 {
+		t.Fatal("listed total == 0, want >0")
 	}
 
 	// Bulk revoke alice's subject.
@@ -115,7 +124,7 @@ func TestAdminSessionRevocationInvalidatesCookiePostgres(t *testing.T) {
 	if err := st.CreateSession(ctx, bob); err != nil {
 		t.Fatalf("CreateSession(bob): %v", err)
 	}
-	rows, err := st.ListSessions(ctx)
+	rows, _, _, err := st.ListSessions(ctx, 50, "", "")
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
@@ -210,4 +219,109 @@ func TestSessionsRouteRequiresAdminPostgres(t *testing.T) {
 		t.Fatalf("admin list sessions status = %d, want 200 body %s", rr3.Code, rr3.Body.String())
 	}
 	_ = types.NewID
+}
+
+// TestSessionsPaginationCursorAndSearch covers #252 cursor pagination, limit
+// clamping, invalid cursor, and server-side q filtering through the handler.
+func TestSessionsPaginationCursorAndSearchPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openScanRequestTestStore(t, ctx, dsn)
+
+	auth := &Authenticator{
+		store: st,
+		log:   slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		cfg:   AuthConfig{CookieName: "nsc_session", SecureCookie: false, SessionTTL: DefaultSessionTTL},
+	}
+	srv := NewServer(st, nil, auth, nil, http.NotFoundHandler(), slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)), "")
+
+	// Create 3 distinct subjects.
+	for _, sub := range []string{"alice-cursor", "bob-cursor", "alice2-cursor"} {
+		if err := st.CreateSession(ctx, store.Session{ID: "cookie-" + sub + "-" + types.NewID(), Identity: store.Identity{Subject: sub, Email: sub + "@example.com", Roles: []string{"viewer"}}, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+			t.Fatalf("CreateSession %s: %v", sub, err)
+		}
+	}
+
+	adminCookie := "admin-cursor-" + types.NewID()
+	adminSub := "admin-cursor-" + types.NewID()
+	if err := st.CreateSession(ctx, store.Session{ID: adminCookie, Identity: store.Identity{Subject: adminSub, Roles: []string{RoleAdmin}}, ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatalf("CreateSession admin: %v", err)
+	}
+
+	// Limit exceeds ceiling should clamp to default (50) and not error.
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions?limit=999", nil)
+	req.AddCookie(&http.Cookie{Name: "nsc_session", Value: adminCookie})
+	rr := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("limit clamp status = %d, want 200", rr.Code)
+	}
+	var resp struct {
+		Items []store.SessionInfo `json:"items"`
+		Limit int                 `json:"limit"`
+		Total int                 `json:"total"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode clamp: %v", err)
+	}
+	if resp.Limit != store.DefaultSessionPageLimit {
+		t.Fatalf("clamped limit = %d, want %d", resp.Limit, store.DefaultSessionPageLimit)
+	}
+
+	// Invalid cursor should be 400.
+	req2 := httptest.NewRequest(http.MethodGet, "/api/sessions?cursor=bad", nil)
+	req2.AddCookie(&http.Cookie{Name: "nsc_session", Value: adminCookie})
+	rr2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr2, req2)
+	if rr2.Code != http.StatusBadRequest {
+		t.Fatalf("invalid cursor status = %d, want 400", rr2.Code)
+	}
+
+	// Server-side search: q=alice should return only alice subjects globally.
+	req3 := httptest.NewRequest(http.MethodGet, "/api/sessions?q=alice&limit=10", nil)
+	req3.AddCookie(&http.Cookie{Name: "nsc_session", Value: adminCookie})
+	rr3 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr3, req3)
+	if rr3.Code != http.StatusOK {
+		t.Fatalf("search status = %d, want 200", rr3.Code)
+	}
+	var searched struct {
+		Items []store.SessionInfo `json:"items"`
+		Total int                 `json:"total"`
+	}
+	if err := json.NewDecoder(rr3.Body).Decode(&searched); err != nil {
+		t.Fatalf("decode search: %v", err)
+	}
+	if searched.Total != 2 {
+		t.Fatalf("search alice total = %d, want 2", searched.Total)
+	}
+	for _, it := range searched.Items {
+		if it.Subject != "alice-cursor" && it.Subject != "alice2-cursor" {
+			t.Fatalf("search alice item subject = %q, want alice", it.Subject)
+		}
+	}
+
+	// Legacy offset shim still works for cached SPA.
+	req4 := httptest.NewRequest(http.MethodGet, "/api/sessions?limit=1&offset=0", nil)
+	req4.AddCookie(&http.Cookie{Name: "nsc_session", Value: adminCookie})
+	rr4 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rr4, req4)
+	if rr4.Code != http.StatusOK {
+		t.Fatalf("offset shim status = %d, want 200", rr4.Code)
+	}
+	var offsetResp struct {
+		Items  []store.SessionInfo `json:"items"`
+		Offset int                 `json:"offset"`
+		Total  int                 `json:"total"`
+	}
+	if err := json.NewDecoder(rr4.Body).Decode(&offsetResp); err != nil {
+		t.Fatalf("decode offset: %v", err)
+	}
+	if offsetResp.Offset != 0 || len(offsetResp.Items) != 1 {
+		t.Fatalf("offset shim = %+v, want offset 0 and 1 item", offsetResp)
+	}
 }

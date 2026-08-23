@@ -177,13 +177,13 @@ from the list output — it is the OIDC `sub` claim, an opaque stable identifier
 often a UUID, *not* the email; using an email will match zero rows on most IdPs
 and return 404):
 
-- `GET /api/sessions` (admin) lists every live session with its subject (`sub`), email, roles, and expiry.
+- `GET /api/sessions?limit=&cursor=&q=` (admin) lists live sessions with their subject (`sub`), email, roles, and expiry. The endpoint is keyset-paginated (`limit` 1–200, default 50, `cursor` opaque, `next_cursor` in response) and supports a server-side filter `q` (matches subject/email/name/roles globally). Responses are `{items, total, limit, next_cursor}` — iterate via `next_cursor` until empty, reading `.items` (not a bare array). The per-subject cap is 20 live sessions (oldest evicted first); `limit` beyond 200 falls back to 50 and `q` is capped at 256 bytes. A temporary offset shim (`?limit=&offset=`) remains for a cached SPA but is deprecated.
 - `DELETE /api/sessions/{id}` (admin) revokes a single session by its stored id.
 - `DELETE /api/sessions?subject=<subject>` (admin) revokes **every** live session for one subject
   — the offboarding path. Returns 404 `no active sessions for subject` when the
   supplied `sub` matches no live session so a typo or email-instead-of-`sub`
   does not silently no-op. Offboarding automation should treat this 404 as
-  already-clean (desired end state: zero sessions) rather than a failure.
+  already-clean (desired end state: zero sessions) rather than a failure. When scripting offboarding, iterate pages via `next_cursor` (do not assume one call returns the full set).
 
 Both deletes are audited as `event_id=session_revoked` with `actor_type=user` (or
 `service_account` when a token calls them); a 404 bulk response also emits
@@ -194,10 +194,13 @@ removal or account disable as a trigger to call one of these endpoints so
 revocation propagates within minutes rather than hours.
 
 In the SPA this is exposed as **Admin → Sessions** (visible only to the `admin` role):
-a live, filterable table grouped by subject — each group header shows the opaque
+a live, server-side-filtered table grouped by subject — each group header shows the opaque
 `sub` (mono line, the value to use for `?subject=`) alongside email/name and a
 per-subject **Revoke all** (offboarding) button, plus a per-session **Revoke**
-for targeted termination. The page polls `GET /api/sessions` and calls the same
+for targeted termination. The filter (`q`) is global across all pages (not just the
+current page) and pagination uses a cursor over `(created_at DESC, id DESC)` so revocations
+between pages do not cause skipped rows; navigation (Previous/Next) is rendered independently
+of filtered results and an emptied page offers a clamp back to Previous/First page. The page polls `GET /api/sessions` and calls the same
 `DELETE` endpoints above, so its audit trail is identical to the `curl` path.
 
 ### Object storage

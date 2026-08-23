@@ -3,9 +3,12 @@ package store
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -47,15 +50,61 @@ type Session struct {
 	ExpiresAt time.Time
 }
 
+// Session pagination and per-subject cap (#252).
+const (
+	DefaultSessionPageLimit   = 50
+	MaxSessionPageLimit       = 200
+	MaxLiveSessionsPerSubject = 20
+)
+
 // CreateSession stores a new session keyed by the opaque id.
+// It enforces a per-subject live-session cap (#252): at most
+// MaxLiveSessionsPerSubject unexpired sessions per subject are kept. When a
+// subject already has MaxLiveSessionsPerSubject live sessions, the oldest live
+// sessions are evicted to make room for the new one. Serialization is per
+// subject via a transaction-scoped advisory lock so concurrent logins for the
+// same subject cannot transiently exceed the cap.
 func (s *Store) CreateSession(ctx context.Context, sess Session) error {
-	_, err := s.pool.Exec(ctx,
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin create session: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	// Serialize concurrent creations for the same subject.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, sess.Identity.Subject); err != nil {
+		return fmt.Errorf("lock session subject: %w", err)
+	}
+
+	var live int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE subject = $1 AND expires_at > now()`, sess.Identity.Subject).Scan(&live); err != nil {
+		return fmt.Errorf("count live sessions: %w", err)
+	}
+	if live >= MaxLiveSessionsPerSubject {
+		toDelete := live - MaxLiveSessionsPerSubject + 1
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM sessions WHERE id IN (
+				SELECT id FROM sessions
+				 WHERE subject = $1 AND expires_at > now()
+				 ORDER BY created_at ASC, id ASC
+				 LIMIT $2
+			)`, sess.Identity.Subject, toDelete); err != nil {
+			return fmt.Errorf("evict oldest sessions: %w", err)
+		}
+	}
+
+	if _, err := tx.Exec(ctx,
 		`INSERT INTO sessions (id, subject, email, name, roles, expires_at)
 		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		hashSessionID(sess.ID), sess.Identity.Subject, nullStr(sess.Identity.Email),
 		nullStr(sess.Identity.Name), orEmpty(sess.Identity.Roles), sess.ExpiresAt,
-	)
-	return err
+	); err != nil {
+		return fmt.Errorf("insert session: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit create session: %w", err)
+	}
+	return nil
 }
 
 // GetSession returns a live (unexpired) session by id, or ErrNotFound. Expired
@@ -97,13 +146,106 @@ type SessionInfo struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// ListSessions returns all live (unexpired) sessions for admin inspection.
-func (s *Store) ListSessions(ctx context.Context) ([]SessionInfo, error) {
-	rows, err := s.pool.Query(ctx,
-		`SELECT id, subject, email, name, roles, created_at, expires_at
-		   FROM sessions WHERE expires_at > now() ORDER BY created_at DESC`)
+// sessionCursor is the opaque cursor for keyset pagination (#252).
+type sessionCursor struct {
+	CreatedAt time.Time `json:"created_at"`
+	ID        string    `json:"id"`
+}
+
+func encodeSessionCursor(t time.Time, id string) string {
+	b, _ := json.Marshal(sessionCursor{CreatedAt: t.UTC(), ID: id})
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+func decodeSessionCursor(s string) (time.Time, string, error) {
+	b, err := base64.RawURLEncoding.DecodeString(s)
 	if err != nil {
-		return nil, err
+		return time.Time{}, "", fmt.Errorf("invalid cursor: %w", err)
+	}
+	var c sessionCursor
+	if err := json.Unmarshal(b, &c); err != nil {
+		return time.Time{}, "", fmt.Errorf("invalid cursor: %w", err)
+	}
+	if c.ID == "" {
+		return time.Time{}, "", fmt.Errorf("invalid cursor: missing id")
+	}
+	if c.CreatedAt.IsZero() {
+		return time.Time{}, "", fmt.Errorf("invalid cursor: missing created_at")
+	}
+	return c.CreatedAt, c.ID, nil
+}
+
+// escapeLikeSession escapes LIKE metacharacters for session search (#211).
+func escapeLikeSession(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
+}
+
+// clampSessionLimit enforces the server ceiling for session pagination.
+func clampSessionLimit(limit int) int {
+	if limit <= 0 || limit > MaxSessionPageLimit {
+		return DefaultSessionPageLimit
+	}
+	return limit
+}
+
+// ListSessions returns a keyset-paginated view of live (unexpired) sessions for
+// admin inspection (#252). It enforces a hard page-size ceiling, supports an
+// optional case-insensitive substring filter `q` (matches subject/email/name/roles),
+// and uses a stable cursor over (created_at DESC, id DESC) so concurrent
+// revocations/expirations do not cause skipped rows. The cursor is an opaque
+// base64-encoded JSON token; an empty cursor starts from the newest row.
+// Results are ordered by created_at DESC, id DESC (unique tie-breaker) and the
+// method returns the next cursor (empty when at the end) plus the total count of
+// live sessions matching the filter (before cursor/limit).
+func (s *Store) ListSessions(ctx context.Context, limit int, cursor string, q string) ([]SessionInfo, string, int, error) {
+	limit = clampSessionLimit(limit)
+	q = strings.TrimSpace(q)
+	var pattern string
+	var hasFilter bool
+	if q != "" {
+		pattern = "%" + escapeLikeSession(q) + "%"
+		hasFilter = true
+	}
+
+	// Total count for the filtered set (without cursor).
+	var total int
+	if hasFilter {
+		if err := s.pool.QueryRow(ctx,
+			`SELECT count(*) FROM sessions WHERE expires_at > now() AND (subject ILIKE $1 ESCAPE '\' OR email ILIKE $1 ESCAPE '\' OR name ILIKE $1 ESCAPE '\' OR array_to_string(roles, ' ') ILIKE $1 ESCAPE '\')`,
+			pattern).Scan(&total); err != nil {
+			return nil, "", 0, err
+		}
+	} else {
+		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE expires_at > now()`).Scan(&total); err != nil {
+			return nil, "", 0, err
+		}
+	}
+
+	// Build keyset query.
+	args := []any{}
+	where := "WHERE expires_at > now()"
+	if hasFilter {
+		where += fmt.Sprintf(" AND (subject ILIKE $%d ESCAPE '\\' OR email ILIKE $%d ESCAPE '\\' OR name ILIKE $%d ESCAPE '\\' OR array_to_string(roles, ' ') ILIKE $%d ESCAPE '\\')", len(args)+1, len(args)+1, len(args)+1, len(args)+1)
+		args = append(args, pattern)
+	}
+	if cursor != "" {
+		ct, cid, err := decodeSessionCursor(cursor)
+		if err != nil {
+			return nil, "", 0, err
+		}
+		where += fmt.Sprintf(" AND (created_at, id) < ($%d, $%d)", len(args)+1, len(args)+2)
+		args = append(args, ct, cid)
+	}
+	where += " ORDER BY created_at DESC, id DESC"
+	// Fetch one extra row to detect hasMore.
+	args = append(args, limit+1)
+	query := fmt.Sprintf(`SELECT id, subject, email, name, roles, created_at, expires_at FROM sessions %s LIMIT $%d`, where, len(args))
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, "", 0, err
 	}
 	defer rows.Close()
 	var out []SessionInfo
@@ -111,7 +253,7 @@ func (s *Store) ListSessions(ctx context.Context) ([]SessionInfo, error) {
 		var si SessionInfo
 		var email, name *string
 		if err := rows.Scan(&si.ID, &si.Subject, &email, &name, &si.Roles, &si.CreatedAt, &si.ExpiresAt); err != nil {
-			return nil, err
+			return nil, "", 0, err
 		}
 		si.Email = deref(email)
 		si.Name = deref(name)
@@ -120,7 +262,86 @@ func (s *Store) ListSessions(ctx context.Context) ([]SessionInfo, error) {
 		}
 		out = append(out, si)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, "", 0, err
+	}
+	if out == nil {
+		out = []SessionInfo{}
+	}
+	var nextCursor string
+	if len(out) > limit {
+		out = out[:limit]
+		last := out[len(out)-1]
+		nextCursor = encodeSessionCursor(last.CreatedAt, last.ID)
+	}
+	return out, nextCursor, total, nil
+}
+
+// ListSessionsOffset is the legacy offset-paginated view retained only as a
+// compatibility shim for rolling clients that still send `?offset=` (#252).
+// New clients must use ListSessions with a cursor. It enforces the same
+// limit ceiling, filter, and unique ordering (created_at DESC, id DESC) but
+// retains OFFSET semantics and therefore still recomputes the mutable
+// expires_at set on each page. It exists solely so a cached SPA that still
+// sends offset continues to paginate until it reloads the new cursor-aware
+// bundle.
+func (s *Store) ListSessionsOffset(ctx context.Context, limit, offset int, q string) ([]SessionInfo, int, error) {
+	limit = clampSessionLimit(limit)
+	if offset < 0 {
+		offset = 0
+	}
+	q = strings.TrimSpace(q)
+	var pattern string
+	var hasFilter bool
+	if q != "" {
+		pattern = "%" + escapeLikeSession(q) + "%"
+		hasFilter = true
+	}
+	var total int
+	if hasFilter {
+		if err := s.pool.QueryRow(ctx,
+			`SELECT count(*) FROM sessions WHERE expires_at > now() AND (subject ILIKE $1 ESCAPE '\' OR email ILIKE $1 ESCAPE '\' OR name ILIKE $1 ESCAPE '\' OR array_to_string(roles, ' ') ILIKE $1 ESCAPE '\')`,
+			pattern).Scan(&total); err != nil {
+			return nil, 0, err
+		}
+	} else {
+		if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM sessions WHERE expires_at > now()`).Scan(&total); err != nil {
+			return nil, 0, err
+		}
+	}
+	args := []any{}
+	where := "WHERE expires_at > now()"
+	if hasFilter {
+		where += fmt.Sprintf(" AND (subject ILIKE $%d ESCAPE '\\' OR email ILIKE $%d ESCAPE '\\' OR name ILIKE $%d ESCAPE '\\' OR array_to_string(roles, ' ') ILIKE $%d ESCAPE '\\')", len(args)+1, len(args)+1, len(args)+1, len(args)+1)
+		args = append(args, pattern)
+	}
+	where += " ORDER BY created_at DESC, id DESC"
+	args = append(args, limit)
+	args = append(args, offset)
+	query := fmt.Sprintf(`SELECT id, subject, email, name, roles, created_at, expires_at FROM sessions %s LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args))
+	rows, err := s.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []SessionInfo
+	for rows.Next() {
+		var si SessionInfo
+		var email, name *string
+		if err := rows.Scan(&si.ID, &si.Subject, &email, &name, &si.Roles, &si.CreatedAt, &si.ExpiresAt); err != nil {
+			return nil, 0, err
+		}
+		si.Email = deref(email)
+		si.Name = deref(name)
+		if si.Roles == nil {
+			si.Roles = []string{}
+		}
+		out = append(out, si)
+	}
+	if out == nil {
+		out = []SessionInfo{}
+	}
+	return out, total, rows.Err()
 }
 
 // DeleteSessionByID removes a session by its stored hashed ID (admin

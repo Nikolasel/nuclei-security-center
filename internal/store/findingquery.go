@@ -244,11 +244,26 @@ func emptyExpr(spec fieldSpec, empty bool) string {
 	return fmt.Sprintf("(%s IS NOT NULL AND %s <> '')", spec.expr, spec.expr)
 }
 
-// likeWrap formats each value into a LIKE pattern (e.g. "%%%s%%" → %v%).
+// escapeLike escapes LIKE/ILIKE metacharacters so user input is matched
+// literally. Backslash is escaped first to avoid double-escaping the
+// introducers for \% and \_.
+func escapeLike(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
+}
+
+// likeWrap formats each value into a LIKE pattern (e.g. "%%%s%%" → %v%)
+// after escaping LIKE metacharacters so the value is matched literally.
+// The surrounding % wildcards remain unescaped; the ILIKE call sites rely
+// on PostgreSQL's default backslash escape (explicit ESCAPE is added where
+// the syntax permits; ILIKE ANY cannot carry an ESCAPE clause).
 func likeWrap(vals []string, format string) []string {
 	out := make([]string, len(vals))
 	for i, v := range vals {
-		out[i] = fmt.Sprintf(format, v)
+		escaped := escapeLike(v)
+		out[i] = fmt.Sprintf(format, escaped)
 	}
 	return out
 }

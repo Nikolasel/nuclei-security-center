@@ -167,8 +167,9 @@ func templateFilterWhere(f TemplateFilter) (string, []any) {
 		conds = append(conds, "tags && "+push(f.Tags))
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
-		p := push("%" + q + "%")
-		conds = append(conds, "(id ILIKE "+p+" OR name ILIKE "+p+" OR description ILIKE "+p+")")
+		pattern := "%" + escapeLike(q) + "%"
+		p := push(pattern)
+		conds = append(conds, "(id ILIKE "+p+" ESCAPE '\\' OR name ILIKE "+p+" ESCAPE '\\' OR description ILIKE "+p+" ESCAPE '\\')")
 	}
 	if len(conds) == 0 {
 		return "", args

@@ -964,6 +964,48 @@ const severityOrder = `CASE lower(severity)
 	WHEN 'critical' THEN 5 WHEN 'high' THEN 4 WHEN 'medium' THEN 3
 	WHEN 'low' THEN 2 WHEN 'info' THEN 1 ELSE 0 END`
 
+// occurrenceFilterWhere builds the WHERE clause for the legacy occurrence
+// filter (ListFindings) without limit/offset. It is split out for unit
+// testing the escaped LIKE patterns and parameterized SQL shape.
+func occurrenceFilterWhere(f FindingFilter) (string, []any) {
+	var conds []string
+	var args []any
+	push := func(val any) int {
+		args = append(args, val)
+		return len(args)
+	}
+	if f.ScanID != "" {
+		conds = append(conds, fmt.Sprintf("scan_id = $%d", push(f.ScanID)))
+	}
+	if f.Query != "" {
+		pattern := "%" + escapeLike(f.Query) + "%"
+		n := push(pattern)
+		conds = append(conds, fmt.Sprintf("(name ILIKE $%d ESCAPE '\\' OR template_id ILIKE $%d ESCAPE '\\')", n, n))
+	}
+	if len(f.Severities) > 0 {
+		lowered := make([]string, len(f.Severities))
+		for i, s := range f.Severities {
+			lowered[i] = strings.ToLower(s)
+		}
+		conds = append(conds, fmt.Sprintf("lower(severity) = ANY($%d)", push(lowered)))
+	}
+	if f.Host != "" {
+		conds = append(conds, fmt.Sprintf("host ILIKE $%d ESCAPE '\\'", push("%"+escapeLike(f.Host)+"%")))
+	}
+	if f.CVE != "" {
+		conds = append(conds, fmt.Sprintf(
+			"EXISTS (SELECT 1 FROM unnest(cve) c WHERE c ILIKE $%d ESCAPE '\\')", push("%"+escapeLike(f.CVE)+"%")))
+	}
+	if f.Tag != "" {
+		conds = append(conds, fmt.Sprintf("$%d = ANY(tags)", push(f.Tag)))
+	}
+	where := ""
+	if len(conds) > 0 {
+		where = "WHERE " + strings.Join(conds, " AND ")
+	}
+	return where, args
+}
+
 // ListFindings returns a page of findings (severity-sorted, then newest first)
 // plus the total count matching the filter (ignoring Limit/Offset).
 func (s *Store) ListFindings(ctx context.Context, f FindingFilter) ([]FindingRow, int, error) {
@@ -977,40 +1019,10 @@ func (s *Store) ListFindings(ctx context.Context, f FindingFilter) ([]FindingRow
 		f.Offset = 0
 	}
 
-	var conds []string
-	var args []any
-	// push appends an arg and returns its 1-based placeholder index.
+	where, args := occurrenceFilterWhere(f)
 	push := func(val any) int {
 		args = append(args, val)
 		return len(args)
-	}
-	if f.ScanID != "" {
-		conds = append(conds, fmt.Sprintf("scan_id = $%d", push(f.ScanID)))
-	}
-	if f.Query != "" {
-		n := push("%" + f.Query + "%")
-		conds = append(conds, fmt.Sprintf("(name ILIKE $%d OR template_id ILIKE $%d)", n, n))
-	}
-	if len(f.Severities) > 0 {
-		lowered := make([]string, len(f.Severities))
-		for i, s := range f.Severities {
-			lowered[i] = strings.ToLower(s)
-		}
-		conds = append(conds, fmt.Sprintf("lower(severity) = ANY($%d)", push(lowered)))
-	}
-	if f.Host != "" {
-		conds = append(conds, fmt.Sprintf("host ILIKE $%d", push("%"+f.Host+"%")))
-	}
-	if f.CVE != "" {
-		conds = append(conds, fmt.Sprintf(
-			"EXISTS (SELECT 1 FROM unnest(cve) c WHERE c ILIKE $%d)", push("%"+f.CVE+"%")))
-	}
-	if f.Tag != "" {
-		conds = append(conds, fmt.Sprintf("$%d = ANY(tags)", push(f.Tag)))
-	}
-	where := ""
-	if len(conds) > 0 {
-		where = "WHERE " + strings.Join(conds, " AND ")
 	}
 
 	var total int

@@ -59,6 +59,12 @@ type ScanOptions struct {
 	Concurrency  int `json:"concurrency,omitempty"`
 	TimeoutSec   int `json:"timeout_sec,omitempty"`
 	MaxHostError int `json:"max_host_error,omitempty"`
+	// ResponseSizeRead caps bytes read into memory per request (nuclei
+	// -response-size-read / -rsr, default 10 MiB). ResponseSizeSave caps bytes kept
+	// for the output event (-response-size-save / -rss, default 1 MiB). <= 0 omits
+	// the flag, so nuclei's own default applies (#274).
+	ResponseSizeRead int `json:"response_size_read,omitempty"`
+	ResponseSizeSave int `json:"response_size_save,omitempty"`
 	// Discovery, when non-nil and Enabled, runs a naabu port-scan pre-pass on the
 	// node before Nuclei, so Nuclei only probes live host:port pairs (#86). nil or
 	// Enabled=false ⇒ Nuclei scans every host unfiltered (the pre-policy behavior).

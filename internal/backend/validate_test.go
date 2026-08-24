@@ -25,6 +25,10 @@ func TestValidateScanPolicy(t *testing.T) {
 		{Name: "p", TemplateSetID: "ts1", Concurrency: ptr(-5)},
 		{Name: "p", TemplateSetID: "ts1", TimeoutSec: ptr(0)},
 		{Name: "p", TemplateSetID: "ts1", MaxHostError: ptr(-1)},
+		{Name: "p", TemplateSetID: "ts1", ResponseSizeRead: ptr(0)},
+		{Name: "p", TemplateSetID: "ts1", ResponseSizeRead: ptr(-1)},
+		{Name: "p", TemplateSetID: "ts1", ResponseSizeSave: ptr(0)},
+		{Name: "p", TemplateSetID: "ts1", ResponseSizeSave: ptr(-100)},
 		{Name: "p", TemplateSetID: "ts1", DiscoveryTimeoutSec: ptr(0)},
 		{Name: "p", TemplateSetID: "ts1", DiscoveryPorts: "80,notaport"},
 		{Name: "p", TemplateSetID: "ts1", DiscoveryPorts: "0"},
@@ -34,6 +38,17 @@ func TestValidateScanPolicy(t *testing.T) {
 	} {
 		if err := validateScanPolicy(p); err == nil {
 			t.Errorf("invalid field accepted: %+v", p)
+		}
+	}
+	// Valid response-size knobs are accepted.
+	for _, p := range []*store.ScanPolicy{
+		{Name: "p", TemplateSetID: "ts1", ResponseSizeRead: ptr(1)},
+		{Name: "p", TemplateSetID: "ts1", ResponseSizeSave: ptr(1)},
+		{Name: "p", TemplateSetID: "ts1", ResponseSizeRead: ptr(1048576), ResponseSizeSave: ptr(1048576)},
+		{Name: "p", TemplateSetID: "ts1", ResponseSizeRead: ptr(10 << 20)},
+	} {
+		if err := validateScanPolicy(p); err != nil {
+			t.Errorf("valid response size rejected: %+v err=%v", p, err)
 		}
 	}
 	// Valid discovery config (single ports + multiple ranges) is accepted + trimmed.

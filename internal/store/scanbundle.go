@@ -183,6 +183,7 @@ func (s *Store) ScanBundleForExport(ctx context.Context, scanID string) (*types.
 			cfg.ScanPolicy = &types.ScanPolicyBundleSnapshot{
 				Name: p.Name, TemplateSetID: p.TemplateSetID,
 				RateLimit: p.RateLimit, Concurrency: p.Concurrency, TimeoutSec: p.TimeoutSec, MaxHostError: p.MaxHostError,
+				ResponseSizeRead: p.ResponseSizeRead, ResponseSizeSave: p.ResponseSizeSave,
 				DiscoveryEnabled: p.DiscoveryEnabled, DiscoveryHostDiscovery: p.DiscoveryHostDiscovery,
 				DiscoveryScanType: p.DiscoveryScanType, DiscoveryPorts: p.DiscoveryPorts,
 				DiscoveryTimeoutSec: p.DiscoveryTimeoutSec, DiscoveryRate: p.DiscoveryRate,

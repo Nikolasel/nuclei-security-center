@@ -138,12 +138,14 @@ type TemplateSetBundleSnapshot struct {
 
 // ScanPolicyBundleSnapshot is the exporter's resolved scan policy record.
 type ScanPolicyBundleSnapshot struct {
-	Name          string `json:"name,omitempty"`
-	TemplateSetID string `json:"template_set_id,omitempty"`
-	RateLimit     *int   `json:"rate_limit,omitempty"`
-	Concurrency   *int   `json:"concurrency,omitempty"`
-	TimeoutSec    *int   `json:"timeout_sec,omitempty"`
-	MaxHostError  *int   `json:"max_host_error,omitempty"`
+	Name             string `json:"name,omitempty"`
+	TemplateSetID    string `json:"template_set_id,omitempty"`
+	RateLimit        *int   `json:"rate_limit,omitempty"`
+	Concurrency      *int   `json:"concurrency,omitempty"`
+	TimeoutSec       *int   `json:"timeout_sec,omitempty"`
+	MaxHostError     *int   `json:"max_host_error,omitempty"`
+	ResponseSizeRead *int   `json:"response_size_read,omitempty"`
+	ResponseSizeSave *int   `json:"response_size_save,omitempty"`
 	// Discovery settings (#86). DiscoveryEnabled nil means "the built-in default
 	// (ON)" — mirrored from the store record.
 	DiscoveryEnabled *bool `json:"discovery_enabled,omitempty"`

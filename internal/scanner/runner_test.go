@@ -63,11 +63,67 @@ func TestBuildArgsMinimal(t *testing.T) {
 	// No filters/options => no severity/tags/rate flags, but core flags present.
 	args := buildArgs("/t/targets.txt", "/t/out.jsonl", "/t/trace.jsonl", nil, types.ScanSpec{Targets: []string{"x"}})
 	if slices.Contains(args, "-rate-limit") || slices.Contains(args, "-severity") ||
-		slices.Contains(args, "-max-host-error") {
+		slices.Contains(args, "-max-host-error") || slices.Contains(args, "-response-size-read") || slices.Contains(args, "-response-size-save") {
 		t.Errorf("unexpected optional flags in minimal args: %v", args)
 	}
 	if !slices.Contains(args, "-jsonl") {
 		t.Errorf("expected -jsonl in args: %v", args)
+	}
+}
+
+func TestBuildArgsResponseSize(t *testing.T) {
+	// Response-size caps (#274) emit nuclei's -response-size-read/-save and
+	// are omitted when <=0 (nuclei default).
+	for _, tc := range []struct {
+		name string
+		opts types.ScanOptions
+		want []string
+	}{
+		{
+			name: "both caps",
+			opts: types.ScanOptions{ResponseSizeRead: 1048576, ResponseSizeSave: 524288},
+			want: []string{"-response-size-read", "1048576", "-response-size-save", "524288"},
+		},
+		{
+			name: "only read",
+			opts: types.ScanOptions{ResponseSizeRead: 2097152},
+			want: []string{"-response-size-read", "2097152"},
+		},
+		{
+			name: "zero omitted",
+			opts: types.ScanOptions{ResponseSizeRead: 0, ResponseSizeSave: 0},
+			want: nil,
+		},
+		{
+			name: "negative omitted",
+			opts: types.ScanOptions{ResponseSizeRead: -1},
+			want: nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := buildArgs("/t/targets.txt", "/t/out.jsonl", "/t/trace.jsonl", nil, types.ScanSpec{Targets: []string{"x"}, Options: tc.opts})
+			for i := 0; i < len(tc.want); i += 2 {
+				flag, val := tc.want[i], tc.want[i+1]
+				found := false
+				for j := 0; j+1 < len(args); j++ {
+					if args[j] == flag && args[j+1] == val {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected %s %s in args %v", flag, val, args)
+				}
+			}
+			// Zero/negative case must not emit the flag names at all.
+			if tc.want == nil {
+				for _, flag := range []string{"-response-size-read", "-response-size-save"} {
+					if slices.Contains(args, flag) {
+						t.Errorf("unexpected %s in args %v", flag, args)
+					}
+				}
+			}
+		})
 	}
 }
 

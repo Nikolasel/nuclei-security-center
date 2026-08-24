@@ -7,12 +7,15 @@ import { duplicateName } from "../util";
 
 // The built-in defaults each knob falls back to when a policy leaves it unset.
 // Mirrors the backend's defaultOptions() (internal/backend/http.go) plus Nuclei's
-// own -max-host-error default; shown as the input placeholder, never sent.
+// own -max-host-error / -response-size-* defaults; shown as the input
+// placeholder, never sent.
 const DEFAULTS = {
   rate_limit: 150,
   concurrency: 25,
   timeout_sec: 600,
   max_host_error: 30,
+  response_size_read: 10485760,
+  response_size_save: 1048576,
 } as const;
 
 // parseKnob turns an input string into the value the API expects: null (unset —
@@ -82,6 +85,12 @@ function ScanPolicyModal({
   const [maxHostError, setMaxHostError] = useState(
     existing?.max_host_error != null ? String(existing.max_host_error) : "",
   );
+  const [responseSizeRead, setResponseSizeRead] = useState(
+    existing?.response_size_read != null ? String(existing.response_size_read) : "",
+  );
+  const [responseSizeSave, setResponseSizeSave] = useState(
+    existing?.response_size_save != null ? String(existing.response_size_save) : "",
+  );
   // Discovery (#86) defaults ON for a new policy (matches the backend default).
   const [discoveryEnabled, setDiscoveryEnabled] = useState(existing?.discovery_enabled ?? true);
   // "" = the node's NAABU_SCAN_TYPE default; else "syn" / "connect".
@@ -110,6 +119,8 @@ function ScanPolicyModal({
     knobInvalid(concurrency) ||
     knobInvalid(timeoutSec) ||
     knobInvalid(maxHostError) ||
+    knobInvalid(responseSizeRead) ||
+    knobInvalid(responseSizeSave) ||
     (discoveryEnabled &&
       (portsInvalid(discoveryPorts) ||
         knobInvalid(discoveryTimeoutSec) ||
@@ -127,6 +138,8 @@ function ScanPolicyModal({
         concurrency: parseKnob(concurrency),
         timeout_sec: parseKnob(timeoutSec),
         max_host_error: parseKnob(maxHostError),
+        response_size_read: parseKnob(responseSizeRead),
+        response_size_save: parseKnob(responseSizeSave),
         discovery_enabled: discoveryEnabled,
         discovery_scan_type: discoveryEnabled ? discoveryScanType || undefined : undefined,
         // Explicit null clears a persisted override when the tri-state is back
@@ -214,6 +227,31 @@ function ScanPolicyModal({
               onChange={(e) => setMaxHostError(e.target.value)}
               placeholder={String(DEFAULTS.max_host_error)}
             />
+          </Field>
+          <Field label="Response size read (bytes)">
+            <Input
+              type="number"
+              min={1}
+              value={responseSizeRead}
+              onChange={(e) => setResponseSizeRead(e.target.value)}
+              placeholder={String(DEFAULTS.response_size_read)}
+            />
+            <span className="mt-1 block text-xs text-neutral-500">
+              Max bytes read per response (nuclei -response-size-read, default 10 MiB). Lower to bound heap on
+              large/CDN responses.
+            </span>
+          </Field>
+          <Field label="Response size save (bytes)">
+            <Input
+              type="number"
+              min={1}
+              value={responseSizeSave}
+              onChange={(e) => setResponseSizeSave(e.target.value)}
+              placeholder={String(DEFAULTS.response_size_save)}
+            />
+            <span className="mt-1 block text-xs text-neutral-500">
+              Max bytes kept for output (nuclei -response-size-save, default 1 MiB).
+            </span>
           </Field>
         </div>
         <div className="border-t border-neutral-200 pt-4 dark:border-neutral-800">
@@ -435,6 +473,8 @@ export function ScanPoliciesPage() {
                   <th className="px-3 py-2 font-medium">Concurrency</th>
                   <th className="px-3 py-2 font-medium">Timeout (s)</th>
                   <th className="px-3 py-2 font-medium">Max host error</th>
+                  <th className="px-3 py-2 font-medium">Resp read</th>
+                  <th className="px-3 py-2 font-medium">Resp save</th>
                   <th className="px-3 py-2 font-medium">Discovery</th>
                   {(canWrite || canDelete) && <th className="px-3 py-2" />}
                 </tr>
@@ -450,6 +490,8 @@ export function ScanPoliciesPage() {
                     <td className="px-3 py-2">{knob(p.concurrency)}</td>
                     <td className="px-3 py-2">{knob(p.timeout_sec)}</td>
                     <td className="px-3 py-2">{knob(p.max_host_error)}</td>
+                    <td className="px-3 py-2">{knob(p.response_size_read)}</td>
+                    <td className="px-3 py-2">{knob(p.response_size_save)}</td>
                     <td className="px-3 py-2">{discoveryCell(p)}</td>
                     {(canWrite || canDelete) && (
                       <td className="px-3 py-2 text-right whitespace-nowrap">
@@ -492,7 +534,7 @@ export function ScanPoliciesPage() {
                 ))}
                 {(q.data ?? []).length === 0 && (
                   <tr>
-                    <td colSpan={7 + (canWrite || canDelete ? 1 : 0)} className="px-3 py-8 text-center text-neutral-400">
+                    <td colSpan={9 + (canWrite || canDelete ? 1 : 0)} className="px-3 py-8 text-center text-neutral-400">
                       No scan policies yet.
                     </td>
                   </tr>

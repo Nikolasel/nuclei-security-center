@@ -19,6 +19,11 @@ import (
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	// Derive a soft memory ceiling for Go from the container's cgroup limit
+	// (#274). An explicit GOMEMLIMIT wins; otherwise 75% of the cgroup cap is
+	// used, leaving headroom for kernel TCP buffers. This complements the
+	// per-response -response-size-read caps rather than replacing them.
+	scanner.ConfigureMemoryLimit(log)
 
 	addr := envOr("SCANNER_ADDR", ":8081")
 	token := os.Getenv("SCANNER_TOKEN")

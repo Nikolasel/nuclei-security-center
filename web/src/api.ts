@@ -179,7 +179,8 @@ export interface TemplateSyncStatus {
 // required templates plus Nuclei/discovery knobs. The approved target is chosen
 // independently at ad-hoc launch or stored on a schedule. Each knob is optional:
 // a null field means "use the built-in default"
-// (rate 150 / concurrency 25 / timeout 600s / max-host-error Nuclei's own 30).
+// (rate 150 / concurrency 25 / timeout 600s / max-host-error Nuclei's own 30
+//  / response_size_read 10 MiB / response_size_save 1 MiB).
 export interface ScanPolicy {
   id: string;
   name: string;
@@ -188,6 +189,8 @@ export interface ScanPolicy {
   concurrency?: number | null;
   timeout_sec?: number | null;
   max_host_error?: number | null;
+  response_size_read?: number | null;
+  response_size_save?: number | null;
   // Discovery (#86): the optional naabu port-scan pre-pass. Runs before Nuclei so
   // it only probes live host:port pairs — the win for CIDR-scoped targets.
   // ON by default; it fails closed on the node, so disable it here when naabu is

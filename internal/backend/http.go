@@ -460,6 +460,12 @@ func overlayScanPolicy(opts types.ScanOptions, p store.ScanPolicy) types.ScanOpt
 	if p.MaxHostError != nil {
 		opts.MaxHostError = *p.MaxHostError
 	}
+	if p.ResponseSizeRead != nil {
+		opts.ResponseSizeRead = *p.ResponseSizeRead
+	}
+	if p.ResponseSizeSave != nil {
+		opts.ResponseSizeSave = *p.ResponseSizeSave
+	}
 	// Discovery (#86): a nil DiscoveryEnabled means "use the default", which is ON
 	// — matching the column default, so a policy that predates discovery still
 	// gets it. The node treats the boolean literally; the default lives here + the

@@ -670,6 +670,16 @@ func buildArgs(targetsFile, out, tracePath string, templatePaths []string, spec 
 	if spec.Options.MaxHostError > 0 {
 		args = append(args, "-max-host-error", strconv.Itoa(spec.Options.MaxHostError))
 	}
+	// Per-response read/save caps (#274): bound the bytes nuclei buffers per
+	// request so a single CDN endpoint streaming large responses cannot pile
+	// 1–1.5 × concurrency × 10 MiB into the heap within seconds and OOM the
+	// container. <=0 leaves nuclei's own defaults (10 MiB read, 1 MiB save).
+	if spec.Options.ResponseSizeRead > 0 {
+		args = append(args, "-response-size-read", strconv.Itoa(spec.Options.ResponseSizeRead))
+	}
+	if spec.Options.ResponseSizeSave > 0 {
+		args = append(args, "-response-size-save", strconv.Itoa(spec.Options.ResponseSizeSave))
+	}
 	return args
 }
 

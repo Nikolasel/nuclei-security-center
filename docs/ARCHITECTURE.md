@@ -99,11 +99,11 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   The exclusion foreign key is restrictive: a custom template referenced by an exclude-set
   exclusion must be consciously removed from that deny-list before it can be deleted.
 - **scan_policies** — `id, name, template_set_id, rate_limit, concurrency, timeout_sec,
-  max_host_error, discovery_*`. The central, reusable **how to scan** configuration: a required
+  max_host_error, response_size_read, response_size_save, discovery_*`. The central, reusable **how to scan** configuration: a required
   template set (exact, all, or exclude) plus Nuclei/discovery knobs (each nullable = "use the
-  built-in default"). Every scan and schedule selects a policy and an approved target
+  built-in default"). `response_size_read`/`save` cap nuclei's `-response-size-read` / `-save` (10 MiB / 1 MiB defaults) to bound heap on large CDN responses (#274); discovery is the optional naabu pre-pass. Every scan and schedule selects a policy and an approved target
   independently, so one policy can be reused across scopes. A template set referenced by a policy
-  cannot be deleted.
+  cannot be deleted. The scanner also derives an automatic `GOMEMLIMIT` ≈75% of its cgroup limit (leaving headroom for kernel TCP buffers) so GC pressure replaces OOM kills (#274).
 - **schedules** — `id, scan_policy_id, target_id, cron, enabled` — a policy and approved target
   paired with a cadence. Deleting either referenced row cascades the schedule away.
 - **scans** — `id, source (schedule|adhoc), scan_policy_id, target_id, template_set_id, status,

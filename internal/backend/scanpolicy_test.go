@@ -8,7 +8,7 @@ import (
 )
 
 func TestOverlayScanPolicy(t *testing.T) {
-	base := types.ScanOptions{RateLimit: 150, Concurrency: 25, TimeoutSec: 600}
+	base := types.ScanOptions{RateLimit: 150, Concurrency: 25, TimeoutSec: 600, ResponseSizeRead: 10 << 20, ResponseSizeSave: 1 << 20}
 
 	// knobsOf strips the Discovery pointer so the execution knobs can be compared
 	// by value (Discovery is asserted separately in each case).
@@ -18,7 +18,7 @@ func TestOverlayScanPolicy(t *testing.T) {
 	// rest of the base untouched — the "tune one thing" case the feature exists
 	// for (raise max-host-error for a fragile device).
 	got := overlayScanPolicy(base, store.ScanPolicy{MaxHostError: ptr(100)})
-	want := types.ScanOptions{RateLimit: 150, Concurrency: 25, TimeoutSec: 600, MaxHostError: 100}
+	want := types.ScanOptions{RateLimit: 150, Concurrency: 25, TimeoutSec: 600, MaxHostError: 100, ResponseSizeRead: 10 << 20, ResponseSizeSave: 1 << 20}
 	if knobsOf(got) != want {
 		t.Errorf("partial overlay = %+v, want %+v", knobsOf(got), want)
 	}
@@ -27,13 +27,23 @@ func TestOverlayScanPolicy(t *testing.T) {
 		t.Errorf("discovery should default ON when unset, got %+v", got.Discovery)
 	}
 
+	// Response-size overlay (#274): only non-nil fields replace the base.
+	rsGot := overlayScanPolicy(base, store.ScanPolicy{ResponseSizeRead: ptr(1 << 20)})
+	if rsGot.ResponseSizeRead != 1<<20 || rsGot.ResponseSizeSave != 1<<20 {
+		t.Errorf("response_size_read overlay = %+v, want read %d save %d", rsGot, 1<<20, 1<<20)
+	}
+	rsBoth := overlayScanPolicy(base, store.ScanPolicy{ResponseSizeRead: ptr(2 << 20), ResponseSizeSave: ptr(512 << 10)})
+	if rsBoth.ResponseSizeRead != 2<<20 || rsBoth.ResponseSizeSave != 512<<10 {
+		t.Errorf("response size both overlay = %+v", rsBoth)
+	}
+
 	// A fully-specified policy replaces every knob and carries discovery config.
 	full := overlayScanPolicy(base, store.ScanPolicy{
-		RateLimit: ptr(20), Concurrency: ptr(5), TimeoutSec: ptr(1200), MaxHostError: ptr(50),
+		RateLimit: ptr(20), Concurrency: ptr(5), TimeoutSec: ptr(1200), MaxHostError: ptr(50), ResponseSizeRead: ptr(1 << 20), ResponseSizeSave: ptr(1 << 20),
 		DiscoveryEnabled: ptr(true), DiscoveryScanType: "connect", DiscoveryPorts: "80,443,8000-9000",
 		DiscoveryHostDiscovery: ptr(true), DiscoveryTimeoutSec: ptr(120),
 	})
-	if knobsOf(full) != (types.ScanOptions{RateLimit: 20, Concurrency: 5, TimeoutSec: 1200, MaxHostError: 50}) {
+	if knobsOf(full) != (types.ScanOptions{RateLimit: 20, Concurrency: 5, TimeoutSec: 1200, MaxHostError: 50, ResponseSizeRead: 1 << 20, ResponseSizeSave: 1 << 20}) {
 		t.Errorf("full overlay = %+v", knobsOf(full))
 	}
 	if full.Discovery == nil || !full.Discovery.Enabled || full.Discovery.HostDiscovery == nil ||

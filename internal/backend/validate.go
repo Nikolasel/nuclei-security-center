@@ -95,6 +95,8 @@ func validateScanPolicy(p *store.ScanPolicy) error {
 		{"concurrency", p.Concurrency},
 		{"timeout_sec", p.TimeoutSec},
 		{"max_host_error", p.MaxHostError},
+		{"response_size_read", p.ResponseSizeRead},
+		{"response_size_save", p.ResponseSizeSave},
 		{"discovery_timeout_sec", p.DiscoveryTimeoutSec},
 		{"discovery_rate", p.DiscoveryRate},
 		{"discovery_probe_timeout_ms", p.DiscoveryProbeTimeoutMs},

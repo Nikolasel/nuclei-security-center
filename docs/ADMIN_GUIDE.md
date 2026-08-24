@@ -100,6 +100,8 @@ such as `30s`, `15m`, and `6h`.
 | `TEMPLATE_DISTRIBUTE_INTERVAL` | `1h` | How often stale, idle scanner nodes receive the current full catalog bundle. Pre-dispatch top-up still runs. |
 | `EXPORT_SPOOL_DIR` | `os.TempDir()` (usually `/tmp`) | Writable backend-local scratch directory for findings exports and scan-bundle imports. Reserve at least 512 MiB for four simultaneous 64 MiB exports plus up to 512 MiB for the one in-flight scan-bundle ZIP spool; SARIF uses a second bounded rule spool. On a read-only-root deployment mount a writable `emptyDir`/volume and point this variable at it. |
 
+Scanner nodes likewise need writable scratch: the image's HOME directory (`/home/scanner`) for nuclei/naabu/uncover config cache (`$HOME/.config`, `$HOME/nuclei-templates`) and `SCANNER_WORK_DIR` (defaults to a private `0700` dir under `os.TempDir()`/`/tmp`) for per-scan work dirs. On a `read_only: true` deployment mount writable `emptyDir`/tmpfs volumes at both paths, as with `EXPORT_SPOOL_DIR`/`TEMPLATE_SYNC_DIR` for the backend.
+
 `SCAN_ZONES` uses this JSON shape (the three PEM-valued TLS keys are optional):
 
 ```sh
@@ -230,7 +232,7 @@ URLs.
 | `NUCLEI_PATH` | `nuclei` | Nuclei executable. The image already supplies the pinned binary. |
 | `NAABU_PATH` | `naabu` | Naabu executable used by discovery-enabled policies. |
 | `NAABU_SCAN_TYPE` | `syn` | Node default (`syn` or `connect`) when a policy does not choose. SYN needs raw sockets and libpcap; connect is the unprivileged fallback. |
-| `SCANNER_WORK_DIR` | private `0700` temporary directory | Per-scan work root. If set, mount a private node-local volume. |
+| `SCANNER_WORK_DIR` | private `0700` temporary directory (under `os.TempDir()`/`/tmp` when unset) | Per-scan work root. If set, mount a private node-local volume. On a `read_only: true` deployment mount a writable `emptyDir`/tmpfs at `/tmp` (or set this to a writable mount) and at the scanner HOME directory (`/home/scanner`) so nuclei can create `$HOME/.config`; see the note above for `EXPORT_SPOOL_DIR`/`TEMPLATE_SYNC_DIR`. |
 | `SCANNER_TLS_CERT` | unset | PEM server certificate. Must be paired with `SCANNER_TLS_KEY`. |
 | `SCANNER_TLS_KEY` | unset | PEM server private key. |
 | `SCANNER_CLIENT_CA` | unset | CA bundle used to require and verify backend client certificates (mTLS). |

@@ -83,11 +83,22 @@ COPY --from=libpcap /libs/ /usr/lib64/
 COPY --from=build /out/scanner /usr/local/bin/scanner
 COPY --from=nuclei /out/nuclei /usr/local/bin/nuclei
 COPY --from=nuclei /out/naabu /usr/local/bin/naabu
+# Dedicated writable HOME for nuclei/naabu/uncover config+cache
+# ($HOME/.config, $HOME/.cache, $HOME/nuclei-templates). /root is locked
+# down (0550) and with CAP_DAC_OVERRIDE dropped (cap_drop: ALL) uid 0 still
+# needs DAC write — see #272. Using a private root-owned 0700 dir avoids
+# the world-writable /tmp (1777) symlink/pre-creation surface. A future
+# move to a non-root USER will need a matching chown (e.g. chown 1001:0
+# /home/scanner) so that USER can write $HOME — /tmp would have worked
+# for any uid but retains the sticky-bit surface. On a read-only-root
+# deployment mount writable tmpfs/volumes at /home/scanner and /tmp
+# (SCANNER_WORK_DIR defaults to os.TempDir()).
+RUN mkdir -p /home/scanner && chmod 0700 /home/scanner
 # SCANNER_WORK_DIR is intentionally left unset: the node then creates a private,
 # process-exclusive work dir (0700, unguessable name) under the system temp dir.
 # Set it explicitly only to point at a mounted private volume.
 ENV NUCLEI_PATH=nuclei \
     NAABU_PATH=naabu \
-    HOME=/root
+    HOME=/home/scanner
 EXPOSE 8081
 ENTRYPOINT ["/usr/local/bin/scanner"]

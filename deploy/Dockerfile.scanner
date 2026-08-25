@@ -4,7 +4,7 @@
 # NUCLEI_VERSION=…). This ARG is the single source of truth for the nuclei
 # version — CI does not override it. Bumping it is the whole "nuclei upgrade"
 # workflow, per invariant #3 (nuclei is a binary, not a linked SDK).
-ARG NUCLEI_VERSION=3.11.0
+ARG NUCLEI_VERSION=3.11.1
 
 # Pinned naabu release for the port-discovery pre-pass (#86). Same "binary, not a
 # linked SDK" model as nuclei — bump the ARG to upgrade. naabu dlopen's libpcap

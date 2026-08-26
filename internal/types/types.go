@@ -149,6 +149,10 @@ const (
 type Capabilities struct {
 	NucleiVersion   string `json:"nuclei_version,omitempty"`
 	TemplatesCommit string `json:"templates_commit,omitempty"`
+	// NaabuScanType is the node's normalized discovery scan mode (syn/connect).
+	// It is the effective NAABU_SCAN_TYPE after normalizeScanType, so empty or
+	// garbage in the environment surfaces as syn (the documented default).
+	NaabuScanType string `json:"naabu_scan_type,omitempty"`
 }
 
 // TemplateBundleEntry is one template inside a bundle's manifest (#85). SHA256 is

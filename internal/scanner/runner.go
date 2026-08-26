@@ -692,6 +692,7 @@ func (r *Runner) Capabilities() types.Capabilities {
 	return types.Capabilities{
 		NucleiVersion:   r.nucleiVersion(),
 		TemplatesCommit: r.bundle.activeDigest(),
+		NaabuScanType:   r.scanType,
 	}
 }
 

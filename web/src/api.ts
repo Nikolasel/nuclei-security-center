@@ -47,6 +47,11 @@ export interface ScannerNode {
   nuclei_version?: string;
   templates_commit?: string;
   templates_synced_at?: string;
+  /** node's effective naabu scan type (SYN/connect) from NAABU_SCAN_TYPE, via
+   *  /v1/capabilities (#271). Absent until the first successful health poll —
+   *  never-polled nodes render as unknown. A previously healthy node that later
+   *  goes down keeps its last-known value (like nuclei_version), not unknown. */
+  naabu_scan_type?: string;
   /** the last poll failure's message; present only while unhealthy (e.g. a 401
    *  from a wrong token, or a connection error from an unreachable node). */
   health_error?: string;

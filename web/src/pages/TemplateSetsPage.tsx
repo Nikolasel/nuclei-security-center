@@ -42,9 +42,10 @@ function TemplateSetModal({
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
-  const persisted = existing != null && !duplicate;
-  const [loadedMembers, setLoadedMembers] = useState(!persisted || existing?.mode !== "exact");
-  const [loadedExclusions, setLoadedExclusions] = useState(!persisted || existing?.mode !== "exclude");
+  const shouldLoadMembers = existing?.mode === "exact";
+  const shouldLoadExclusions = existing?.mode === "exclude";
+  const [loadedMembers, setLoadedMembers] = useState(!shouldLoadMembers);
+  const [loadedExclusions, setLoadedExclusions] = useState(!shouldLoadExclusions);
   const filters: TemplatesQuery = {
     q: query.trim(),
     source: source || undefined,
@@ -55,11 +56,19 @@ function TemplateSetModal({
   const members = useQuery({
     queryKey: ["template-set-members", existing?.id],
     queryFn: () => api.listTemplateSetMembers(existing!.id),
-    enabled: persisted && existing?.mode === "exact",
+    enabled: shouldLoadMembers && !loadedMembers,
   });
   useEffect(() => {
     if (!loadedMembers && members.data) {
-      setSelected(new Set(members.data.map((template) => template.id)));
+      // Currently unreachable while the selection is hydrating (buttons and
+      // checkboxes are gated), but merge instead of overwrite to stay safe
+      // if a future change exposes a mutation path before the fetch lands.
+      setSelected((prev) => {
+        if (prev.size === 0) return new Set(members.data!.map((template) => template.id));
+        const next = new Set(prev);
+        members.data!.forEach((template) => next.add(template.id));
+        return next;
+      });
       setLoadedMembers(true);
     }
   }, [loadedMembers, members.data]);
@@ -67,21 +76,28 @@ function TemplateSetModal({
   const exclusions = useQuery({
     queryKey: ["template-set-exclusions", existing?.id],
     queryFn: () => api.listTemplateSetExclusions(existing!.id),
-    enabled: persisted && existing?.mode === "exclude",
+    enabled: shouldLoadExclusions && !loadedExclusions,
   });
   useEffect(() => {
     if (!loadedExclusions && exclusions.data) {
-      setExcluded(new Set(exclusions.data.map((template) => template.id)));
+      // See members hydration above — defense-in-depth against an
+      // ungated mutation arriving before this fetch completes.
+      setExcluded((prev) => {
+        if (prev.size === 0) return new Set(exclusions.data!.map((template) => template.id));
+        const next = new Set(prev);
+        exclusions.data!.forEach((template) => next.add(template.id));
+        return next;
+      });
       setLoadedExclusions(true);
     }
   }, [exclusions.data, loadedExclusions]);
 
   useEffect(() => {
-    if (!persisted || existing?.mode !== mode) {
+    if (existing == null || existing.mode !== mode) {
       if (mode === "exact") setLoadedMembers(true);
       if (mode === "exclude") setLoadedExclusions(true);
     }
-  }, [existing?.mode, mode, persisted]);
+  }, [existing?.mode, mode]);
 
   const templates = useQuery({
     queryKey: ["templates", "set-picker", query, source, severity, tags, offset],
@@ -93,6 +109,8 @@ function TemplateSetModal({
       }),
   });
   const selection = mode === "exclude" ? excluded : selected;
+  const selectionHydrating =
+    mode === "exact" ? !loadedMembers : mode === "exclude" ? !loadedExclusions : false;
   const updateSelection = (change: (next: Set<string>) => void) => {
     const update = (current: Set<string>) => {
       const next = new Set(current);
@@ -130,8 +148,8 @@ function TemplateSetModal({
       return api.replaceTemplateSetMembers(saved.id, [...selected]);
     },
     onSuccess: (saved) => {
-      qc.setQueryData(["template-set-members", saved.id], undefined);
-      qc.setQueryData(["template-set-exclusions", saved.id], undefined);
+      qc.removeQueries({ queryKey: ["template-set-members", saved.id] });
+      qc.removeQueries({ queryKey: ["template-set-exclusions", saved.id] });
       void qc.invalidateQueries({ queryKey: ["template-sets"] });
       onClose();
     },
@@ -186,13 +204,13 @@ function TemplateSetModal({
               {!readOnly && mode !== "all" && (
                 <>
                   <Button
-                    disabled={selection.size === 0}
+                    disabled={selection.size === 0 || selectionHydrating}
                     onClick={() => updateSelection((next) => next.clear())}
                   >
                     Clear all
                   </Button>
                   <Button
-                    disabled={!templates.data?.items.length}
+                    disabled={!templates.data?.items.length || selectionHydrating}
                     onClick={() => updateSelection((next) => {
                       templates.data?.items.forEach((template) => next.add(template.id));
                     })}
@@ -200,7 +218,7 @@ function TemplateSetModal({
                     {mode === "exclude" ? "Exclude page" : "Select page"}
                   </Button>
                   <Button
-                    disabled={!templates.data?.items.some((template) => selection.has(template.id))}
+                    disabled={!templates.data?.items.some((template) => selection.has(template.id)) || selectionHydrating}
                     onClick={() => updateSelection((next) => {
                       templates.data?.items.forEach((template) => next.delete(template.id));
                     })}
@@ -208,7 +226,7 @@ function TemplateSetModal({
                     {mode === "exclude" ? "Remove page exclusions" : "Deselect page"}
                   </Button>
                   <Button
-                    disabled={selectMatching.isPending || total === 0}
+                    disabled={selectMatching.isPending || total === 0 || selectionHydrating}
                     onClick={() => selectMatching.mutate("select")}
                   >
                     {selectMatching.isPending
@@ -216,7 +234,7 @@ function TemplateSetModal({
                       : mode === "exclude" ? `Exclude all ${total} matching` : `Select all ${total} matching`}
                   </Button>
                   <Button
-                    disabled={selectMatching.isPending || total === 0 || selection.size === 0}
+                    disabled={selectMatching.isPending || total === 0 || selection.size === 0 || selectionHydrating}
                     onClick={() => selectMatching.mutate("deselect")}
                   >
                     {selectMatching.isPending
@@ -278,7 +296,7 @@ function TemplateSetModal({
 
           {selectMatching.isError && <ErrorText error={selectMatching.error} />}
           <div className="mt-3 flex min-h-0 flex-1 flex-col">
-          {(mode === "exclude" ? exclusions.isLoading : members.isLoading) && persisted ? <Spinner label="Loading current selection…" /> : templates.isError ? <ErrorText error={templates.error} /> : templates.isLoading || !templates.data ? <Spinner /> : (
+          {(mode === "exclude" ? exclusions.isLoading : members.isLoading) && selectionHydrating ? <Spinner label="Loading current selection…" /> : templates.isError ? <ErrorText error={templates.error} /> : templates.isLoading || !templates.data ? <Spinner /> : (
             <>
               <div className="min-h-0 flex-1 overflow-y-auto rounded-md border border-neutral-200 dark:border-neutral-800">
                 {templates.data.items.map((template) => (
@@ -329,7 +347,7 @@ function TemplateSetModal({
             {!readOnly && (
               <Button
                 variant="primary"
-                disabled={save.isPending || !name.trim() || (mode === "exact" ? !loadedMembers : mode === "exclude" && !loadedExclusions)}
+                disabled={save.isPending || !name.trim() || selectionHydrating}
                 onClick={() => save.mutate()}
               >
                 {save.isPending

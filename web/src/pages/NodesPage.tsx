@@ -12,6 +12,17 @@ function fmtTime(s?: string) {
   return s ? new Date(s).toLocaleString() : "—";
 }
 
+/** DiscoveryBadge shows the node's effective naabu scan type (#271) as polled
+ *  via /v1/capabilities. SYN is the default (needs CAP_NET_RAW + libpcap);
+ *  connect is the unprivileged fallback. While the node has never been polled
+ *  successfully the value is absent and renders as unknown rather than a guess
+ *  — a per-scan policy can still override the node default. */
+function DiscoveryBadge({ scanType }: { scanType?: string }) {
+  if (scanType === "connect") return <Pill tone="neutral">Connect</Pill>;
+  if (scanType === "syn") return <Pill tone="good">SYN</Pill>;
+  return <Pill tone="neutral">unknown</Pill>;
+}
+
 /** HealthBadge renders a node's liveness (#98): green when healthy, red when a
  *  poll has failed past the TTL, neutral "unknown" until the first poll lands.
  *  When unhealthy, the poll failure (e.g. "401 Unauthorized" for a wrong token)
@@ -267,6 +278,7 @@ export function NodesPage() {
                 <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
                   <th className="px-3 py-2 font-medium">Name</th>
                   <th className="px-3 py-2 font-medium">Health</th>
+                  <th className="px-3 py-2 font-medium">Discovery</th>
                   <th className="px-3 py-2 font-medium">Endpoint</th>
                   <th className="px-3 py-2 font-medium">CIDRs</th>
                   <th className="px-3 py-2 font-medium">Capacity</th>
@@ -283,6 +295,9 @@ export function NodesPage() {
                     <td className="px-3 py-2 font-medium">{n.name}</td>
                     <td className="px-3 py-2">
                       <HealthBadge healthy={n.healthy} error={n.health_error} />
+                    </td>
+                    <td className="px-3 py-2" title="Node default — a policy's discovery_scan_type can override per scan">
+                      <DiscoveryBadge scanType={n.naabu_scan_type} />
                     </td>
                     <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">
                       <div className="flex items-center gap-2">
@@ -344,7 +359,7 @@ export function NodesPage() {
                 ))}
                 {(q.data ?? []).length === 0 && (
                   <tr>
-                    <td colSpan={isAdmin ? 10 : 9} className="px-3 py-8 text-center text-neutral-400">
+                    <td colSpan={isAdmin ? 11 : 10} className="px-3 py-8 text-center text-neutral-400">
                       No scanner nodes.
                     </td>
                   </tr>

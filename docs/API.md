@@ -680,7 +680,7 @@ for hostname targets and IPs matching no other node. Reads need `viewer`; create
 `admin` and are audited as config changes.
 
 ```sh
-# list nodes (each includes derived health: healthy / last_seen / nuclei_version)
+# list nodes (each includes derived health: healthy / last_seen / nuclei_version / naabu_scan_type / templates_commit)
 curl -sb jar.txt localhost:8080/api/nodes
 # add a node serving a CIDR range
 curl -sb jar.txt -X POST localhost:8080/api/nodes \
@@ -705,8 +705,8 @@ curl -sb jar.txt -X POST localhost:8080/api/nodes \
   See [Administration → Backend-to-scanner TLS and mTLS](ADMIN_GUIDE.md#backend-to-scanner-tls-and-mtls).
 - Endpoints: `GET|POST /api/nodes`, `GET|PUT|DELETE /api/nodes/{id}`.
 - **Health (#98):** the backend polls each node's `GET /v1/capabilities`
-  (`nuclei_version`, `templates_commit`) every
-  `NODE_HEALTH_INTERVAL` to derive liveness; `healthy` is `null` until the first poll. When a node
+  (`nuclei_version`, `templates_commit`, `naabu_scan_type`) every
+  `NODE_HEALTH_INTERVAL` to derive liveness; `healthy` is `null` until the first poll. `naabu_scan_type` is the node's effective `NAABU_SCAN_TYPE` (`syn` default when empty/garbage, `connect` fallback — #271), poll-derived like `nuclei_version` and `unknown` on the nodes page until a successful poll. When a node
   is unhealthy, `health_error` carries the last poll failure (e.g. `capabilities: 401 Unauthorized`
   for a wrong token vs. a connection error for an unreachable node), so the cause is visible without
   reading server logs. A scan whose matching node is known-unhealthy fails fast with a clear error.

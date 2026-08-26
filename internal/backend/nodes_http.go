@@ -32,6 +32,7 @@ type nodeView struct {
 	LastSeen        *time.Time `json:"last_seen,omitempty"`
 	NucleiVersion   string     `json:"nuclei_version,omitempty"`
 	TemplatesCommit string     `json:"templates_commit,omitempty"`
+	NaabuScanType   string     `json:"naabu_scan_type,omitempty"`
 	// HealthError is the last poll failure's message, set only while the node is
 	// unhealthy — so an operator can tell a wrong token (401) from an unreachable
 	// node without digging through backend logs.
@@ -121,6 +122,7 @@ func (s *Server) nodeView(n store.ScannerNode) nodeView {
 				}
 				v.NucleiVersion = rec.Capabilities.NucleiVersion
 				v.TemplatesCommit = rec.Capabilities.TemplatesCommit
+				v.NaabuScanType = rec.Capabilities.NaabuScanType
 				if !rec.Healthy {
 					v.HealthError = rec.LastError
 				}

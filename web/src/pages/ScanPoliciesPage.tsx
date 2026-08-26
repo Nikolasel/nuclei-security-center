@@ -385,19 +385,36 @@ function ScanPolicyModal({
   );
 }
 
-// knob renders a policy value or a muted "default" placeholder when unset.
-function knob(v: number | null | undefined) {
-  return v != null ? (
-    <span className="font-mono">{v}</span>
-  ) : (
-    <span className="text-neutral-400">default</span>
-  );
+// executionSummary collapses the per-policy execution knobs into a short
+// inline summary for the table. Only non-default (explicitly set) knobs are
+// shown; an all-default policy renders as a muted "defaults" placeholder.
+// The full set (including defaults) is available as a native tooltip.
+function executionSummary(p: ScanPolicy): { label: string; title: string } {
+  const parts: string[] = [];
+  const tip: string[] = [];
+  const push = (name: string, v: number | null | undefined, fmt?: (n: number) => string) => {
+    tip.push(`${name}: ${v != null ? (fmt ? fmt(v) : String(v)) : `default`}`);
+    if (v != null) parts.push(`${name} ${fmt ? fmt(v) : String(v)}`);
+  };
+  push("rate", p.rate_limit);
+  push("concurrency", p.concurrency);
+  push("timeout", p.timeout_sec, (n) => `${n}s`);
+  push("max-host-error", p.max_host_error);
+  push("resp-read", p.response_size_read, formatBytes);
+  push("resp-save", p.response_size_save, formatBytes);
+  const label = parts.length ? parts.join(" \u00b7 ") : "defaults";
+  return { label, title: tip.join("\n") };
 }
 
-// discoveryCell summarizes a policy's naabu pre-pass: off, or on with its scan
-// mode, independent host-discovery setting, and port set (top-1000 when unset).
-function discoveryCell(p: ScanPolicy) {
-  if (p.discovery_enabled === false) return <span className="text-neutral-400">off</span>;
+function formatBytes(n: number): string {
+  if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(n % (1 << 20) === 0 ? 0 : 1)} MiB`;
+  if (n >= 1 << 10) return `${(n / (1 << 10)).toFixed(n % (1 << 10) === 0 ? 0 : 1)} KiB`;
+  return `${n} B`;
+}
+
+// discoverySummary builds the naabu pre-pass summary text for a policy.
+function discoverySummary(p: ScanPolicy): string {
+  if (p.discovery_enabled === false) return "off";
   const mode = p.discovery_scan_type?.trim() || "node default";
   const hostDiscovery =
     p.discovery_host_discovery == null
@@ -406,12 +423,7 @@ function discoveryCell(p: ScanPolicy) {
         ? "host discovery"
         : "no host discovery";
   const ports = p.discovery_ports?.trim() || "top-1000";
-  const summary = `${mode} · ${hostDiscovery} · ${ports}`;
-  return (
-    <span className="inline-block max-w-80 truncate align-bottom font-mono text-xs" title={summary}>
-      {summary}
-    </span>
-  );
+  return `${mode} \u00b7 ${hostDiscovery} \u00b7 ${ports}`;
 }
 
 export function ScanPoliciesPage() {
@@ -469,30 +481,28 @@ export function ScanPoliciesPage() {
                 <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
                   <th className="px-3 py-2 font-medium">Name</th>
                   <th className="px-3 py-2 font-medium">Template set</th>
-                  <th className="px-3 py-2 font-medium">Rate limit</th>
-                  <th className="px-3 py-2 font-medium">Concurrency</th>
-                  <th className="px-3 py-2 font-medium">Timeout (s)</th>
-                  <th className="px-3 py-2 font-medium">Max host error</th>
-                  <th className="px-3 py-2 font-medium">Resp read</th>
-                  <th className="px-3 py-2 font-medium">Resp save</th>
+                  <th className="px-3 py-2 font-medium">Execution</th>
                   <th className="px-3 py-2 font-medium">Discovery</th>
                   {(canWrite || canDelete) && <th className="px-3 py-2" />}
                 </tr>
               </thead>
               <tbody>
-                {(q.data ?? []).map((p) => (
-                  <tr key={p.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
-                    <td className="px-3 py-2 font-medium">{p.name}</td>
-                    <td className="px-3 py-2 text-neutral-600 dark:text-neutral-400">
-                      {templateSetName(p.template_set_id)}
-                    </td>
-                    <td className="px-3 py-2">{knob(p.rate_limit)}</td>
-                    <td className="px-3 py-2">{knob(p.concurrency)}</td>
-                    <td className="px-3 py-2">{knob(p.timeout_sec)}</td>
-                    <td className="px-3 py-2">{knob(p.max_host_error)}</td>
-                    <td className="px-3 py-2">{knob(p.response_size_read)}</td>
-                    <td className="px-3 py-2">{knob(p.response_size_save)}</td>
-                    <td className="px-3 py-2">{discoveryCell(p)}</td>
+                {(q.data ?? []).map((p) => {
+                  const exec = executionSummary(p);
+                  const disc = discoverySummary(p);
+                  const isDefaults = exec.label === "defaults";
+                  return (
+                    <tr key={p.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
+                      <td className="px-3 py-2 font-medium">{p.name}</td>
+                      <td className="px-3 py-2 text-neutral-600 dark:text-neutral-400">
+                        {templateSetName(p.template_set_id)}
+                      </td>
+                      <td className="px-3 py-2" title={exec.title}>
+                        <span className={isDefaults ? "text-neutral-400" : "font-mono text-xs"}>{exec.label}</span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className={disc === "off" ? "text-neutral-400" : "font-mono text-xs"}>{disc}</span>
+                      </td>
                     {(canWrite || canDelete) && (
                       <td className="px-3 py-2 text-right whitespace-nowrap">
                         {canWrite && (
@@ -531,10 +541,11 @@ export function ScanPoliciesPage() {
                       </td>
                     )}
                   </tr>
-                ))}
+                  );
+                })}
                 {(q.data ?? []).length === 0 && (
                   <tr>
-                    <td colSpan={9 + (canWrite || canDelete ? 1 : 0)} className="px-3 py-8 text-center text-neutral-400">
+                    <td colSpan={4 + (canWrite || canDelete ? 1 : 0)} className="px-3 py-8 text-center text-neutral-400">
                       No scan policies yet.
                     </td>
                   </tr>

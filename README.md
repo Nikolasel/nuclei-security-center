@@ -1,9 +1,5 @@
 # nuclei-security-center
 
-[![CI](https://github.com/Nikolasel/nuclei-security-center/actions/workflows/ci.yml/badge.svg)](https://github.com/Nikolasel/nuclei-security-center/actions/workflows/ci.yml)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/Nikolasel/nuclei-security-center?include_prereleases)](https://github.com/Nikolasel/nuclei-security-center/releases)
-
 A web interface for running and triaging [Nuclei](https://github.com/projectdiscovery/nuclei)
 scans, built for a small internal security/eng team and portable to any cloud.
 

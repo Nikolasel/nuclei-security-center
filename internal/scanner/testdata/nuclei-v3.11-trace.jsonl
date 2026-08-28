@@ -1,2 +1,2 @@
-{"template":"/Users/neller/nuclei-templates/http/technologies/opencart-detect.yaml","type":"http","input":"http://127.0.0.1:9","address":"127.0.0.1:9","error":"port closed or filtered","kind":"network-permanent-error","attrs":{}}
-{"template":"/Users/neller/nuclei-templates/http/technologies/opencart-detect.yaml","type":"http","input":"http://127.0.0.1:18091","address":"127.0.0.1:18091","error":"none"}
+{"template":"/opt/nuclei-templates/http/technologies/opencart-detect.yaml","type":"http","input":"http://127.0.0.1:9","address":"127.0.0.1:9","error":"port closed or filtered","kind":"network-permanent-error","attrs":{}}
+{"template":"/opt/nuclei-templates/http/technologies/opencart-detect.yaml","type":"http","input":"http://127.0.0.1:18091","address":"127.0.0.1:18091","error":"none"}

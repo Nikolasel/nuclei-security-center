@@ -3,8 +3,12 @@ name: Release
 # Cut a release by pushing a semver tag, e.g.:
 #   git tag v0.4.0 && git push origin v0.4.0
 # This builds and pushes the backend and scanner container images to GHCR.
-# Packages are created private by default (repo is public, images are not) —
-# leave them private unless you deliberately publish them in package settings.
+# Images are intended to be public (anonymous docker pull of
+# ghcr.io/<owner>/nuclei-security-center-{backend,scanner}:<version-tag> works).
+# Visibility is a one-time GHCR package setting, not something this workflow
+# controls — GHCR creates a package private on first push, so flip it again if
+# a new package name ever appears (third image, repo rename). `packages: write`
+# (below) is still required to push.
 on:
   push:
     tags: ["v*"]

@@ -1,7 +1,8 @@
 # Development
 
-Operational deployment and configuration belong in the [Administration guide](ADMIN_GUIDE.md).
-This document covers the local edit/test loop.
+Operational deployment and configuration belong in the [Administration guide](ADMIN_GUIDE.md)
+([`docs/admin/`](admin/), published to the GitHub wiki). This document covers the local
+edit/test loop.
 
 ## Backend
 
@@ -103,7 +104,7 @@ ranges can report every address alive even though the final open-port set is cor
 `discovered_targets` is authoritative; the live count is only Naabu's view of the network.
 
 For routine macOS development, use `NAABU_SCAN_TYPE=connect`. Verify SYN/raw-socket behavior on a
-Linux host or routable network. See [Administration troubleshooting](ADMIN_GUIDE.md#9-troubleshooting).
+Linux host or routable network. See [Administration troubleshooting](admin/Troubleshooting.md).
 
 ## Continuous integration and releases
 
@@ -113,11 +114,16 @@ GitHub Actions runs:
 - real-PostgreSQL store and backend integration tests, including baseline/alpha equivalence,
   lifecycle behavior, scope enforcement, and scan-bundle round trips; CI disables Go's test-result
   cache so every run exercises the fresh PostgreSQL service;
-- `npm ci` and the production SPA build; and
+- `npm ci` and the production SPA build;
 - on `v*` tags, tests followed by multi-architecture backend/scanner image publication to GHCR.
   Pull coordinates and tag rules (prereleases: version + `sha-*` only; a non-prerelease also
   publishes `major.minor` and `latest`) are in the
-  [Administration guide](ADMIN_GUIDE.md#run-from-published-images).
+  [Administration guide](admin/Deployment.md#run-from-published-images); and
+- on push to `main` and on `v*` tags, `docs/admin/` is published to the GitHub wiki
+  (`.github/workflows/wiki.yml`). Cross-links into `docs/` always target `main`, so a
+  release tag does not pin blob URLs at that tag. Manual `workflow_dispatch` only runs
+  from `main` or a `v*` tag. Enable **Settings → General → Features → Wikis** once;
+  if the wiki has never been opened, add a placeholder Home page so `.wiki.git` exists.
 
 Before opening a PR, run the repository-wide Go gates and the SPA production build. Keep generated
 `web/dist` output untracked.
@@ -125,7 +131,7 @@ Before opening a PR, run the repository-wide Go gates and the SPA production bui
 ## Conventions
 
 - Agent-created feature branches use `feature/<name>`; fixes use `fix/<name>`.
-- Configuration is environment-based; update [ADMIN_GUIDE.md](ADMIN_GUIDE.md) when adding a variable.
+- Configuration is environment-based; update [docs/admin/Configuration.md](admin/Configuration.md) when adding a variable. The GitHub wiki is generated from `docs/admin/` and must not be edited in the GitHub UI.
 - Preserve the scanner boundary: no database access and no scanner→backend callback path.
 - Use mature libraries for UUIDs, crypto, auth, object storage, and cron parsing rather than
   hand-rolling solved primitives.

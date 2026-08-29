@@ -1,0 +1,32 @@
+name: Wiki
+
+# Publish docs/admin (source of truth) to the GitHub wiki.
+# Page text comes from the triggering ref; blob/tree links always target main
+# so a v* tag does not thrash URLs that the next main push would flip back.
+# workflow_dispatch is allowed only from main or a v* tag.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish administration guide
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Publish to GitHub wiki
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: bash scripts/wiki_publish.sh

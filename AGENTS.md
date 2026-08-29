@@ -10,7 +10,7 @@ Repo: `git@github.com:Nikolasel/nuclei-security-center.git`.
 
 **`docs/ARCHITECTURE.md` is the source of truth for design decisions.** Read it before making
 architectural changes. `README.md` is the visitor-facing overview; the practical guides live
-under `docs/` (`ADMIN_GUIDE.md`, `API.md`, `DEVELOPMENT.md`).
+under `docs/` (`admin/` plus an `ADMIN_GUIDE.md` index, `API.md`, `DEVELOPMENT.md`).
 
 The product is a working beta: a logged-in user manages targets/template-sets, runs scans
 (on demand or on a cron **schedule**), and triages a **Tenable-style finding lifecycle** (dedup +
@@ -261,8 +261,8 @@ internal/store     Postgres access + embedded migrations (internal/store/migrati
 web/               React + TS + Vite SPA; embedded into the backend via go:embed (web/embed.go)
 deploy/            Dockerfile.backend (SPA build + distroless), Dockerfile.scanner, keycloak/ (seeded realm)
 docker-compose.yml postgres + minio + keycloak + scanner + backend
-.github/workflows/ CI (build/vet/test + SPA) and release (images → GHCR)
-docs/ARCHITECTURE.md   design decisions (source of truth); ADMIN_GUIDE.md, API.md, DEVELOPMENT.md are the practical guides
+.github/workflows/ CI (build/vet/test + SPA), release (images → GHCR), wiki (`docs/admin/` → GitHub wiki)
+docs/ARCHITECTURE.md   design decisions (source of truth); docs/admin/ is the administration guide (published to the GitHub wiki); API.md, DEVELOPMENT.md are the other practical guides
 ```
 
 The frontend build output `web/dist` is git-ignored except a committed empty `.gitkeep`,
@@ -296,7 +296,7 @@ docker compose up --build
 Then log in at `http://localhost:8080`. The API is under `/api/*` behind the session cookie
 (there is **no** implicit default scan — every scan names a `scan_policy_id` and stored
 `target_id`).
-See `docs/API.md` for the endpoint walkthrough and `docs/ADMIN_GUIDE.md` for auth-disabled
+See `docs/API.md` for the endpoint walkthrough and `docs/admin/Configuration.md` for auth-disabled
 dev mode used in headless `curl` testing.
 
 ## Environment notes
@@ -316,7 +316,7 @@ dev mode used in headless `curl` testing.
 
 - Structured logging via `log/slog` (JSON handler).
 - Agent-created branches use `feature/<name>` for feature work and `fix/<name>` for bug fixes; do not use the `codex/` prefix in this repository.
-- Config via environment variables (see the table in `docs/ADMIN_GUIDE.md`); required vars fail fast.
+- Config via environment variables (see the table in `docs/admin/Configuration.md`); required vars fail fast.
 - Errors wrapped with `%w` and context; HTTP handlers return plain-text errors + status.
 - `internal/store/migrations/0001_init.sql` is the consolidated fresh-deployment baseline,
   **frozen at the first beta release and immutable — never edit it or any other applied

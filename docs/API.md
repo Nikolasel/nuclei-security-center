@@ -1,11 +1,11 @@
 # API reference
 
 The JSON API lives under `/api/*`. Interactive callers authenticate with the session cookie
-(see [Administration → Authentication](ADMIN_GUIDE.md#3-authentication-service-accounts-and-transport-security)); headless
+(see [Administration → Authentication](admin/Authentication.md)); headless
 automation authenticates with a **service-account token** presented as
 `Authorization: Bearer $NSC_TOKEN` (see [Service accounts](#service-accounts)). The examples
 below assume a cookie jar `jar.txt` populated by a real login, or
-[auth-disabled dev mode](ADMIN_GUIDE.md#authentication-and-sessions) for headless use.
+[auth-disabled dev mode](admin/Configuration.md#authentication-and-sessions) for headless use.
 
 Authorization per endpoint follows the three roles: reads need `viewer`, running scans and
 config writes need `operator`, deletes need `admin`.
@@ -29,7 +29,7 @@ identity provider. The unauthenticated admission controls can also return:
   response; retry the login link/navigation manually. Sustained `503` responses indicate database
   contention or availability trouble.
 
-See [Administration → Authentication](ADMIN_GUIDE.md#authentication-and-sessions) for the
+See [Administration → Authentication](admin/Configuration.md#authentication-and-sessions) for the
 `AUTH_MAX_LIVE_FLOWS`, `AUTH_LOGIN_*`, and optional `AUTH_TRUSTED_PROXY_CIDRS` configuration bounds.
 The trusted-proxy setting is safe-by-default: without it, forwarded headers are ignored. When it is
 set, configure only proxy networks that sanitize `X-Forwarded-For` before forwarding requests.
@@ -483,7 +483,7 @@ The backend mirrors the upstream Nuclei template catalog into Postgres (managed 
 keyed by its Nuclei `id`; `source` is `upstream` or `custom`.
 
 For the UI-based operational workflow, see
-[Administration → Template catalog and custom templates](ADMIN_GUIDE.md#template-catalog-and-custom-templates).
+[Administration → Template catalog and custom templates](admin/Operations.md#template-catalog-and-custom-templates).
 
 ```sh
 # browse/search newest-ingested CVE templates via their canonical tag (paginated)
@@ -702,7 +702,7 @@ curl -sb jar.txt -X POST localhost:8080/api/nodes \
   `https://…`). The CA + client cert are public and returned on `GET`; `tls_client_key` is a
   **write-only secret** like `token` (never returned; blank on update keeps the stored key). On
   create the client cert + key must be supplied together; bad PEM / a mismatched pair is a `400`.
-  See [Administration → Backend-to-scanner TLS and mTLS](ADMIN_GUIDE.md#backend-to-scanner-tls-and-mtls).
+  See [Administration → Backend-to-scanner TLS and mTLS](admin/Authentication.md#backend-to-scanner-tls-and-mtls).
 - Endpoints: `GET|POST /api/nodes`, `GET|PUT|DELETE /api/nodes/{id}`.
 - **Health (#98):** the backend polls each node's `GET /v1/capabilities`
   (`nuclei_version`, `templates_commit`, `naabu_scan_type`) every
@@ -711,7 +711,7 @@ curl -sb jar.txt -X POST localhost:8080/api/nodes \
   for a wrong token vs. a connection error for an unreachable node), so the cause is visible without
   reading server logs. A scan whose matching node is known-unhealthy fails fast with a clear error.
   Config (`SCANNER_URL`/`SCAN_ZONES`) seeds this registry on first boot only —
-  see [Administration → Scanner fleet](ADMIN_GUIDE.md#scanner-fleet).
+  see [Administration → Scanner fleet](admin/Operations.md#scanner-fleet).
 
 A node's read view also carries `templates_synced_at` — when the backend last pushed the full
 template catalog to it (#85). The backend does this automatically on a cadence
@@ -911,4 +911,4 @@ curl -sb jar.txt localhost:8080/api/scans/<scan-id>/raw -o scan.jsonl
 
 The scan-detail page shows a **Download raw output** link once the archive exists (`has_raw`).
 With `S3_ENDPOINT` unset the feature is off and the endpoint returns 404. Object-store
-configuration is in [Administration → Object storage](ADMIN_GUIDE.md#object-storage).
+configuration is in [Administration → Object storage](admin/Configuration.md#object-storage).

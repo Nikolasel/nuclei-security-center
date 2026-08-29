@@ -44,7 +44,7 @@ Both services ship as multi-arch (`linux/amd64` + `linux/arm64`) images on a min
 10 Micro** base; the scanner is fully self-contained, baking in a checksum-verified, pinned `nuclei`
 binary (`NUCLEI_VERSION`) and `naabu`. The backend-owned template catalog is pushed to nodes as a
 verified bundle; the image contains no mutable community template cache. See
-**[Administration guide → Deployment](docs/ADMIN_GUIDE.md#1-deployment)**.
+**[Administration guide → Deployment](docs/admin/Deployment.md)**.
 
 ## Quick start
 
@@ -58,7 +58,7 @@ docker compose up --build
 ```
 
 To use a released backend and scanner image instead of building from source, see
-**[Administration guide → Run from published images](docs/ADMIN_GUIDE.md#run-from-published-images)**
+**[Administration guide → Run from published images](docs/admin/Deployment.md#run-from-published-images)**
 for the GHCR names, tag rules, and how to point this Compose stack at them.
 
 The seeded local Keycloak realm and `.env.example` intentionally contain the same development-only
@@ -90,7 +90,7 @@ docker-compose.yml   postgres + minio + keycloak + scanner + backend
 
 - **[Architecture](docs/ARCHITECTURE.md)** — design principles, components, data model, and decisions.
 - **[API reference](docs/API.md)** — REST endpoints for scans, findings, dispositions, exports, and schedules.
-- **[Administration guide](docs/ADMIN_GUIDE.md)** — deployment, environment variables, authentication, bootstrap, operations, audit, and troubleshooting.
+- **[Administration guide](docs/ADMIN_GUIDE.md)** — deployment, environment variables, authentication, bootstrap, operations, audit, and troubleshooting. Chapters live in [`docs/admin/`](docs/admin/) and are published to the [GitHub wiki](https://github.com/Nikolasel/nuclei-security-center/wiki) from `main` and each `v*` tag.
 - **[Development](docs/DEVELOPMENT.md)** — local dev workflow, auth-disabled mode, tests, and CI/CD.
 - **[Contributing](CONTRIBUTING.md)** — setup, verification gates, invariants, and PR conventions.
 - **[Code of Conduct](CODE_OF_CONDUCT.md)** · **[Security Policy](SECURITY.md)** — community standards; private vulnerability reporting.

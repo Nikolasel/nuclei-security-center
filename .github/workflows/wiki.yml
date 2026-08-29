@@ -25,8 +25,27 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Clone the wiki with the same Basic x-access-token extraheader that
+      # checkout uses for the main repo. A Bearer extraheader is ignored by
+      # git-over-HTTPS, which is why the first publish failed with
+      # "could not read Username".
+      - id: wiki
+        continue-on-error: true
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository }}.wiki
+          path: .wiki-publish
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Require an initialized wiki
+        if: steps.wiki.outcome == 'failure'
+        run: |
+          echo "::error::Could not clone ${GITHUB_REPOSITORY}.wiki.git. Enable Settings → General → Features → Wikis, add a placeholder Home page so the wiki git repo exists, then re-run this workflow."
+          exit 1
+
       - name: Publish to GitHub wiki
+        if: steps.wiki.outcome == 'success'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WIKI_DIR: ${{ github.workspace }}/.wiki-publish
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: bash scripts/wiki_publish.sh

@@ -1,32 +1,18 @@
 #!/usr/bin/env bash
-# Clone the GitHub wiki, copy docs/admin into it, rewrite links, and push.
-# Required env: GITHUB_TOKEN, GITHUB_REPOSITORY
+# Rewrite docs/admin into a wiki checkout and push.
+# Required env: GITHUB_REPOSITORY, WIKI_DIR (git checkout of owner/repo.wiki)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
-TOKEN="${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
+WIKI_DIR="${WIKI_DIR:?WIKI_DIR is required}"
 # Pin blob/tree URLs at main so a v* tag publish does not flip every wiki link
 # to blob/v1.2.3 and the next main push flip them back.
 BLOB="https://github.com/${REPO}/blob/main/docs"
 
-WORKDIR="$(mktemp -d)"
-cleanup() { rm -rf "$WORKDIR"; }
-trap cleanup EXIT
-
-WIKI_DIR="$WORKDIR/wiki"
-# Keep the token out of remote URLs so a failed clone cannot leak it in logs.
-GIT_AUTH=( -c "http.https://github.com/.extraheader=AUTHORIZATION: bearer ${TOKEN}" )
-
-clone_err="$WORKDIR/clone.err"
-set +e
-GIT_TERMINAL_PROMPT=0 git "${GIT_AUTH[@]}" clone --depth 1 \
-  "https://github.com/${REPO}.wiki.git" "$WIKI_DIR" 2>"$clone_err"
-clone_status=$?
-set -e
-if [[ "$clone_status" -ne 0 ]]; then
-  cat "$clone_err" >&2
-  echo "::error::Could not clone ${REPO}.wiki.git. Enable Settings → General → Features → Wikis (one-time), add a placeholder Home page if the wiki has never been used, then re-run this workflow."
+if [[ ! -d "$WIKI_DIR/.git" ]]; then
+  echo "WIKI_DIR is not a git checkout: $WIKI_DIR" >&2
+  echo "The Wiki workflow must check out ${REPO}.wiki first. If that clone failed, enable Settings → General → Features → Wikis and add a placeholder Home page." >&2
   exit 1
 fi
 
@@ -64,5 +50,6 @@ fi
 
 SHA="${GITHUB_SHA:-$(git -C "$ROOT" rev-parse HEAD)}"
 git -C "$WIKI_DIR" commit -m "Publish administration guide from ${SHA}"
-BRANCH="$(git -C "$WIKI_DIR" rev-parse --abbrev-ref HEAD)"
-git -C "$WIKI_DIR" "${GIT_AUTH[@]}" push origin "HEAD:${BRANCH}"
+# Fail closed on a detached wiki checkout; default-branch checkout is a named ref.
+BRANCH="$(git -C "$WIKI_DIR" symbolic-ref --short HEAD)"
+git -C "$WIKI_DIR" push origin "HEAD:${BRANCH}"

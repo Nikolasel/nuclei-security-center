@@ -122,8 +122,8 @@ GitHub Actions runs:
 - on push to `main` and on `v*` tags, `docs/admin/` is published to the GitHub wiki
   (`.github/workflows/wiki.yml`). Cross-links into `docs/` always target `main`, so a
   release tag does not pin blob URLs at that tag. Manual `workflow_dispatch` only runs
-  from `main` or a `v*` tag. Enable **Settings → General → Features → Wikis** once;
-  if the wiki has never been opened, add a placeholder Home page so `.wiki.git` exists.
+  from `main` or a `v*` tag. Enable **Settings → General → Features → Wikis** and add a
+  placeholder Home page so `.wiki.git` exists (the publish job checks that repo out).
 
 Before opening a PR, run the repository-wide Go gates and the SPA production build. Keep generated
 `web/dist` output untracked.

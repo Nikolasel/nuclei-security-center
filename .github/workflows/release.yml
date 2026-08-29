@@ -60,8 +60,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # metadata-action lowercases the image name (GHCR requires lowercase) and
-      # derives tags from the pushed git tag: full version, major.minor, and sha.
+      # metadata-action lowercases the image name (GHCR requires lowercase).
+      # Every tag: {{version}} + sha. Non-prereleases also get {{major}}.{{minor}}
+      # and latest (flavor.latest=auto, the action default). Prereleases get neither.
       - id: meta
         uses: docker/metadata-action@v6
         with:

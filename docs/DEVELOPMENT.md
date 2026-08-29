@@ -115,6 +115,9 @@ GitHub Actions runs:
   cache so every run exercises the fresh PostgreSQL service;
 - `npm ci` and the production SPA build; and
 - on `v*` tags, tests followed by multi-architecture backend/scanner image publication to GHCR.
+  Pull coordinates and tag rules (prereleases: version + `sha-*` only; a non-prerelease also
+  publishes `major.minor` and `latest`) are in the
+  [Administration guide](ADMIN_GUIDE.md#run-from-published-images).
 
 Before opening a PR, run the repository-wide Go gates and the SPA production build. Keep generated
 `web/dist` output untracked.

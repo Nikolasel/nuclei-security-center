@@ -287,7 +287,9 @@ Go is installed via Homebrew; use `/opt/homebrew/bin/go` (may not be on PATH in 
 Run the full stack (requires Docker — see the environment notes below):
 
 ```sh
-cp .env.example .env    # set SCANNER_TOKEN + OIDC_CLIENT_SECRET
+cp .env.example .env    # change SCANNER_TOKEN (at least 32 chars, e.g. `openssl rand -base64 24`;
+                        # shorter crash-loops the scanner); if you also rotate OIDC_CLIENT_SECRET,
+                        # change it in deploy/keycloak/realm-nsc.json before the realm is first imported
 docker compose up --build
 ```
 
@@ -316,13 +318,15 @@ dev mode used in headless `curl` testing.
 - Agent-created branches use `feature/<name>` for feature work and `fix/<name>` for bug fixes; do not use the `codex/` prefix in this repository.
 - Config via environment variables (see the table in `docs/ADMIN_GUIDE.md`); required vars fail fast.
 - Errors wrapped with `%w` and context; HTTP handlers return plain-text errors + status.
-- `internal/store/migrations/0001_init.sql` is the consolidated fresh-deployment alpha baseline.
-  Alpha databases are not upgradeable and are rejected at startup. During alpha, fold schema changes
-  into `0001_init.sql` and update the preserved alpha fixture chain/equivalence pin. Once beta ships,
-  freeze the baseline: future schema changes go in new numbered files; the runner applies unseen
-  files in filename order and records them in `schema_migrations`. Applied migration files are
-  immutable after that release boundary; add a separately named repair/forward migration instead.
-  The runner stores SHA-256 checksums and fails fast if a checksummed migration's contents change.
+- `internal/store/migrations/0001_init.sql` is the consolidated fresh-deployment baseline,
+  **frozen at the first beta release and immutable — never edit it or any other applied
+  migration file** (the runner stores SHA-256 checksums and fails fast if a checksummed
+  migration's contents change). Every schema change goes in a new numbered file under
+  `internal/store/migrations/`; the runner applies unseen files in filename order and records
+  them in `schema_migrations`. Fix mistakes to applied migrations with a separately named
+  repair/forward migration. Alpha databases are not upgradeable and are rejected at startup;
+  the preserved `testdata/alpha_migrations/` chain is now a sealed test-only reference (its
+  digest is pinned in `migration_integration_test.go`) — do not append to it.
 - Run `gofmt -w`, `go vet`, and `go test` before considering a change done.
 - **Dependency review (recurring):** at a natural review boundary, scan for hand-rolled code
   that duplicates a mature library (per invariant #5) and for unused/heavy deps to drop.

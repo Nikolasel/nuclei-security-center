@@ -57,6 +57,10 @@ cp .env.example .env          # change SCANNER_TOKEN (at least 32 characters —
 docker compose up --build
 ```
 
+To use a released backend and scanner image instead of building from source, see
+**[Administration guide → Run from published images](docs/ADMIN_GUIDE.md#run-from-published-images)**
+for the GHCR names, tag rules, and how to point this Compose stack at them.
+
 The seeded local Keycloak realm and `.env.example` intentionally contain the same development-only
 `OIDC_CLIENT_SECRET`. Either leave that value unchanged locally, or—before the realm is first
 imported—change it in both `.env` and `deploy/keycloak/realm-nsc.json` so they still match.

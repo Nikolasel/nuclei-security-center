@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a vulnerability (private)
+    url: https://github.com/Nikolasel/nuclei-security-center/security/advisories/new
+    about: Please do NOT open a public issue for security problems — see SECURITY.md.
+  - name: Report a Code of Conduct violation (private)
+    url: mailto:nikolas.e@mail.de
+    about: Conduct reports go to private e-mail, not a public issue — see CODE_OF_CONDUCT.md.

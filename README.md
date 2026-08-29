@@ -1,5 +1,9 @@
 # nuclei-security-center
 
+[![CI](https://github.com/Nikolasel/nuclei-security-center/actions/workflows/ci.yml/badge.svg)](https://github.com/Nikolasel/nuclei-security-center/actions/workflows/ci.yml)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/Nikolasel/nuclei-security-center?include_prereleases)](https://github.com/Nikolasel/nuclei-security-center/releases)
+
 A web interface for running and triaging [Nuclei](https://github.com/projectdiscovery/nuclei)
 scans, built for a small internal security/eng team and portable to any cloud.
 
@@ -47,7 +51,9 @@ verified bundle; the image contains no mutable community template cache. See
 Requires Docker (Go and the SPA both compile inside the build containers).
 
 ```sh
-cp .env.example .env          # change SCANNER_TOKEN; see the OIDC note below
+cp .env.example .env          # change SCANNER_TOKEN (at least 32 characters —
+                              # `openssl rand -base64 24`; shorter crash-loops
+                              # the scanner); see the OIDC note below
 docker compose up --build
 ```
 
@@ -82,8 +88,24 @@ docker-compose.yml   postgres + minio + keycloak + scanner + backend
 - **[API reference](docs/API.md)** — REST endpoints for scans, findings, dispositions, exports, and schedules.
 - **[Administration guide](docs/ADMIN_GUIDE.md)** — deployment, environment variables, authentication, bootstrap, operations, audit, and troubleshooting.
 - **[Development](docs/DEVELOPMENT.md)** — local dev workflow, auth-disabled mode, tests, and CI/CD.
+- **[Contributing](CONTRIBUTING.md)** — setup, verification gates, invariants, and PR conventions.
+- **[Code of Conduct](CODE_OF_CONDUCT.md)** · **[Security Policy](SECURITY.md)** — community standards; private vulnerability reporting.
 
 ## License
 
-[AGPL-3.0](LICENSE) — copyleft, including the network-use clause. Anyone running a
+Copyright (C) 2026 nuclei-security-center contributors
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See [LICENSE](LICENSE) for the complete text.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE.
+
+AGPL-3.0 is copyleft, including the network-use clause: anyone running a
 modified version as a service must publish the source of their modifications.
+(`LICENSE` is the byte-exact canonical FSF text, which is unmodifiable — the
+program copyright notice therefore lives here, per the license's own "How to
+Apply These Terms" section.)

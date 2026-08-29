@@ -18,7 +18,7 @@ func TestCoveredEndpointsFromRealTraceShape(t *testing.T) {
 	}
 	defer trace.Close()
 	got := coveredEndpointsFromTrace(trace, map[string]string{
-		"/Users/neller/nuclei-templates/http/technologies/opencart-detect.yaml": "opencart-detect",
+		"/opt/nuclei-templates/http/technologies/opencart-detect.yaml": "opencart-detect",
 	})
 	want := []types.EndpointCoverage{
 		{TemplateID: "opencart-detect", Endpoint: "127.0.0.1:18091"},

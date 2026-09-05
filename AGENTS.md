@@ -315,6 +315,7 @@ dev mode used in headless `curl` testing.
 ## Conventions
 
 - Structured logging via `log/slog` (JSON handler).
+- Agent instructions live in this file. `CLAUDE.md` is a one-line Claude Code import (`@AGENTS.md`) so Claude Code loads it without other tools (Cursor) ingesting a second copy. Do not replace `CLAUDE.md` with a symlink or a duplicate of this document.
 - Agent-created branches use `feature/<name>` for feature work and `fix/<name>` for bug fixes; do not use the `codex/` prefix in this repository.
 - Config via environment variables (see the table in `docs/admin/Configuration.md`); required vars fail fast.
 - Errors wrapped with `%w` and context; HTTP handlers return plain-text errors + status.

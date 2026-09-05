@@ -5,7 +5,7 @@ go 1.25.0
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 require (
-	github.com/coreos/go-oidc/v3 v3.20.0
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0

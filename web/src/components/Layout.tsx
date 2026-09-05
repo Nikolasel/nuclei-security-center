@@ -10,12 +10,14 @@ import {
   Library,
   type LucideIcon,
   Menu,
+  Moon,
   PanelLeftClose,
   PanelLeftOpen,
   Radar,
   Server,
   ShieldCheck,
   SlidersHorizontal,
+  Sun,
   Target,
   X,
 } from "lucide-react";
@@ -23,6 +25,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import type { Identity } from "../api";
 import { hasRole } from "../auth";
+import { useTheme } from "../theme";
 import { Brand } from "./Brand";
 import { cn } from "./ui";
 
@@ -230,6 +233,7 @@ export function Layout({
   const location = useLocation();
   const currentPath = currentPathOverride ?? location.pathname;
   const [collapsed, setCollapsed] = useState(readCollapsed);
+  const { theme, toggle } = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
   const toggleCollapsed = () =>
     setCollapsed((c) => {
@@ -274,7 +278,19 @@ export function Layout({
             <Menu className="h-5 w-5" aria-hidden />
           </button>
           <Brand className="py-2" />
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-1">
+            {/* Theme toggle (#292): flips the `dark` class on <html> so the
+                class-based `dark:` variant follows the choice; the choice
+                persists in localStorage, the OS setting wins until first toggle. */}
+            <button
+              type="button"
+              onClick={toggle}
+              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              className="rounded-md p-2 text-slate-100 hover:bg-white/10"
+            >
+              {theme === "dark" ? <Sun className="h-5 w-5" aria-hidden /> : <Moon className="h-5 w-5" aria-hidden />}
+            </button>
             <DropdownMenu.Root>
               <DropdownMenu.Trigger className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-100 hover:bg-white/10">
                 <span className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-cyan-300 to-violet-500 text-xs font-bold text-slate-950 shadow-[0_0_14px_rgba(103,232,249,0.42)]">

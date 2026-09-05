@@ -1,7 +1,16 @@
 @import "tailwindcss";
 
+/* Class-based dark mode (#292): `dark:` utilities respond to the `dark` class
+   on <html>, which the header theme toggle flips. The class is seeded from the
+   OS preference until the user first toggles (see theme.ts + main.tsx). */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
+}
+
+:root.dark {
+  color-scheme: dark;
 }
 
 body {

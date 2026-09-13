@@ -1,6 +1,6 @@
 module github.com/Nikolasel/nuclei-security-center
 
-go 1.25.0
+go 1.26.0
 
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
@@ -8,12 +8,12 @@ require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/minio/minio-go/v7 v7.3.0
 	github.com/robfig/cron/v3 v3.0.1
 	go.yaml.in/yaml/v3 v3.0.5
-	golang.org/x/oauth2 v0.36.0
-	golang.org/x/time v0.15.0
+	golang.org/x/oauth2 v0.37.0
+	golang.org/x/time v0.16.0
 )
 
 require (

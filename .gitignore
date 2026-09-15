@@ -20,6 +20,26 @@
 /web/dist/*
 !/web/dist/.gitkeep
 
+# AI coding agents (local, per-developer state — none of this belongs in the repo).
+# .cursor/ is the deliberate exception and must stay tracked: it carries the Cloud
+# Agent environment (.cursor/environment.json + install/start/dockerd scripts) that
+# boots the docker-compose stack so cloud agents can verify PRs. Do not add a
+# .cursor* pattern here. Shared agent instructions live in AGENTS.md.
+.claude/
+.commandcode/
+.codex/
+.gemini/
+.qwen/
+.opencode/
+.crush/
+.continue/
+.windsurf/
+.roo/
+.kilocode/
+.junie/
+.specstory/
+.aider*
+
 # OS
 .DS_Store
 .security-scans/

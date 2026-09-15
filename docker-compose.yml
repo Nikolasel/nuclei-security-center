@@ -20,7 +20,9 @@ services:
   # S3-compatible object storage for raw scan-output archival (Phase 3). The
   # backend creates the bucket on startup; console is at localhost:9001.
   minio:
-    image: minio/minio:latest
+    # MinIO no longer publishes an anonymously-pullable Docker Hub image; the
+    # canonical public location is Quay.
+    image: quay.io/minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minio

@@ -277,34 +277,42 @@ export function NodesPage() {
               <thead>
                 <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
                   <th className="px-3 py-2 font-medium">Name</th>
-                  <th className="px-3 py-2 font-medium">Health</th>
-                  <th className="px-3 py-2 font-medium">Discovery</th>
+                  <th className="px-3 py-2 font-medium">Status</th>
                   <th className="px-3 py-2 font-medium">Endpoint</th>
-                  <th className="px-3 py-2 font-medium">CIDRs</th>
-                  <th className="px-3 py-2 font-medium">Capacity</th>
-                  <th className="px-3 py-2 font-medium">Nuclei</th>
-                  <th className="px-3 py-2 font-medium">Catalog bundle</th>
-                  <th className="px-3 py-2 font-medium">Last seen</th>
-                  <th className="px-3 py-2 font-medium">Tags</th>
-                  {isAdmin && <th className="px-3 py-2" />}
+                  <th className="px-3 py-2 font-medium">Scope</th>
+                  <th className="px-3 py-2 font-medium">Catalog</th>
+                  {isAdmin && (
+                    <th className="sticky right-0 bg-white px-3 py-2 dark:bg-neutral-900" />
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {(q.data ?? []).map((n) => (
                   <tr key={n.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
-                    <td className="px-3 py-2 font-medium">{n.name}</td>
                     <td className="px-3 py-2">
-                      <HealthBadge healthy={n.healthy} error={n.health_error} />
+                      <div className="font-medium">{n.name}</div>
+                      {n.tags.length > 0 && (
+                        <div className="mt-0.5 max-w-[12rem] truncate text-xs text-neutral-500" title={n.tags.join(", ")}>
+                          {n.tags.join(", ")}
+                        </div>
+                      )}
                     </td>
-                    <td className="px-3 py-2" title="Node default — a policy's discovery_scan_type can override per scan">
-                      <DiscoveryBadge scanType={n.naabu_scan_type} />
+                    <td className="px-3 py-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <HealthBadge healthy={n.healthy} error={n.health_error} />
+                        <span title="Node default — a policy's discovery_scan_type can override per scan">
+                          <DiscoveryBadge scanType={n.naabu_scan_type} />
+                        </span>
+                      </div>
                     </td>
-                    <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">
+                    <td className="max-w-[16rem] px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">
                       <div className="flex items-center gap-2">
-                        <span>{n.endpoint}</span>
+                        <span className="truncate" title={n.endpoint}>
+                          {n.endpoint}
+                        </span>
                         {(n.tls_client_cert || n.tls_server_ca) && (
                           <span
-                            className="rounded bg-neutral-200 px-1.5 py-0.5 font-sans text-[10px] font-medium uppercase tracking-wide text-neutral-600 dark:bg-neutral-700 dark:text-neutral-300"
+                            className="shrink-0 rounded bg-neutral-200 px-1.5 py-0.5 font-sans text-[10px] font-medium uppercase tracking-wide text-neutral-600 dark:bg-neutral-700 dark:text-neutral-300"
                             title="mutual TLS configured"
                           >
                             mTLS
@@ -312,25 +320,32 @@ export function NodesPage() {
                         )}
                       </div>
                     </td>
-                    <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">
-                      {n.cidrs.length ? n.cidrs.join(", ") : <span className="text-neutral-400">catch-all</span>}
-                    </td>
-                    <td className="px-3 py-2 text-neutral-500">{n.max_concurrent_scans}</td>
-                    <td className="px-3 py-2 text-neutral-500">{n.nuclei_version || "—"}</td>
-                    <td className="px-3 py-2 text-neutral-500">
-                      <div className="font-mono text-xs" title={n.templates_commit}>
-                        {n.templates_commit ? n.templates_commit.slice(0, 12) : "none active"}
+                    <td className="px-3 py-2 text-xs">
+                      <div
+                        className="max-w-[12rem] truncate font-mono text-neutral-600 dark:text-neutral-400"
+                        title={n.cidrs.length ? n.cidrs.join(", ") : "catch-all"}
+                      >
+                        {n.cidrs.length ? n.cidrs.join(", ") : <span className="text-neutral-400">catch-all</span>}
                       </div>
-                      <div className="mt-0.5 text-xs" title={n.templates_synced_at ? new Date(n.templates_synced_at).toLocaleString() : undefined}>
+                      <div className="mt-0.5 text-neutral-500">cap {n.max_concurrent_scans}</div>
+                    </td>
+                    <td className="px-3 py-2 text-xs text-neutral-500">
+                      <div className="font-mono" title={n.templates_commit}>
+                        {n.templates_commit ? n.templates_commit.slice(0, 12) : "none active"}
+                        {n.nuclei_version ? ` · nuclei ${n.nuclei_version}` : ""}
+                      </div>
+                      <div className="mt-0.5" title={n.templates_synced_at ? new Date(n.templates_synced_at).toLocaleString() : undefined}>
                         pushed {fmtTime(n.templates_synced_at)}
                       </div>
+                      <div className="mt-0.5" title={n.last_seen ? new Date(n.last_seen).toLocaleString() : undefined}>
+                        seen {fmtTime(n.last_seen)}
+                      </div>
                     </td>
-                    <td className="px-3 py-2 text-neutral-500">{fmtTime(n.last_seen)}</td>
-                    <td className="px-3 py-2 text-neutral-500">{n.tags.join(", ") || "—"}</td>
                     {isAdmin && (
-                      <td className="px-3 py-2 text-right whitespace-nowrap">
+                      <td className="sticky right-0 bg-white px-2 py-2 text-right whitespace-nowrap shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.18)] dark:bg-neutral-900 dark:shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.55)]">
                         <Button
                           variant="ghost"
+                          title="Sync templates"
                           disabled={syncTemplates.isPending && syncTemplates.variables?.id === n.id}
                           onClick={() => {
                             setNotice("");
@@ -359,7 +374,7 @@ export function NodesPage() {
                 ))}
                 {(q.data ?? []).length === 0 && (
                   <tr>
-                    <td colSpan={isAdmin ? 11 : 10} className="px-3 py-8 text-center text-neutral-400">
+                    <td colSpan={isAdmin ? 6 : 5} className="px-3 py-8 text-center text-neutral-400">
                       No scanner nodes.
                     </td>
                   </tr>

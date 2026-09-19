@@ -23,6 +23,7 @@ function TargetModal({
   );
   const [hosts, setHosts] = useState((existing?.hosts ?? []).join("\n"));
   const [tags, setTags] = useState((existing?.tags ?? []).join(", "));
+  const canSave = name.trim() !== "" && parseList(hosts).length > 0;
 
   const save = useMutation({
     mutationFn: () => {
@@ -42,15 +43,23 @@ function TargetModal({
       title={duplicate ? "Duplicate target" : existing ? "Edit target" : "New target"}
     >
       <div className="space-y-4">
-        <Field label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="prod-web" />
+        <Field label="Name" required>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="prod-web"
+            required
+            aria-required="true"
+          />
         </Field>
-        <Field label="Hosts (one per line — the scope allowlist)">
+        <Field label="Hosts (one per line — the scope allowlist)" required>
           <textarea
             value={hosts}
             onChange={(e) => setHosts(e.target.value)}
             rows={4}
             placeholder="scanme.sh&#10;10.0.0.0/24&#10;https://example.com"
+            required
+            aria-required="true"
             className="w-full rounded-md border border-neutral-300 bg-white px-3 py-1.5 font-mono text-sm dark:border-neutral-700 dark:bg-neutral-800"
           />
         </Field>
@@ -60,7 +69,7 @@ function TargetModal({
         {save.isError && <ErrorText error={save.error} />}
         <div className="flex justify-end gap-2">
           <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={save.isPending} onClick={() => save.mutate()}>
+          <Button variant="primary" disabled={save.isPending || !canSave} onClick={() => save.mutate()}>
             {save.isPending ? "Saving…" : "Save"}
           </Button>
         </div>

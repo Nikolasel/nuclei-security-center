@@ -198,10 +198,28 @@ export function Select({ className, ...props }: SelectHTMLAttributes<HTMLSelectE
   );
 }
 
-export function Field({ label, children }: { label: string; children: ReactNode }) {
+export function Field({
+  label,
+  children,
+  required,
+}: {
+  label: string;
+  children: ReactNode;
+  required?: boolean;
+}) {
   return (
     <label className="block space-y-1">
-      <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300">{label}</span>
+      <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
+        {label}
+        {required ? (
+          <>
+            <span className="ml-0.5 text-rose-600 dark:text-rose-400" aria-hidden="true">
+              *
+            </span>
+            <span className="sr-only"> (required)</span>
+          </>
+        ) : null}
+      </span>
       {children}
     </label>
   );

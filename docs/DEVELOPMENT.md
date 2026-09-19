@@ -53,7 +53,9 @@ docker compose up --build
 ```
 
 Open <http://localhost:8080>. This exercises real OIDC through seeded Keycloak plus Postgres, MinIO,
-and the scanner. Only claim end-to-end verification when the stack and a scan were actually run.
+and the scanner. `http://127.0.0.1:8080` is redirected to `localhost` before login because the
+seeded `APP_BASE_URL`, IdP redirect URI, and session cookies are host-specific. Only claim
+end-to-end verification when the stack and a scan were actually run.
 
 ## Frontend
 

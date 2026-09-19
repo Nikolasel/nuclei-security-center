@@ -14,6 +14,15 @@ Register the exact `OIDC_REDIRECT_URL` with the provider. If browser-facing and 
 issuer addresses differ, keep the canonical browser issuer in `OIDC_ISSUER` and use
 `OIDC_DISCOVERY_URL` for backend metadata requests.
 
+`APP_BASE_URL` is the canonical browser origin. Host-locked session cookies, CSRF `Origin` checks,
+and the IdP redirect URI all key off that origin, so `localhost` and `127.0.0.1` are not
+interchangeable. `GET /api/auth/login` and SPA document requests whose cookie host (hostname plus
+non-default port) does not match `APP_BASE_URL` are `302`'d to the same path on the configured
+origin before an auth-state cookie is set. Scheme is not part of the comparison: a TLS-terminating
+ingress that presents the public `Host` over plaintext to the process must not 302-loop. `/healthz`
+and other `/api/*` routes are not redirected, so probes and service-account callers may still use
+an IP. A missing or malformed `APP_BASE_URL` fails closed (no redirect).
+
 ## Browser mutation protection
 
 Cookie-authenticated state-changing API requests must carry an `Origin` matching the origin of

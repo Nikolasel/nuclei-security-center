@@ -42,7 +42,7 @@ are insert-only by node name; PostgreSQL and subsequent API/UI edits are authori
 | `OIDC_DISCOVERY_URL` | `OIDC_ISSUER` | Internal metadata URL when the backend reaches the issuer at a different address. |
 | `OIDC_CLIENT_ID` | required with OIDC | Confidential client ID. |
 | `OIDC_CLIENT_SECRET` | required with OIDC | Confidential client secret. |
-| `APP_BASE_URL` | `http://localhost:8080` | Public application URL. |
+| `APP_BASE_URL` | `http://localhost:8080` | Canonical public application URL. Browser login and the SPA redirect onto this origin when `Host` differs (e.g. `127.0.0.1` vs `localhost`). |
 | `OIDC_REDIRECT_URL` | `APP_BASE_URL/api/auth/callback` | Callback registered with the IdP. |
 | `POST_LOGIN_REDIRECT` | `APP_BASE_URL/` | Browser destination after login. |
 | `OIDC_SCOPES` | `openid,profile,email` | Comma-separated scopes. |

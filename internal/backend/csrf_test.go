@@ -167,3 +167,59 @@ func TestJSONMutationRoutesRequireApplicationJSON(t *testing.T) {
 		}
 	}
 }
+
+func TestCanonicalHostLocationRedirectsMismatchedLoopback(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api/auth/login?return_to=/findings", nil)
+	got, ok := canonicalHostLocation("http://localhost:8080", req)
+	if !ok {
+		t.Fatal("expected a canonical-host redirect for 127.0.0.1 vs localhost")
+	}
+	if got != "http://localhost:8080/api/auth/login?return_to=/findings" {
+		t.Fatalf("redirect = %q, want canonical localhost URL with query preserved", got)
+	}
+}
+
+func TestCanonicalHostLocationNoRedirectWhenAlreadyCanonical(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://localhost:8080/api/auth/login", nil)
+	if loc, ok := canonicalHostLocation("http://localhost:8080", req); ok {
+		t.Fatalf("matching host redirected to %q", loc)
+	}
+}
+
+func TestCanonicalHostLocationIgnoresSpoofedHostAsTarget(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://evil.example/api/auth/login", nil)
+	got, ok := canonicalHostLocation("http://localhost:8080", req)
+	if !ok {
+		t.Fatal("expected redirect away from a non-canonical Host")
+	}
+	if got != "http://localhost:8080/api/auth/login" {
+		t.Fatalf("redirect = %q, want APP_BASE_URL (never the request Host)", got)
+	}
+}
+
+func TestCanonicalHostLocationFailsClosedOnInvalidPublicOrigin(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/api/auth/login", nil)
+	for _, origin := range []string{"", "://bad", "javascript:alert(1)"} {
+		if loc, ok := canonicalHostLocation(origin, req); ok {
+			t.Fatalf("invalid PublicOrigin %q redirected to %q", origin, loc)
+		}
+	}
+}
+
+func TestCanonicalHostLocationDoesNotRedirectTLSTerminatedIngress(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://nsc.example.com/api/auth/login", nil)
+	if req.TLS != nil {
+		t.Fatal("precondition: TLS must be nil (plaintext to the process)")
+	}
+	if loc, ok := canonicalHostLocation("https://nsc.example.com", req); ok {
+		t.Fatalf("TLS-terminated ingress redirected to %q; would 302-loop", loc)
+	}
+}
+
+func TestCanonicalHostLocationIgnoresForwardedProto(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://nsc.example.com/findings", nil)
+	req.Header.Set("X-Forwarded-Proto", "http")
+	if loc, ok := canonicalHostLocation("https://nsc.example.com", req); ok {
+		t.Fatalf("X-Forwarded-Proto triggered a redirect to %q", loc)
+	}
+}

@@ -117,7 +117,10 @@ func (s *Server) Handler() http.Handler {
 
 	// Auth (public entry points; /api/auth/me needs a session).
 	if s.auth != nil {
-		mux.HandleFunc("GET /api/auth/login", s.auth.handleLogin)
+		// Canonicalize onto APP_BASE_URL before minting the auth-state cookie
+		// so a 127.0.0.1 visit cannot start a flow whose callback lands on
+		// localhost (or the reverse). See canonicalHostLocation (#298).
+		mux.HandleFunc("GET /api/auth/login", s.canonicalHostFunc(s.auth.handleLogin))
 		mux.HandleFunc("GET /api/auth/callback", s.auth.handleCallback)
 		mux.HandleFunc("POST /api/auth/logout", s.sameOrigin(s.auth.handleLogout))
 		mux.HandleFunc("GET /api/auth/logout", s.sameOriginOrDirect(s.auth.handleLogoutRedirect))
@@ -253,9 +256,31 @@ func (s *Server) Handler() http.Handler {
 	})
 
 	// Everything else: the embedded SPA (falls back to index.html for client routes).
-	mux.Handle("/", s.spa)
+	// Canonical-host redirect so a bookmark to 127.0.0.1 never renders the
+	// login page on a host that cannot complete OIDC (#298).
+	mux.Handle("/", s.canonicalHost(s.spa))
 
 	return securityHeaders(mux)
+}
+
+// canonicalHost redirects browser document requests to APP_BASE_URL when the
+// request Host does not match. Auth-disabled development has no public origin
+// to enforce and is a no-op. JSON API routes are registered on the mux before
+// this wrapper and are not redirected (service-account callers may use an IP).
+func (s *Server) canonicalHost(next http.Handler) http.Handler {
+	return http.HandlerFunc(s.canonicalHostFunc(next.ServeHTTP))
+}
+
+func (s *Server) canonicalHostFunc(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.auth != nil {
+			if loc, ok := canonicalHostLocation(s.auth.cfg.PublicOrigin, r); ok {
+				http.Redirect(w, r, loc, http.StatusFound)
+				return
+			}
+		}
+		next(w, r)
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

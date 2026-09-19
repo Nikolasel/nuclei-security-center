@@ -19,7 +19,12 @@ bearer requests are explicit credentials and do not need browser-origin headers.
 ## Interactive authentication
 
 `GET /api/auth/login` starts the browser OIDC flow and normally returns a `302` redirect to the
-identity provider. The unauthenticated admission controls can also return:
+identity provider. If the request `Host` does not match the origin of `APP_BASE_URL` (for example
+opening the compose UI at `http://127.0.0.1:8080` while `APP_BASE_URL` is `http://localhost:8080`),
+the handler first `302`s to the same path on `APP_BASE_URL` and does not mint an auth-state cookie
+or consume a login-admission token — cookies and the IdP redirect URI are host-specific. The
+comparison is hostname plus non-default port, not scheme, so a TLS-terminating ingress does not
+loop. The unauthenticated admission controls can also return:
 
 - `429 login temporarily unavailable` when the configured global live-flow cap is full. This
   response intentionally has no recovery-time `Retry-After`, because a slot may be consumed before

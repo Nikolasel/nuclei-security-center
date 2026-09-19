@@ -30,7 +30,8 @@ imported the realm, recreate its Compose container after synchronizing both valu
 down`, then `docker compose up --build`); local Keycloak data lives in the container layer.
 
 Open <http://localhost:8080>. The compose stack includes Postgres, MinIO, Keycloak, one scanner,
-and the backend/SPA. Demo users use their username as the password:
+and the backend/SPA. `http://127.0.0.1:8080` redirects to `localhost` before OIDC starts (the seeded
+`APP_BASE_URL` and Keycloak redirect URI are `localhost`). Demo users use their username as the password:
 
 | User | Role |
 |---|---|

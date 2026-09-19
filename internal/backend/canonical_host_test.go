@@ -120,6 +120,39 @@ func TestSPARedirectsOffLoopbackAlias(t *testing.T) {
 	}
 }
 
+func TestLoginDoesNotRedirectTLSTerminatedIngress(t *testing.T) {
+	st := &recordingAuthStore{}
+	h := testCanonicalHostServer(t, "https://nsc.example.com", st)
+	req := httptest.NewRequest(http.MethodGet, "http://nsc.example.com/api/auth/login", nil)
+	if req.TLS != nil {
+		t.Fatal("precondition: TLS must be nil (plaintext to the process)")
+	}
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	loc := rr.Header().Get("Location")
+	if rr.Code == http.StatusFound && strings.HasPrefix(loc, "https://nsc.example.com/") {
+		t.Fatalf("TLS-terminated ingress redirected to %q; would 302-loop", loc)
+	}
+	if st.flows != 1 {
+		t.Fatalf("auth flows created = %d, want 1 (login must start, not bounce)", st.flows)
+	}
+}
+
+func TestSPAServesOnTLSTerminatedIngress(t *testing.T) {
+	h := testCanonicalHostServer(t, "https://nsc.example.com", nil)
+	req := httptest.NewRequest(http.MethodGet, "http://nsc.example.com/nodes", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; Location = %q", rr.Code, http.StatusOK, rr.Header().Get("Location"))
+	}
+	if got := rr.Body.String(); got != "spa" {
+		t.Fatalf("body = %q, want spa", got)
+	}
+}
+
 func TestSPAServesOnCanonicalHost(t *testing.T) {
 	h := testCanonicalHostServer(t, "http://localhost:8080", nil)
 	req := httptest.NewRequest(http.MethodGet, "http://localhost:8080/nodes", nil)

@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"crypto/tls"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -207,11 +206,20 @@ func TestCanonicalHostLocationFailsClosedOnInvalidPublicOrigin(t *testing.T) {
 	}
 }
 
-func TestRequestOriginUsesTLSForScheme(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "https://nsc.example.com/findings", nil)
-	req.TLS = &tls.ConnectionState{}
-	got, ok := requestOrigin(req)
-	if !ok || got != "https://nsc.example.com" {
-		t.Fatalf("requestOrigin = %q, %v; want https://nsc.example.com", got, ok)
+func TestCanonicalHostLocationDoesNotRedirectTLSTerminatedIngress(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://nsc.example.com/api/auth/login", nil)
+	if req.TLS != nil {
+		t.Fatal("precondition: TLS must be nil (plaintext to the process)")
+	}
+	if loc, ok := canonicalHostLocation("https://nsc.example.com", req); ok {
+		t.Fatalf("TLS-terminated ingress redirected to %q; would 302-loop", loc)
+	}
+}
+
+func TestCanonicalHostLocationIgnoresForwardedProto(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://nsc.example.com/findings", nil)
+	req.Header.Set("X-Forwarded-Proto", "http")
+	if loc, ok := canonicalHostLocation("https://nsc.example.com", req); ok {
+		t.Fatalf("X-Forwarded-Proto triggered a redirect to %q", loc)
 	}
 }

@@ -106,42 +106,83 @@ func sameOriginRequest(r *http.Request, configured string) bool {
 	return strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "same-origin")
 }
 
-// requestOrigin reconstructs the origin the browser used for this request from
-// Host and TLS. Forwarded headers are ignored: they are attacker-controlled
-// unless a trusted proxy is configured, and a spoofed Host must never become
-// the redirect target (canonicalHostLocation always writes APP_BASE_URL).
-func requestOrigin(r *http.Request) (string, bool) {
-	host := strings.TrimSpace(r.Host)
+// cookieHost is the host key a host-locked cookie binds to: lowercased
+// hostname plus a non-default port. Ports 80 and 443 are omitted because
+// browsers treat them as the http/https defaults and the Host header usually
+// omits them. Scheme is intentionally not part of this key.
+func cookieHost(host string) (string, bool) {
+	host = strings.TrimSpace(host)
 	if host == "" {
 		return "", false
 	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
+	// Host is hostname[:port]; wrap so net/url splits IPv6 ("[::1]:8080") correctly.
+	u, err := url.Parse("http://" + host)
+	if err != nil || u.User != nil || u.Opaque != "" {
+		return "", false
 	}
-	return canonicalOrigin(scheme+"://"+host, false)
+	name := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if name == "" {
+		return "", false
+	}
+	port := u.Port()
+	if port == "80" || port == "443" {
+		port = ""
+	}
+	if strings.Contains(name, ":") {
+		name = "[" + name + "]"
+	}
+	if port != "" {
+		name += ":" + port
+	}
+	return name, true
+}
+
+func cookieHostFromPublicOrigin(publicOrigin string) (string, bool) {
+	origin, ok := canonicalOrigin(publicOrigin, true)
+	if !ok {
+		return "", false
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return "", false
+	}
+	return cookieHost(u.Host)
+}
+
+func requestCookieHost(r *http.Request) (string, bool) {
+	return cookieHost(r.Host)
 }
 
 // canonicalHostLocation returns a same-path redirect to APP_BASE_URL when the
-// request origin does not match the configured public origin. The destination
-// is always derived from publicOrigin (never from Host), so a spoofed Host
-// cannot turn this into an open redirect. An invalid publicOrigin fails closed
-// (no redirect) — the same contract as CSRF origin checks.
+// request cookie host does not match the configured public origin. The
+// destination is always derived from publicOrigin (never from Host), so a
+// spoofed Host cannot turn this into an open redirect. An invalid publicOrigin
+// fails closed (no redirect) — the same contract as CSRF origin checks.
+//
+// Comparison is hostname + non-default port only. Scheme is ignored so a
+// TLS-terminating ingress (HTTPS to the browser, plaintext to the process,
+// r.TLS == nil) cannot 302-loop SPA documents and GET /api/auth/login.
+// Forwarded proto/host headers are not consulted: they are attacker-controlled
+// unless a trusted proxy is configured.
 //
 // This is the fix for opening the compose UI at 127.0.0.1 while APP_BASE_URL
 // (and the IdP redirect URI, and host-locked cookies) are localhost: those
 // names are different cookie hosts, so starting OIDC on one and returning on
 // the other yields "invalid or expired login state" (#298).
 func canonicalHostLocation(publicOrigin string, r *http.Request) (string, bool) {
-	expected, ok := canonicalOrigin(publicOrigin, true)
+	expectedOrigin, ok := canonicalOrigin(publicOrigin, true)
 	if !ok {
 		return "", false
 	}
-	got, ok := requestOrigin(r)
-	if !ok || got == expected {
+	expectedHost, ok := cookieHostFromPublicOrigin(publicOrigin)
+	if !ok {
 		return "", false
 	}
-	dest, err := url.Parse(expected)
+	gotHost, ok := requestCookieHost(r)
+	if !ok || gotHost == expectedHost {
+		return "", false
+	}
+	dest, err := url.Parse(expectedOrigin)
 	if err != nil {
 		return "", false
 	}

@@ -106,6 +106,55 @@ func sameOriginRequest(r *http.Request, configured string) bool {
 	return strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "same-origin")
 }
 
+// requestOrigin reconstructs the origin the browser used for this request from
+// Host and TLS. Forwarded headers are ignored: they are attacker-controlled
+// unless a trusted proxy is configured, and a spoofed Host must never become
+// the redirect target (canonicalHostLocation always writes APP_BASE_URL).
+func requestOrigin(r *http.Request) (string, bool) {
+	host := strings.TrimSpace(r.Host)
+	if host == "" {
+		return "", false
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return canonicalOrigin(scheme+"://"+host, false)
+}
+
+// canonicalHostLocation returns a same-path redirect to APP_BASE_URL when the
+// request origin does not match the configured public origin. The destination
+// is always derived from publicOrigin (never from Host), so a spoofed Host
+// cannot turn this into an open redirect. An invalid publicOrigin fails closed
+// (no redirect) — the same contract as CSRF origin checks.
+//
+// This is the fix for opening the compose UI at 127.0.0.1 while APP_BASE_URL
+// (and the IdP redirect URI, and host-locked cookies) are localhost: those
+// names are different cookie hosts, so starting OIDC on one and returning on
+// the other yields "invalid or expired login state" (#298).
+func canonicalHostLocation(publicOrigin string, r *http.Request) (string, bool) {
+	expected, ok := canonicalOrigin(publicOrigin, true)
+	if !ok {
+		return "", false
+	}
+	got, ok := requestOrigin(r)
+	if !ok || got == expected {
+		return "", false
+	}
+	dest, err := url.Parse(expected)
+	if err != nil {
+		return "", false
+	}
+	path := r.URL.Path
+	if path == "" {
+		path = "/"
+	}
+	dest.Path = path
+	dest.RawQuery = r.URL.RawQuery
+	dest.Fragment = ""
+	return dest.String(), true
+}
+
 // canonicalOrigin reduces a browser origin or configured public URL to a
 // scheme/host/port tuple. Configured URLs may include a path because
 // APP_BASE_URL is also used to build redirects; request Origin values may only

@@ -28,6 +28,7 @@ docker compose up --build
 ```
 
 Then open http://localhost:8080 and log in with a demo user (`admin` / `admin`).
+`http://127.0.0.1:8080` redirects to `localhost` before OIDC starts.
 
 > If you also rotate `OIDC_CLIENT_SECRET`, change it in
 > `deploy/keycloak/realm-nsc.json` **before the realm is first imported** —

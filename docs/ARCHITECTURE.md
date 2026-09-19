@@ -413,7 +413,10 @@ trade; the native-services path only wins if you're committed to one cloud forev
 - **BFF token custody:** OIDC access/refresh tokens live server-side in the backend; the
   SPA only ever holds an httpOnly, SameSite session cookie — `__Host-`-prefixed and host-locked
   when secure cookies are enabled — no tokens in browser JS. Session bearer values are stored
-  only as SHA-256 hashes in Postgres.
+  only as SHA-256 hashes in Postgres. `APP_BASE_URL` is the canonical browser origin: login and
+  SPA document requests whose `Host` does not match it are redirected there before an auth-state
+  cookie is set, so `localhost` vs `127.0.0.1` cannot split the OIDC dance across two cookie
+  hosts (#298). `/healthz` and other `/api/*` routes are not redirected.
 - **Browser mutation protection:** cookie-authenticated state-changing requests must carry an
   exact `Origin` matching `APP_BASE_URL` (or `Sec-Fetch-Site: same-origin` when `Origin` is
   absent); `same-site` is not accepted because sibling subdomains may be untrusted. JSON-body

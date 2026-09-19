@@ -213,6 +213,7 @@ function CatalogTable({
   sort,
   order,
   onSort,
+  emptyMessage = "No templates match these filters.",
 }: {
   templates: Template[];
   selected?: Set<string>;
@@ -222,6 +223,7 @@ function CatalogTable({
   sort?: TemplateSort;
   order?: SortOrder;
   onSort?: (sort: TemplateSort) => void;
+  emptyMessage?: string;
 }) {
   const header = (label: string, value: TemplateSort) => (
     <th
@@ -296,7 +298,7 @@ function CatalogTable({
           {templates.length === 0 && (
             <tr>
               <td colSpan={selected ? 8 : 7} className="px-3 py-8 text-center text-neutral-400">
-                No templates match these filters.
+                {emptyMessage}
               </td>
             </tr>
           )}
@@ -568,6 +570,7 @@ function CustomTab({ canWrite, canDelete }: { canWrite: boolean; canDelete: bool
             sort={sort}
             order={order}
             onSort={changeSort}
+            emptyMessage="No custom templates yet."
             actions={(template) => (
               <>
                 {canWrite && <Button variant="ghost" onClick={() => setEditing(template)}>Edit</Button>}

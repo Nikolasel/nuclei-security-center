@@ -3,6 +3,7 @@ import { type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, type NucleiRaw } from "../api";
 import { CodeBlock } from "../components/CodeBlock";
+import { ExtractedResults } from "../components/ExtractedResults";
 import { safeHref } from "../util";
 import { Card, ErrorText, SeverityBadge, Spinner } from "../components/ui";
 
@@ -157,7 +158,7 @@ export function OccurrenceDetailPage() {
       )}
 
       {raw["extracted-results"]?.length ? (
-        <Section title="Extracted results"><Chips items={raw["extracted-results"]} /></Section>
+        <Section title="Extracted results"><ExtractedResults items={raw["extracted-results"]} /></Section>
       ) : null}
 
       {raw["curl-command"] && <Section title="Reproduce (curl)"><CodeBlock text={raw["curl-command"]} /></Section>}

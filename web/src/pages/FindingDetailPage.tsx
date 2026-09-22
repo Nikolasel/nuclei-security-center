@@ -13,6 +13,7 @@ import {
 } from "../api";
 import { hasRole, useMe } from "../auth";
 import { CodeBlock } from "../components/CodeBlock";
+import { ExtractedResults } from "../components/ExtractedResults";
 import { safeHref } from "../util";
 import { Button, Card, ErrorText, FindingStateBadge, Input, Pill, Select, SeverityBadge, Spinner } from "../components/ui";
 
@@ -372,13 +373,7 @@ export function FindingDetailPage() {
 
       {raw["extracted-results"]?.length ? (
         <Section title="Extracted results">
-          <ul className="list-inside list-disc space-y-1 text-sm">
-            {raw["extracted-results"].map((r, i) => (
-              <li key={i} className="font-mono text-xs">
-                {r}
-              </li>
-            ))}
-          </ul>
+          <ExtractedResults items={raw["extracted-results"]} />
         </Section>
       ) : null}
 

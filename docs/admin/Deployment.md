@@ -91,6 +91,11 @@ as `0.4.2-beta` get neither, so `docker pull …:latest` and `…:0.4` 404 today
 package UI labels the most recently published tag as “Latest”; that is not a `:latest`
 image tag.
 
+After sign-in, the account menu and `GET /api/version` report the build that is actually
+running. A tagged image shows the git tag plus commit (`v0.4.2-beta (3beec52)`); an untagged
+build shows `dev` plus the commit. Include that string when reporting a problem. See
+[Troubleshooting](Troubleshooting.md#reporting-the-running-version).
+
 ## Production deployment
 
 1. Provision an empty PostgreSQL database and a bucket (optional but recommended).

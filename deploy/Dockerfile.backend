@@ -20,7 +20,15 @@ RUN go mod download
 COPY . .
 # Overwrite the committed placeholder with the freshly built SPA before embedding.
 COPY --from=web /web/dist ./web/dist
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/backend ./cmd/backend
+# Release builds stamp the git tag and full commit. Empty defaults leave local
+# `docker compose up --build` / `go build` unstamped: the process then reports
+# dev plus the toolchain's vcs.revision when .git was visible, otherwise unknown.
+# Declared here so a changing commit does not bust the module-download layer.
+ARG VERSION_TAG=
+ARG GIT_COMMIT=
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
+    -ldflags "-X github.com/Nikolasel/nuclei-security-center/internal/version.versionTag=${VERSION_TAG} -X github.com/Nikolasel/nuclei-security-center/internal/version.gitCommit=${GIT_COMMIT}" \
+    -o /out/backend ./cmd/backend
 
 # ---- CA bundle for outbound TLS (Postgres / OIDC IdP / S3) ----
 # UBI 10 Micro ships no CA trust store at all (verified: none of the standard

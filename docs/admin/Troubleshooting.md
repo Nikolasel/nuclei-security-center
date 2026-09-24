@@ -1,5 +1,15 @@
 # Troubleshooting
 
+## Reporting the running version
+
+Sign in and open the account menu. The line under the email and roles is the backend that is
+actually running: a release shows `v0.5.0-beta (3beec52)`, an untagged build shows `dev (3beec52)`,
+and a build with no commit shows `dev (unknown)`. Hover that line for the full commit, or click it
+to copy the commit. `GET /api/version` and the `version` / `tag` / `commit` fields on the startup
+`backend listening` log use the same values. Include that string when reporting a problem. The menu
+string keeps the git tag's leading `v`; GHCR image tags strip it (`v0.4.2-beta` is pulled as
+`0.4.2-beta`).
+
 | Symptom | Meaning / action |
 |---|---|
 | Backend reports unsupported migration versions or a missing checksum | The database history is not supported by the current fresh-deployment baseline. Preserve exports/backups as needed, deploy a new empty database, and restore portable data. |

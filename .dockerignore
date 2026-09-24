@@ -1,4 +1,10 @@
+# Drop git history and config. Keep the checkout identity so an unstamped
+# backend image can still read HEAD (see deploy/resolve_git_commit.sh).
 .git
+!.git/HEAD
+!.git/packed-refs
+!.git/refs
+!.git/refs/**
 .env
 web/node_modules
 web/dist

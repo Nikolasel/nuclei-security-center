@@ -10,6 +10,16 @@ export function hasRole(id: Identity | undefined, required: string): boolean {
   return id.roles.some((r) => (roleRank[r] ?? 0) >= need);
 }
 
+/** useVersion loads the authenticated backend build identity. */
+export function useVersion() {
+  return useQuery({
+    queryKey: ["version"],
+    queryFn: () => api.version(),
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
 /** useMe loads the current session identity. `null` data means unauthenticated. */
 export function useMe() {
   return useQuery({

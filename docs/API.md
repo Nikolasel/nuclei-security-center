@@ -16,6 +16,33 @@ accepted; `same-site` is intentionally not sufficient because sibling subdomains
 untrusted. JSON-body endpoints also require `Content-Type: application/json`. Service-account
 bearer requests are explicit credentials and do not need browser-origin headers.
 
+## Build version
+
+`GET /api/version` returns the backend build identity. Any authenticated caller can read it
+(session cookie or service-account bearer). It is not a role-gated product API and it is not a
+liveness probe — `GET /healthz` stays unauthenticated for that. With authentication disabled for
+local development, the endpoint is available to the dev identity like every other route.
+
+```json
+{"tag":"v0.5.0-beta","commit":"<40-char sha>","version":"v0.5.0-beta (3beec52)"}
+```
+
+| Field | Meaning |
+|---|---|
+| `tag` | Git tag the image was built from, including a leading `v`. Empty when the build was not cut from a tag. This is not the GHCR image tag (those drop the leading `v`). |
+| `commit` | Full commit SHA. Empty when the binary has no VCS stamp. |
+| `version` | Display string. A tag leads: `v0.5.0-beta (3beec52)`. An untagged build is `dev (3beec52)`. No commit at all is `dev (unknown)`. |
+
+The short commit in `version` is the first seven hex characters of `commit`. Go's `(devel)`
+pseudo-version is never returned. The same `version`, `tag`, and `commit` values are logged once
+at startup on the `backend listening` line. The signed-in account menu shows `version`; its tooltip
+is the full commit, and clicking the line copies that commit.
+
+Image builds take `VERSION_TAG` and `GIT_COMMIT` (`deploy/Dockerfile.backend`). Compose and the
+release workflow pass them as build args. An empty tag stays untagged. An empty commit is filled
+from the checkout HEAD when that identity is in the build context; with neither, `commit` is empty
+and `version` is `dev (unknown)`.
+
 ## Interactive authentication
 
 `GET /api/auth/login` starts the browser OIDC flow and normally returns a `302` redirect to the

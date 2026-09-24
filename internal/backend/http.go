@@ -17,6 +17,7 @@ import (
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/Nikolasel/nuclei-security-center/internal/version"
 	"github.com/Nikolasel/nuclei-security-center/web"
 )
 
@@ -114,6 +115,9 @@ func securityHeaders(next http.Handler) http.Handler {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealth)
+	// Build identity. Authenticated (session or service-account token); /healthz
+	// stays the unauthenticated probe. Auth-disabled dev mode injects devIdentity.
+	mux.HandleFunc("GET /api/version", s.requireAuth(s.handleVersion))
 
 	// Auth (public entry points; /api/auth/me needs a session).
 	if s.auth != nil {
@@ -285,6 +289,12 @@ func (s *Server) canonicalHostFunc(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleVersion returns the backend build identity. The same value is logged at
+// startup and shown in the account menu.
+func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, version.Current())
 }
 
 // handleMe returns the authenticated caller's identity (for the SPA to render).

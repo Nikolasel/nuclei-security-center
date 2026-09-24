@@ -10,6 +10,16 @@ export interface Identity {
   roles: string[];
 }
 
+// AppVersion is the backend build identity from GET /api/version.
+// `tag` is empty for an untagged build. `commit` is the full SHA, or empty
+// when the binary has no VCS stamp. `version` is the display string
+// (`v0.5.0-beta (3beec52)`, `dev (3beec52)`, or `dev (unknown)`).
+export interface AppVersion {
+  tag: string;
+  commit: string;
+  version: string;
+}
+
 // host_count is the real address-range size of `hosts` (a CIDR entry counts as
 // its full range, e.g. "10.0.0.0/24" is 256) — not hosts.length, which only
 // counts array entries and undercounts any target scoped to a CIDR.
@@ -758,6 +768,7 @@ function templateSetExportURL(id: string, format: TemplateArchiveFormat): string
 
 export const api = {
   me: () => request<Identity>("GET", "/api/auth/me"),
+  version: () => request<AppVersion>("GET", "/api/version"),
 
   listTargets: () => request<Target[]>("GET", "/api/targets"),
   createTarget: (t: Partial<Target>) => request<Target>("POST", "/api/targets", t),

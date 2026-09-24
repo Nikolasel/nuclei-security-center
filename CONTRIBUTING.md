@@ -27,6 +27,9 @@ cp .env.example .env    # change SCANNER_TOKEN: the scanner fails fast under 32
 docker compose up --build
 ```
 
+The backend image shows `dev` plus this checkout's commit. Leave `VERSION_TAG` unset,
+or override with `GIT_COMMIT=$(git rev-parse HEAD)` when the tree has no `.git` directory.
+
 Then open http://localhost:8080 and log in with a demo user (`admin` / `admin`).
 `http://127.0.0.1:8080` redirects to `localhost` before OIDC starts.
 

@@ -24,7 +24,7 @@ import {
 import { useEffect, useState, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import type { Identity } from "../api";
-import { hasRole } from "../auth";
+import { hasRole, useVersion } from "../auth";
 import { useTheme } from "../theme";
 import { Brand } from "./Brand";
 import { cn } from "./ui";
@@ -211,6 +211,42 @@ function NavPane({
   );
 }
 
+// AccountVersion shows the backend build identity under the signed-in user's
+// email and roles. The tooltip is the full commit; clicking copies it.
+function AccountVersion() {
+  const q = useVersion();
+  const [copied, setCopied] = useState(false);
+  if (q.isLoading) return null;
+  const info = q.data;
+  const label = info?.version ?? "version unavailable";
+  const copyText = info?.commit || info?.version || "";
+  return (
+    <button
+      type="button"
+      title={info?.commit || label}
+      aria-label={
+        info?.commit
+          ? `App version ${label}. Full commit ${info.commit}. Click to copy the commit.`
+          : label
+      }
+      disabled={!copyText}
+      onClick={() => {
+        if (!copyText) return;
+        void navigator.clipboard
+          .writeText(copyText)
+          .then(() => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1500);
+          })
+          .catch(() => undefined);
+      }}
+      className="mt-2 block max-w-full truncate text-left font-mono text-[11px] text-neutral-400 hover:text-neutral-600 disabled:cursor-default disabled:hover:text-neutral-400 dark:hover:text-neutral-300"
+    >
+      {copied ? "Copied" : label}
+    </button>
+  );
+}
+
 export function Layout({
   identity,
   children,
@@ -320,6 +356,7 @@ export function Layout({
                         <span className="text-neutral-400">no roles</span>
                       )}
                     </div>
+                    <AccountVersion />
                   </div>
                   <DropdownMenu.Separator className="my-1 h-px bg-neutral-200 dark:bg-neutral-800" />
                   <DropdownMenu.Item

@@ -71,6 +71,13 @@ services:
     build:
       context: .
       dockerfile: deploy/Dockerfile.backend
+      args:
+        # Empty VERSION_TAG keeps a local image on "dev". Empty GIT_COMMIT is
+        # filled from this checkout's HEAD during the image build. Override with
+        #   GIT_COMMIT=$(git rev-parse HEAD) docker compose up --build
+        # and set VERSION_TAG only when reproducing a tagged release.
+        VERSION_TAG: ${VERSION_TAG:-}
+        GIT_COMMIT: ${GIT_COMMIT:-}
     environment:
       BACKEND_ADDR: ":8080"
       DATABASE_URL: "postgres://nuclei:nuclei@postgres:5432/nuclei?sslmode=disable"

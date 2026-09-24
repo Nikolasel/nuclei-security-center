@@ -22,6 +22,15 @@ cp .env.example .env
 docker compose up --build
 ```
 
+Compose passes `VERSION_TAG` and `GIT_COMMIT` into the backend image. Leave
+`VERSION_TAG` unset locally so the account menu shows `dev` plus the commit. When
+`GIT_COMMIT` is unset, the image reads this checkout's HEAD. Set it when the tree
+has no checkout identity (a linked worktree, for example):
+
+```sh
+GIT_COMMIT=$(git rev-parse HEAD) docker compose up --build
+```
+
 The seeded Keycloak client secret in `deploy/keycloak/realm-nsc.json` matches `.env.example`.
 For local development, either leave that development-only `OIDC_CLIENT_SECRET` unchanged or,
 before Keycloak first imports the realm, set the same replacement value in both `.env` and the
@@ -90,6 +99,11 @@ non-prerelease also publishes a floating `major.minor` tag and `latest`. Prerele
 as `0.4.2-beta` get neither, so `docker pull …:latest` and `…:0.4` 404 today. The GHCR
 package UI labels the most recently published tag as “Latest”; that is not a `:latest`
 image tag.
+
+After sign-in, the account menu and `GET /api/version` report the build that is actually
+running. A tagged image shows the git tag plus commit (`v0.4.2-beta (3beec52)`); an untagged
+build shows `dev` plus the commit. Include that string when reporting a problem. See
+[Troubleshooting](Troubleshooting.md#reporting-the-running-version).
 
 ## Production deployment
 

@@ -20,7 +20,24 @@ RUN go mod download
 COPY . .
 # Overwrite the committed placeholder with the freshly built SPA before embedding.
 COPY --from=web /web/dist ./web/dist
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/backend ./cmd/backend
+# Release builds stamp the git tag and full commit. Declared here so a changing
+# commit does not bust the module-download layer. An empty GIT_COMMIT is filled
+# from the checkout identity files the build context keeps (.git/HEAD, refs,
+# packed-refs). The object database stays out, so -buildvcs=false avoids a
+# partial checkout failing the compile. A tag is never inferred from git.
+ARG VERSION_TAG=
+ARG GIT_COMMIT=
+RUN set -e; \
+    commit="$(printf '%s' "${GIT_COMMIT}" | tr -d '[:space:]')"; \
+    if [ -z "$commit" ]; then \
+      commit="$(sh deploy/resolve_git_commit.sh .git | tr -d '[:space:]')"; \
+    fi; \
+    if ! printf '%s' "$commit" | grep -Eq '^[0-9a-fA-F]{7,64}$'; then \
+      commit=""; \
+    fi; \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -buildvcs=false \
+    -ldflags "-X github.com/Nikolasel/nuclei-security-center/internal/version.versionTag=${VERSION_TAG} -X github.com/Nikolasel/nuclei-security-center/internal/version.gitCommit=${commit}" \
+    -o /out/backend ./cmd/backend
 
 # ---- CA bundle for outbound TLS (Postgres / OIDC IdP / S3) ----
 # UBI 10 Micro ships no CA trust store at all (verified: none of the standard

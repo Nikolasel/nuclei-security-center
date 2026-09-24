@@ -19,6 +19,7 @@ import (
 
 	"github.com/Nikolasel/nuclei-security-center/internal/backend"
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/Nikolasel/nuclei-security-center/internal/version"
 	"github.com/Nikolasel/nuclei-security-center/web"
 )
 
@@ -162,7 +163,8 @@ func main() {
 	}
 
 	go func() {
-		log.Info("backend listening", "addr", addr, "scanner", scannerURL)
+		build := version.Current()
+		log.Info("backend listening", "addr", addr, "scanner", scannerURL, "version", build.Version, "tag", build.Tag, "commit", build.Commit)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("server error", "err", err)
 			os.Exit(1)

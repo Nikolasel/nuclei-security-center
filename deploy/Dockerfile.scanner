@@ -23,7 +23,9 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/scanner ./cmd/scanner
+# The shared context keeps .git/HEAD and refs for the backend stamp. That partial
+# checkout must not fail this compile, and the scanner binary is not version-stamped.
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -buildvcs=false -o /out/scanner ./cmd/scanner
 
 # ---- fetch the pinned nuclei + naabu binaries ----
 # Runs on the native builder (BUILDPLATFORM). The target-architecture binaries

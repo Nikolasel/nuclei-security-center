@@ -81,5 +81,11 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Tag builds only (on.push.tags). ref_name is the git tag, including
+          # the leading v; sha is the full commit. The scanner image ignores
+          # these args. An unstamped build must not invent a release tag.
+          build-args: |
+            VERSION_TAG=${{ github.ref_name }}
+            GIT_COMMIT=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

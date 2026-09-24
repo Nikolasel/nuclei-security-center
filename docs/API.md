@@ -38,6 +38,11 @@ pseudo-version is never returned. The same `version`, `tag`, and `commit` values
 at startup on the `backend listening` line. The signed-in account menu shows `version`; its tooltip
 is the full commit, and clicking the line copies that commit.
 
+Image builds take `VERSION_TAG` and `GIT_COMMIT` (`deploy/Dockerfile.backend`). Compose and the
+release workflow pass them as build args. An empty tag stays untagged. An empty commit is filled
+from the checkout HEAD when that identity is in the build context; with neither, `commit` is empty
+and `version` is `dev (unknown)`.
+
 ## Interactive authentication
 
 `GET /api/auth/login` starts the browser OIDC flow and normally returns a `302` redirect to the

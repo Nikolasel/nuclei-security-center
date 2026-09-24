@@ -52,6 +52,16 @@ cp .env.example .env    # change SCANNER_TOKEN (at least 32 chars — `openssl r
 docker compose up --build
 ```
 
+Compose passes `VERSION_TAG` and `GIT_COMMIT` into the backend image. Leave
+`VERSION_TAG` unset so a local build shows `dev` plus the commit. When `GIT_COMMIT`
+is unset, the image reads this checkout's HEAD (`.git/HEAD`, `packed-refs`, and
+`refs` stay in the build context). A linked worktree has no `.git` directory to
+read, so set the commit yourself:
+
+```sh
+GIT_COMMIT=$(git rev-parse HEAD) docker compose up --build
+```
+
 Open <http://localhost:8080>. This exercises real OIDC through seeded Keycloak plus Postgres, MinIO,
 and the scanner. `http://127.0.0.1:8080` is redirected to `localhost` before login because the
 seeded `APP_BASE_URL`, IdP redirect URI, and session cookies are host-specific. Only claim

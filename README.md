@@ -57,6 +57,10 @@ cp .env.example .env          # change SCANNER_TOKEN (at least 32 characters —
 docker compose up --build
 ```
 
+The backend image shows `dev` plus this checkout's commit. Leave `VERSION_TAG` unset.
+Override the commit with `GIT_COMMIT=$(git rev-parse HEAD) docker compose up --build`
+when the tree has no `.git` directory (a linked worktree).
+
 To use a released backend and scanner image instead of building from source, see
 **[Administration guide → Run from published images](docs/admin/Deployment.md#run-from-published-images)**
 for the GHCR names, tag rules, and how to point this Compose stack at them.

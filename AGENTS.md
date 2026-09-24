@@ -293,6 +293,14 @@ cp .env.example .env    # change SCANNER_TOKEN (at least 32 chars, e.g. `openssl
 docker compose up --build
 ```
 
+Compose passes `VERSION_TAG` and `GIT_COMMIT` into the backend image. Leave `VERSION_TAG`
+unset so a local build shows `dev` plus the commit. When `GIT_COMMIT` is unset, the image
+reads this checkout's HEAD. A linked worktree has no `.git` directory to read:
+
+```sh
+GIT_COMMIT=$(git rev-parse HEAD) docker compose up --build
+```
+
 Then log in at `http://localhost:8080`. The API is under `/api/*` behind the session cookie
 (there is **no** implicit default scan — every scan names a `scan_policy_id` and stored
 `target_id`).

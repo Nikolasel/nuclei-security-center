@@ -22,6 +22,15 @@ cp .env.example .env
 docker compose up --build
 ```
 
+Compose passes `VERSION_TAG` and `GIT_COMMIT` into the backend image. Leave
+`VERSION_TAG` unset locally so the account menu shows `dev` plus the commit. When
+`GIT_COMMIT` is unset, the image reads this checkout's HEAD. Set it when the tree
+has no checkout identity (a linked worktree, for example):
+
+```sh
+GIT_COMMIT=$(git rev-parse HEAD) docker compose up --build
+```
+
 The seeded Keycloak client secret in `deploy/keycloak/realm-nsc.json` matches `.env.example`.
 For local development, either leave that development-only `OIDC_CLIENT_SECRET` unchanged or,
 before Keycloak first imports the realm, set the same replacement value in both `.env` and the

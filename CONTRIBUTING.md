@@ -19,7 +19,7 @@ requires `go 1.25.0`) and **Node 22** (CI pins it; Vite 8 needs `^20.19 ||
 >=22.12`).
 
 The full stack is the baseline — it boots everything the SPA needs
-(Postgres + MinIO + Keycloak + scanner + backend):
+(Postgres + Garage + Keycloak + scanner + backend):
 
 ```sh
 cp .env.example .env    # change SCANNER_TOKEN: the scanner fails fast under 32

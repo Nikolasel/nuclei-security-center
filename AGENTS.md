@@ -31,9 +31,12 @@ created. **Fails closed:** no approved targets ⇒ no scan.
 primitives, retained for reuse though the removed ad-hoc `spec` path was their only caller.)
 
 **Object storage:** the verbatim Nuclei `out.jsonl` is archived per scan to an
-S3-compatible bucket (MinIO locally; any S3 API in the cloud) via `github.com/minio/minio-go/v7`
+S3-compatible bucket (Garage locally; any S3 API in the cloud) via `github.com/minio/minio-go/v7`
 behind a small `ObjectStore` interface (`internal/backend/objectstore.go`, Put/Get; a fake
-in tests). The orchestrator **tees** the results stream to a temp file during ingest and
+in tests). Compose runs unmodified `dxflrs/garage` (AGPL-3.0) as that local stand-in;
+that is fine for dev and self-hosting. Revisit the license if we ever modify Garage
+and distribute the result. The minio-go client stays — it speaks generic S3. The orchestrator
+**tees** the results stream to a temp file during ingest and
 uploads `scans/<id>/raw.jsonl` afterward — **best-effort**: Postgres stays the system of
 record, so an upload failure logs but never fails the scan. `scans.raw_object_key` stores the
 key; the API exposes only `has_raw`. `GET /api/scans/{id}/raw` (viewer)
@@ -256,11 +259,11 @@ cmd/backend        backend entrypoint (main + graceful shutdown + PG retry)
 cmd/scanner        scanner node entrypoint
 internal/types     wire contracts shared by both services + Nuclei JSONL parse structs
 internal/scanner   Runner (runs nuclei, process-group cancel/timeout) + optional naabu port-discovery pre-pass (discover.go, #86) + HTTP API
-internal/backend   Orchestrator (dispatch/poll/ingest + raw archive) + Scheduler (cron ticker) + ScannerClient + scanner node registry (nodes.go config-seeder + nodes_http.go admin API; DB-backed, dispatch picks the node whose CIDRs match the target — #22) + HealthMonitor (health.go; polls each node's GET /v1/capabilities for liveness, dispatch fails fast to a known-unhealthy node — #98) + per-node mTLS (client_tls.go; each node stores its own server-CA/client-cert/client-key in the registry, client_key write-only like the token; clientForNode builds a TLS-aware ScannerClient — #26) + ObjectStore (objectstore.go, S3/MinIO) + HTTP API + OIDC/BFF auth (auth.go, authz.go) + audit-log middleware (audit.go)
+internal/backend   Orchestrator (dispatch/poll/ingest + raw archive) + Scheduler (cron ticker) + ScannerClient + scanner node registry (nodes.go config-seeder + nodes_http.go admin API; DB-backed, dispatch picks the node whose CIDRs match the target — #22) + HealthMonitor (health.go; polls each node's GET /v1/capabilities for liveness, dispatch fails fast to a known-unhealthy node — #98) + per-node mTLS (client_tls.go; each node stores its own server-CA/client-cert/client-key in the registry, client_key write-only like the token; clientForNode builds a TLS-aware ScannerClient — #26) + ObjectStore (objectstore.go, S3/Garage) + HTTP API + OIDC/BFF auth (auth.go, authz.go) + audit-log middleware (audit.go)
 internal/store     Postgres access + embedded migrations (internal/store/migrations/*.sql)
 web/               React + TS + Vite SPA; embedded into the backend via go:embed (web/embed.go)
-deploy/            Dockerfile.backend (SPA build + distroless), Dockerfile.scanner, keycloak/ (seeded realm)
-docker-compose.yml postgres + minio + keycloak + scanner + backend
+deploy/            Dockerfile.backend (SPA build + distroless), Dockerfile.scanner, keycloak/ (seeded realm), garage/ (local S3 config)
+docker-compose.yml postgres + garage + keycloak + scanner + backend
 .github/workflows/ CI (build/vet/test + SPA), release (images → GHCR), wiki (`docs/admin/` → GitHub wiki)
 docs/ARCHITECTURE.md   design decisions (source of truth); docs/admin/ is the administration guide (published to the GitHub wiki); API.md, DEVELOPMENT.md are the other practical guides
 ```

@@ -101,8 +101,21 @@ OIDC setup, browser mutation protection, service accounts, mTLS, and session rev
 | `S3_BUCKET` | `nuclei-raw` | Archive bucket; created at startup when absent. |
 | `S3_ACCESS_KEY_ID` | unset | Static access key. Leave empty to use the ambient AWS credential chain. |
 | `S3_SECRET_ACCESS_KEY` | unset | Static secret key. |
-| `S3_REGION` | `us-east-1` | S3 region. |
-| `S3_USE_SSL` | `true` | TLS for the S3 endpoint. Set `false` only for local plaintext HTTP (e.g. MinIO in `docker compose`). |
+| `S3_REGION` | `us-east-1` | S3 region. Must match the store's configured region (Compose Garage uses `us-east-1`). |
+| `S3_USE_SSL` | `true` | TLS for the S3 endpoint. Set `false` only for local plaintext HTTP (Garage in `docker compose`). |
+
+Compose runs unmodified [Garage](https://garagehq.deuxfleurs.fr/) (`dxflrs/garage`, AGPL-3.0)
+as the local S3 endpoint. The image tag is `${GARAGE_VERSION:-v2.3.0}`: `dxflrs/garage` publishes
+no `latest` tag, so the compose file keeps `v2.3.0` as the known-good default. Set `GARAGE_VERSION`
+in `.env` to try a newer release or pin one tag for a test run. To change the default, bump the
+compose fallback after checking [garagehq.deuxfleurs.fr](https://garagehq.deuxfleurs.fr/) or the
+[Garage releases](https://git.deuxfleurs.fr/Deuxfleurs/garage/releases). Running that unmodified
+image is appropriate for development and for self-hosting. Revisit the choice if NSC ever patches
+Garage and ships that modified build: AGPL-3.0 would then require offering the corresponding Garage
+source. The application client stays `minio-go`; it
+speaks generic S3, and the same `S3_*` variables point at AWS S3 or another compatible API in
+production. The Compose access key and secret are the development values in
+`docker-compose.yml` (`GARAGE_DEFAULT_ACCESS_KEY` / `GARAGE_DEFAULT_SECRET_KEY`).
 
 The backend archives byte-exact raw Nuclei output and execution logs best-effort. PostgreSQL remains
 the system of record: an archive upload failure is logged but does not discard successfully ingested

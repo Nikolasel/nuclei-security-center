@@ -71,7 +71,7 @@ imported—change it in both `.env` and `deploy/keycloak/realm-nsc.json` so they
 
 Open **http://localhost:8080** and log in with a demo user (`admin` / `admin`,
 `operator` / `operator`, or `viewer` / `viewer`). The compose stack runs backend + UI on `:8080`,
-the scanner on `:8081`, plus Postgres, MinIO, and a seeded Keycloak IdP. Opening the UI as
+the scanner on `:8081`, plus Postgres, Garage, and a seeded Keycloak IdP. Opening the UI as
 `http://127.0.0.1:8080` redirects to `localhost` before login — session cookies and the IdP
 callback are host-specific.
 
@@ -88,8 +88,8 @@ internal/scanner scanner node: runs nuclei, serves results over HTTP
 internal/backend orchestrator, scanner client, HTTP API, OIDC/BFF auth, audit log, scope guardrail
 internal/store   Postgres access + embedded migrations
 web/             React + TS + Vite SPA (embedded into the backend via go:embed)
-deploy/          Dockerfiles + seeded Keycloak realm
-docker-compose.yml   postgres + minio + keycloak + scanner + backend
+deploy/          Dockerfiles, seeded Keycloak realm, local Garage config
+docker-compose.yml   postgres + garage + keycloak + scanner + backend
 ```
 
 ## Documentation

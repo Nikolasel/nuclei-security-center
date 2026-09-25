@@ -48,7 +48,7 @@ body:
       label: Environment
       description: Deployment shape (docker compose / k8s / bare), browser, scanner-node details, relevant config (sanitized — no tokens or hostnames you don't own).
       placeholder: |
-        backend v0.4.2-beta, single scanner node (docker compose), PostgreSQL 16, MinIO, Chrome.
+        backend v0.4.2-beta, single scanner node (docker compose), PostgreSQL 16, Garage, Chrome.
   - type: textarea
     id: logs
     attributes:

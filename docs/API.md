@@ -930,7 +930,7 @@ docker compose logs -f backend | grep '"event":"audit"'
 
 ## Raw scan-output archive
 
-Each scan's verbatim Nuclei output (`out.jsonl`) is archived to an S3-compatible bucket — MinIO
+Each scan's verbatim Nuclei output (`out.jsonl`) is archived to an S3-compatible bucket — Garage
 in the Compose stack, any S3 API in the cloud. Postgres remains the system of record for the
 projected findings; the bucket holds the bulky, write-once evidence. Archiving is
 **best-effort**: if the upload fails, the scan still succeeds (the findings are already ingested)

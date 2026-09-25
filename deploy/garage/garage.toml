@@ -1,0 +1,31 @@
+# Single-node Garage for local raw-output archival.
+# Development only: the rpc secret and admin tokens below are not production
+# credentials. Garage is AGPL-3.0; this file configures the unmodified upstream
+# image and does not vendor Garage source.
+
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+
+replication_factor = 1
+
+rpc_bind_addr = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+rpc_secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+[s3_api]
+# Must match the backend's S3_REGION (default us-east-1). SigV4 fails closed
+# when the client region and this value differ.
+s3_region = "us-east-1"
+api_bind_addr = "[::]:3900"
+root_domain = ".s3.garage.localhost"
+
+[s3_web]
+bind_addr = "[::]:3902"
+root_domain = ".web.garage.localhost"
+index = "index.html"
+
+[admin]
+api_bind_addr = "127.0.0.1:3903"
+admin_token = "nsc-dev-garage-admin-token-0123456789ab"
+metrics_token = "nsc-dev-garage-metrics-token-0123456789"

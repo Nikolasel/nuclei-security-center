@@ -38,7 +38,7 @@ realm JSON. Changing only `.env` makes the OIDC callback's token exchange fail. 
 imported the realm, recreate its Compose container after synchronizing both values (`docker compose
 down`, then `docker compose up --build`); local Keycloak data lives in the container layer.
 
-Open <http://localhost:8080>. The compose stack includes Postgres, MinIO, Keycloak, one scanner,
+Open <http://localhost:8080>. The compose stack includes Postgres, Garage, Keycloak, one scanner,
 and the backend/SPA. `http://127.0.0.1:8080` redirects to `localhost` before OIDC starts (the seeded
 `APP_BASE_URL` and Keycloak redirect URI are `localhost`). Demo users use their username as the password:
 
@@ -50,6 +50,17 @@ and the backend/SPA. `http://127.0.0.1:8080` redirects to `localhost` before OID
 
 Keycloak's local admin console is at <http://localhost:8082> (`admin` / `admin`). These seeded
 credentials and the compose defaults are for local development only.
+
+Raw scan output is archived to Garage (`dxflrs/garage`, S3 API on port 3900). The image tag
+defaults to `v2.3.0` and can be overridden with `GARAGE_VERSION` (see
+[Configuration](Configuration.md)); `dxflrs/garage` publishes no `latest` tag. The image is
+the unmodified upstream build and is AGPL-3.0. Running it for local development or self-hosting
+does not change NSC's license. If a deployment modifies Garage and distributes that build, AGPL-3.0
+requires publishing the corresponding Garage source; prefer staying on the pinned upstream image
+unless that obligation is acceptable. Garage's admin API is bound to loopback inside the container.
+`deploy/garage/garage.toml` sets `s3_region` to `us-east-1` so it matches the backend's `S3_REGION`.
+The bucket `nuclei-raw` and its access key are created on startup from the `GARAGE_DEFAULT_*`
+variables in `docker-compose.yml`, which are the same development-only values the backend uses.
 
 A fresh backend creates `schema_migrations`, applies the current schema baseline, seeds the configured
 default scanner node, and starts the scheduler, template sync/distribution, node-health monitor, and
@@ -75,10 +86,10 @@ Coordinates:
 
 GHCR package names are lowercase.
 
-To run those images with this repo's Compose stack (Postgres, MinIO, Keycloak), edit
+To run those images with this repo's Compose stack (Postgres, Garage, Keycloak), edit
 `docker-compose.yml` **in place**: on the `backend` and `scanner` services, delete the
 `build:` mapping and set `image:` instead. Leave `environment`, `ports`, `volumes`, and
-the backend's `depends_on` (postgres/keycloak health, scanner, minio) in place:
+the backend's `depends_on` (postgres/keycloak health, scanner, garage) in place:
 
 ```yaml
 # backend — delete `build:`, set:

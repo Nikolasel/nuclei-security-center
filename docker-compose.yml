@@ -17,21 +17,39 @@ services:
       timeout: 3s
       retries: 10
 
-  # S3-compatible object storage for raw scan-output archival (Phase 3). The
-  # backend creates the bucket on startup; console is at localhost:9001.
-  minio:
-    # MinIO no longer publishes an anonymously-pullable Docker Hub image; the
-    # canonical public location is Quay.
-    image: quay.io/minio/minio:latest
-    command: server /data --console-address ":9001"
+  # S3-compatible object storage for raw scan-output archival. Garage
+  # (unmodified dxflrs/garage, AGPL-3.0) is the local stand-in; production uses
+  # any S3 API. --single-node applies a one-node layout, and --default-bucket
+  # creates the archive bucket plus the key from the env vars below. Those
+  # values are local-development credentials, same class as the Postgres
+  # password in this file. The admin API stays on loopback inside the container.
+  garage:
+    image: dxflrs/garage:v2.3.0
+    command:
+      - /garage
+      - -c
+      - /etc/garage.toml
+      - server
+      - --single-node
+      - --default-bucket
     environment:
-      MINIO_ROOT_USER: minio
-      MINIO_ROOT_PASSWORD: minio12345
+      GARAGE_DEFAULT_ACCESS_KEY: "GKnsc-dev-local"
+      GARAGE_DEFAULT_SECRET_KEY: "nsc-dev-garage-secret"
+      GARAGE_DEFAULT_BUCKET: "nuclei-raw"
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "3900:3900"
     volumes:
-      - miniodata:/data
+      - ./deploy/garage/garage.toml:/etc/garage.toml:ro
+      - garagemeta:/var/lib/garage/meta
+      - garagedata:/var/lib/garage/data
+    healthcheck:
+      # No shell in the image. Bucket info fails until the layout, key, and
+      # bucket exist, so the backend does not start against an empty node.
+      test: ["CMD", "/garage", "-c", "/etc/garage.toml", "bucket", "info", "nuclei-raw"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 5s
 
   # Local OIDC identity provider. Seeded with realm "nsc": a confidential client
   # for the backend BFF, groups admin/operator/viewer, and one demo user each
@@ -94,12 +112,14 @@ services:
       # cookie must not be Secure (browsers withhold Secure cookies over HTTP).
       # Secure defaults to true; keep TLS deployments on the default.
       COOKIE_SECURE: "false"
-      # S3-compatible object storage for raw scan-output archival. The backend
-      # creates the bucket on startup (retrying until MinIO is ready).
-      S3_ENDPOINT: "minio:9000"
+      # S3-compatible object storage for raw scan-output archival. Garage
+      # creates nuclei-raw before this service is healthy; the backend still
+      # ensures the bucket on startup. Region matches deploy/garage/garage.toml.
+      S3_ENDPOINT: "garage:3900"
       S3_BUCKET: "nuclei-raw"
-      S3_ACCESS_KEY_ID: "minio"
-      S3_SECRET_ACCESS_KEY: "minio12345"
+      S3_ACCESS_KEY_ID: "GKnsc-dev-local"
+      S3_SECRET_ACCESS_KEY: "nsc-dev-garage-secret"
+      S3_REGION: "us-east-1"
       S3_USE_SSL: "false"
       # Persist the nuclei-templates clone cache on a named volume so a restart
       # re-fetches deltas instead of re-cloning ~1 GB of .git every `up`. Set
@@ -114,12 +134,13 @@ services:
         condition: service_started
       keycloak:
         condition: service_healthy
-      minio:
-        condition: service_started
+      garage:
+        condition: service_healthy
     ports:
       - "8080:8080"
 
 volumes:
   pgdata:
-  miniodata:
+  garagemeta:
+  garagedata:
   templatecache:

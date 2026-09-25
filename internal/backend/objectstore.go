@@ -12,8 +12,8 @@ import (
 )
 
 // Object storage (Phase 3). Raw Nuclei output (out.jsonl) is archived per scan
-// to an S3-compatible bucket — MinIO locally, and any S3 API in the cloud (AWS
-// S3, GCS in interop mode, MinIO). Postgres stays the system of record for the
+// to an S3-compatible bucket — Garage locally, and any S3 API in the cloud (AWS
+// S3, GCS in interop mode). Postgres stays the system of record for the
 // projected findings; the bucket holds the verbatim evidence, which is bulky and
 // write-once, so object storage (not the DB) is its natural home.
 //
@@ -35,10 +35,10 @@ type ObjectStore interface {
 // ErrObjectNotFound is returned by Get when the key does not exist.
 var ErrObjectNotFound = errors.New("object not found")
 
-// ObjectStoreConfig is the environment-driven config for the MinIO/S3 client.
+// ObjectStoreConfig is the environment-driven config for the S3 client.
 // Archiving is enabled only when Endpoint is set.
 type ObjectStoreConfig struct {
-	Endpoint  string // host:port, no scheme (e.g. "minio:9000")
+	Endpoint  string // host:port, no scheme (e.g. "garage:3900")
 	Bucket    string // target bucket (created if absent)
 	AccessKey string
 	SecretKey string
@@ -85,7 +85,7 @@ func NewObjectStore(ctx context.Context, cfg ObjectStoreConfig) (ObjectStore, er
 // resolveCredentials chooses how to authenticate to the object store.
 //
 // When an explicit access key is configured, static V4 credentials are used —
-// the local-dev path (MinIO) and any store that only takes keys (GCS, etc.).
+// the local-dev path (Garage) and any store that only takes keys (GCS, etc.).
 // When the access key is empty, we fall back to the SDK's ambient credential
 // chain: environment variables, the shared AWS credentials file, and the
 // EC2/ECS/EKS instance-metadata IAM role. That lets a backend running on
@@ -105,7 +105,7 @@ func resolveCredentials(cfg ObjectStoreConfig) *credentials.Credentials {
 	})
 }
 
-// ensureBucket creates the bucket if absent, retrying so a MinIO/S3 endpoint
+// ensureBucket creates the bucket if absent, retrying so a Garage/S3 endpoint
 // that isn't ready the instant the backend boots (Compose start ordering)
 // doesn't fail startup — mirroring the Postgres connect retry.
 func ensureBucket(ctx context.Context, client *minio.Client, bucket, region string) error {

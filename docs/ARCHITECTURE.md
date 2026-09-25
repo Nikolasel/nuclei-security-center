@@ -67,7 +67,7 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
 | Backend | Go, single static binary | System of record + API + OIDC BFF; cohesive with the Nuclei ecosystem |
 | Scanner node | Go, standalone HTTP service | Pure execution engine; holds no DB creds; scale/segment independently |
 | DB | Postgres | Data + schedule + backend-side dispatch queue in one service |
-| Object store | S3-compatible behind one interface | MinIO locally → S3/GCS/Azure Blob in cloud, no code change |
+| Object store | S3-compatible behind one interface | Garage locally → S3/GCS/Azure Blob in cloud, no code change |
 | Templates | Lossless Postgres catalog → pushed node bundle | Backend owns upstream/custom content; scans select ids from a content-addressed full-catalog bundle. Custom writes are accepted only after a healthy node's pinned Nuclei validates the YAML |
 | User auth | OIDC via BFF (Cognito / Entra / Keycloak) | SSO everywhere; tokens stay server-side, SPA gets only a session cookie |
 | Service auth | API bearer token (TLS); mTLS as upgrade | Backend → scanner-node calls, no user identity involved |
@@ -382,7 +382,7 @@ The whole stack is **containers + Postgres + object storage**, nothing proprieta
 
 | Environment | Postgres | Object store | Run target |
 |---|---|---|---|
-| Local / single box | Compose PG | MinIO | `docker compose up` |
+| Local / single box | Compose PG | Garage (unmodified AGPL-3.0 image) | `docker compose up` |
 | AWS | RDS | S3 | ECS Fargate / EKS |
 | GCP | Cloud SQL | GCS | Cloud Run / GKE |
 | Azure | Flexible Server | Blob | Container Apps / AKS |

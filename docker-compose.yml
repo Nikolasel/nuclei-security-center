@@ -24,7 +24,8 @@ services:
   # values are local-development credentials, same class as the Postgres
   # password in this file. The admin API stays on loopback inside the container.
   garage:
-    image: dxflrs/garage:v2.3.0
+    # dxflrs/garage publishes no `latest` tag. Override with GARAGE_VERSION.
+    image: dxflrs/garage:${GARAGE_VERSION:-v2.3.0}
     command:
       - /garage
       - -c

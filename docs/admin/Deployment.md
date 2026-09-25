@@ -51,7 +51,9 @@ and the backend/SPA. `http://127.0.0.1:8080` redirects to `localhost` before OID
 Keycloak's local admin console is at <http://localhost:8082> (`admin` / `admin`). These seeded
 credentials and the compose defaults are for local development only.
 
-Raw scan output is archived to Garage (`dxflrs/garage:v2.3.0`, S3 API on port 3900). The image is
+Raw scan output is archived to Garage (`dxflrs/garage`, S3 API on port 3900). The image tag
+defaults to `v2.3.0` and can be overridden with `GARAGE_VERSION` (see
+[Configuration](Configuration.md)); `dxflrs/garage` publishes no `latest` tag. The image is
 the unmodified upstream build and is AGPL-3.0. Running it for local development or self-hosting
 does not change NSC's license. If a deployment modifies Garage and distributes that build, AGPL-3.0
 requires publishing the corresponding Garage source; prefer staying on the pinned upstream image

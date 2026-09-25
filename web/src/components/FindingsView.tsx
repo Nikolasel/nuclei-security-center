@@ -2,8 +2,8 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { Filter } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { api, type ExportFormat } from "../api";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { api, type ExportFormat, type LifecycleFinding } from "../api";
 import {
   ConditionBuilder,
   countActiveConditions,
@@ -42,6 +42,79 @@ function relTime(iso: string): string {
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.round(hrs / 24);
   return `${days}d ago`;
+}
+
+/** FindingIdentity is the second line of a triage row: the matched URL, protocol,
+ *  tags, resolved target names, and first-seen time. These stay under the six
+ *  triage columns so a long URL wraps inside the table instead of adding columns
+ *  that clip at 1280×800. */
+function FindingIdentity({
+  finding,
+  targetNames,
+}: {
+  finding: LifecycleFinding;
+  targetNames: Map<string, string>;
+}) {
+  const targets = finding.target_ids ?? [];
+  return (
+    <div className="flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-1 text-xs text-neutral-600 dark:text-neutral-300">
+      <span className="min-w-0 max-w-full">
+        <span className="text-neutral-400">Matched at </span>
+        {finding.matched_at ? (
+          <span className="break-all font-mono text-neutral-700 dark:text-neutral-200" title={finding.matched_at}>
+            {finding.matched_at}
+          </span>
+        ) : (
+          <span className="text-neutral-300 dark:text-neutral-600">—</span>
+        )}
+      </span>
+      <span>
+        <span className="text-neutral-400">Type </span>
+        {finding.type ? (
+          <span className="font-mono">{finding.type}</span>
+        ) : (
+          <span className="text-neutral-300 dark:text-neutral-600">—</span>
+        )}
+      </span>
+      <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1">
+        <span className="text-neutral-400">Tags</span>
+        {finding.tags?.length ? (
+          finding.tags.map((tag) => (
+            <span
+              key={tag}
+              className="max-w-full break-all rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[11px] text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+            >
+              {tag}
+            </span>
+          ))
+        ) : (
+          <span className="text-neutral-300 dark:text-neutral-600">—</span>
+        )}
+      </span>
+      <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1">
+        <span className="text-neutral-400">Target</span>
+        {targets.length ? (
+          targets.map((id) => (
+            <Link
+              key={id}
+              to={`/targets?target=${encodeURIComponent(id)}`}
+              title={id}
+              onClick={(e) => e.stopPropagation()}
+              className="max-w-full break-all text-indigo-600 hover:underline dark:text-indigo-400"
+            >
+              {targetNames.get(id) ?? id}
+            </Link>
+          ))
+        ) : (
+          <span className="text-neutral-300 dark:text-neutral-600">—</span>
+        )}
+      </span>
+      <span title={new Date(finding.first_seen_at).toLocaleString()}>
+        <span className="text-neutral-400">First seen </span>
+        {relTime(finding.first_seen_at)}
+      </span>
+    </div>
+  );
 }
 
 /** FindingsView is the deduplicated triage list: one row per tracked finding, with
@@ -92,6 +165,10 @@ export function FindingsView() {
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
   const targetOpts: Option[] = useMemo(
     () => (targets.data ?? []).map((t) => ({ value: t.id, label: t.name })),
+    [targets.data],
+  );
+  const targetNames = useMemo(
+    () => new Map((targets.data ?? []).map((t) => [t.id, t.name])),
     [targets.data],
   );
 
@@ -302,13 +379,13 @@ export function FindingsView() {
                     <th className="px-3 py-2 font-medium">Last seen</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {items.map((f) => (
-                    <tr
-                      key={f.id}
-                      onClick={() => navigate(`/findings/${f.id}`)}
-                      className="cursor-pointer border-b border-neutral-100 last:border-0 hover:bg-neutral-50 dark:border-neutral-800/60 dark:hover:bg-neutral-800/40"
-                    >
+                {items.map((f) => (
+                  <tbody
+                    key={f.id}
+                    onClick={() => navigate(`/findings/${f.id}`)}
+                    className="group cursor-pointer"
+                  >
+                    <tr className="group-hover:bg-neutral-50 dark:group-hover:bg-neutral-800/40">
                       <td className="px-3 py-2">
                         <SeverityBadge severity={f.effective_severity} recast={!!f.recast_severity} />
                       </td>
@@ -345,15 +422,22 @@ export function FindingsView() {
                         {relTime(f.last_seen_at)}
                       </td>
                     </tr>
-                  ))}
-                  {items.length === 0 && (
+                    <tr className="border-b border-neutral-100 group-hover:bg-neutral-50 dark:border-neutral-800/60 dark:group-hover:bg-neutral-800/40">
+                      <td colSpan={6} className="px-3 pt-0 pb-2">
+                        <FindingIdentity finding={f} targetNames={targetNames} />
+                      </td>
+                    </tr>
+                  </tbody>
+                ))}
+                {items.length === 0 && (
+                  <tbody>
                     <tr>
                       <td colSpan={6} className="px-3 py-8 text-center text-neutral-400">
                         No findings match.
                       </td>
                     </tr>
-                  )}
-                </tbody>
+                  </tbody>
+                )}
               </table>
             </div>
           </Card>

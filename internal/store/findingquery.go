@@ -43,8 +43,8 @@ const (
 type fieldKind int
 
 const (
-	kindEnum      fieldKind = iota // scalar compared exactly (severity/state/disposition/target)
-	kindText                       // scalar substring (host)
+	kindEnum      fieldKind = iota // scalar compared exactly (severity/state/disposition/type)
+	kindText                       // scalar substring (host, matched_at)
 	kindTextTwo                    // substring over two columns (name OR template)
 	kindTextArray                  // text[] membership/substring (cve, tag)
 	kindTarget                     // occurrence provenance target membership
@@ -71,6 +71,8 @@ var findingFields = map[string]fieldSpec{
 	"disposition": {kind: kindEnum, expr: "l.disposition"},
 	"target":      {kind: kindTarget},
 	"host":        {kind: kindText, expr: "l.host"},
+	"matched_at":  {kind: kindText, expr: "l.matched_at"},
+	"type":        {kind: kindEnum, expr: "l.type", lowered: true},
 	"cve":         {kind: kindTextArray, expr: "l.cve"},
 	"tag":         {kind: kindTextArray, expr: "l.tags"},
 }

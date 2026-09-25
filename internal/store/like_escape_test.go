@@ -108,6 +108,7 @@ func TestBuildFindingWhereEscapesLikeMetacharacters(t *testing.T) {
 		op      string
 	}{
 		{name: "host contains percent", query: FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{{Field: "host", Op: "contains", Values: []string{"a%b"}}}}}}, wantPat: "%a\\%b%", field: "host", op: "contains"},
+		{name: "matched_at contains percent", query: FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{{Field: "matched_at", Op: "contains", Values: []string{"a%b"}}}}}}, wantPat: "%a\\%b%", field: "matched_at", op: "contains"},
 		{name: "host contains underscore", query: FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{{Field: "host", Op: "contains", Values: []string{"a_b"}}}}}}, wantPat: "%a\\_b%", field: "host", op: "contains"},
 		{name: "host contains backslash", query: FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{{Field: "host", Op: "contains", Values: []string{"a\\b"}}}}}}, wantPat: "%a\\\\b%", field: "host", op: "contains"},
 		{name: "host contains trailing backslash", query: FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{{Field: "host", Op: "contains", Values: []string{"abc\\"}}}}}}, wantPat: "%abc\\\\%", field: "host", op: "contains"},

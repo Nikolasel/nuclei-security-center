@@ -15,8 +15,10 @@ import {
 } from "./ConditionBuilder";
 import { type Option } from "./filters";
 import {
+  clampColumnWidth,
   columnIdForSort,
   endpointParts,
+  resizeHandleFor,
   sortField,
   FINDINGS_COLUMNS,
   FINDINGS_COLUMNS_KEY,
@@ -25,8 +27,9 @@ import {
   readStoredFindingsColumns,
   visibleFindingsColumns,
   writeStoredFindingsColumns,
+  type ColumnResizeTarget,
   type FindingsColumnId,
-  type FindingsColumnVisibility,
+  type FindingsColumnPrefs,
 } from "./findingsColumns";
 import { Button, Card, cn, ErrorText, FindingStateBadge, Pill, SeverityBadge, Spinner } from "./ui";
 
@@ -62,9 +65,112 @@ const AUTO_MITIGATION_NOTE =
   "Auto-mitigation unavailable: no network host:port, so scan absence cannot automatically mark this finding mitigated";
 
 const columnMenuCls =
-  "z-50 max-h-80 min-w-52 overflow-y-auto rounded-md border border-neutral-200 bg-white p-1 shadow-lg dark:border-neutral-800 dark:bg-neutral-900";
+  "z-50 max-h-80 min-w-56 overflow-y-auto rounded-md border border-neutral-200 bg-white p-1 shadow-lg dark:border-neutral-800 dark:bg-neutral-900";
 const columnItemCls =
   "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-neutral-100 dark:hover:bg-neutral-800";
+
+const RESIZE_STEP_PX = 8;
+const RESIZE_PAGE_STEP_PX = 32;
+
+function ColumnResizeHandle({
+  target,
+  onPreview,
+  onCommit,
+  onReset,
+}: {
+  target: ColumnResizeTarget;
+  onPreview: (id: FindingsColumnId, width: number) => void;
+  onCommit: (id: FindingsColumnId, width: number) => void;
+  onReset: (id: FindingsColumnId) => void;
+}) {
+  const drag = useRef<{
+    pointerId: number;
+    id: FindingsColumnId;
+    startX: number;
+    startWidth: number;
+    latest: number;
+  } | null>(null);
+
+  const finish = () => {
+    const current = drag.current;
+    if (!current) return;
+    drag.current = null;
+    if (current.latest !== current.startWidth) onCommit(current.id, current.latest);
+  };
+
+  const nudge = (next: number) => {
+    const clamped = clampColumnWidth(target.id, next);
+    if (clamped == null) return;
+    onCommit(target.id, clamped);
+  };
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={`Resize ${target.label} column`}
+      aria-valuemin={target.min}
+      aria-valuemax={target.max}
+      aria-valuenow={target.width}
+      tabIndex={0}
+      title="Drag to resize. Double-click to reset."
+      className="group absolute inset-y-0 right-0 z-20 w-3 cursor-col-resize touch-none select-none focus-visible:outline-none"
+      onPointerDown={(e) => {
+        if (e.button !== 0) return;
+        e.stopPropagation();
+        e.currentTarget.setPointerCapture(e.pointerId);
+        drag.current = {
+          pointerId: e.pointerId,
+          id: target.id,
+          startX: e.clientX,
+          startWidth: target.width,
+          latest: target.width,
+        };
+      }}
+      onPointerMove={(e) => {
+        const current = drag.current;
+        if (!current || current.pointerId !== e.pointerId) return;
+        const next = clampColumnWidth(current.id, current.startWidth + (e.clientX - current.startX));
+        if (next == null || next === current.latest) return;
+        current.latest = next;
+        onPreview(current.id, next);
+      }}
+      onPointerUp={(e) => {
+        if (!drag.current || drag.current.pointerId !== e.pointerId) return;
+        finish();
+      }}
+      onPointerCancel={() => finish()}
+      onLostPointerCapture={() => finish()}
+      onDoubleClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        drag.current = null;
+        onReset(target.id);
+      }}
+      onKeyDown={(e) => {
+        const step = e.shiftKey ? RESIZE_PAGE_STEP_PX : RESIZE_STEP_PX;
+        if (e.key === "ArrowLeft" || e.key === "ArrowDown") {
+          e.preventDefault();
+          nudge(target.width - step);
+        } else if (e.key === "ArrowRight" || e.key === "ArrowUp") {
+          e.preventDefault();
+          nudge(target.width + step);
+        } else if (e.key === "Home") {
+          e.preventDefault();
+          nudge(target.min);
+        } else if (e.key === "End") {
+          e.preventDefault();
+          nudge(target.max);
+        }
+      }}
+    >
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-y-1 left-1/2 w-px -translate-x-1/2 bg-neutral-300 group-hover:w-0.5 group-hover:bg-indigo-500 group-focus-visible:w-0.5 group-focus-visible:bg-indigo-500 dark:bg-neutral-600"
+      />
+    </div>
+  );
+}
 
 function EmptyMark() {
   return <span className="text-neutral-300 dark:text-neutral-600">—</span>;
@@ -255,9 +361,11 @@ export function FindingsView() {
   const [offset, setOffset] = useState(() => Math.max(0, Number(searchParams.get("offset")) || 0));
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const [exportNotice, setExportNotice] = useState<{ kind: "warning" | "error"; text: string } | null>(null);
-  const [columnVisibility, setColumnVisibility] = useState<FindingsColumnVisibility>(() =>
+  const [columnPrefs, setColumnPrefs] = useState<FindingsColumnPrefs>(() =>
     mergeFindingsColumns(readStoredFindingsColumns()),
   );
+  const columnPrefsRef = useRef(columnPrefs);
+  columnPrefsRef.current = columnPrefs;
 
   useEffect(() => {
     const t = setTimeout(() => setFilter(compiled), 300);
@@ -285,7 +393,9 @@ export function FindingsView() {
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key !== FINDINGS_COLUMNS_KEY && e.key !== null) return;
-      setColumnVisibility(mergeFindingsColumns(readStoredFindingsColumns()));
+      const next = mergeFindingsColumns(readStoredFindingsColumns());
+      columnPrefsRef.current = next;
+      setColumnPrefs(next);
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
@@ -294,15 +404,34 @@ export function FindingsView() {
   const sortParam = searchParams.get("sort");
   const sortColumn = columnIdForSort(sortParam);
   const columns = useMemo(
-    () => visibleFindingsColumns(columnVisibility, sortParam),
-    [columnVisibility, sortParam],
+    () => visibleFindingsColumns(columnPrefs, sortParam),
+    [columnPrefs, sortParam],
   );
-  const tableMinWidth = findingsTableMinWidth(columns);
+  const tableMinWidth = findingsTableMinWidth(columns, columnPrefs);
   const endpointVisible = columns.some((col) => col.flexible);
 
-  const persistColumns = (next: FindingsColumnVisibility) => {
-    setColumnVisibility(next);
-    writeStoredFindingsColumns(next);
+  const replaceColumnPrefs = (next: FindingsColumnPrefs, options?: { dropWidths?: boolean }) => {
+    columnPrefsRef.current = next;
+    setColumnPrefs(next);
+    writeStoredFindingsColumns(next, options);
+  };
+
+  const previewColumnWidth = (id: FindingsColumnId, width: number) => {
+    const prev = columnPrefsRef.current;
+    const next = { ...prev, [id]: { ...prev[id], width } };
+    columnPrefsRef.current = next;
+    setColumnPrefs(next);
+  };
+
+  const commitColumnWidth = (id: FindingsColumnId, width: number) => {
+    const prev = columnPrefsRef.current;
+    replaceColumnPrefs({ ...prev, [id]: { ...prev[id], width } });
+  };
+
+  const resetColumnWidth = (id: FindingsColumnId) => {
+    const col = FINDINGS_COLUMNS.find((c) => c.id === id);
+    if (col?.width == null) return;
+    commitColumnWidth(id, col.width);
   };
 
   const clearSort = () => {
@@ -313,15 +442,17 @@ export function FindingsView() {
   };
 
   const showColumn = (id: FindingsColumnId) => {
-    if (columnVisibility[id]) return;
-    persistColumns({ ...columnVisibility, [id]: true });
+    const prev = columnPrefsRef.current;
+    if (prev[id].visible) return;
+    replaceColumnPrefs({ ...prev, [id]: { ...prev[id], visible: true } });
   };
 
   const hideColumn = (id: FindingsColumnId) => {
     const remaining = columns.filter((col) => col.id !== id);
     if (remaining.length === 0) return;
     if (id === sortColumn) clearSort();
-    if (columnVisibility[id]) persistColumns({ ...columnVisibility, [id]: false });
+    const prev = columnPrefsRef.current;
+    if (prev[id].visible) replaceColumnPrefs({ ...prev, [id]: { ...prev[id], visible: false } });
   };
 
   // Targets power the Target condition's value picker (value = id, label = name).
@@ -507,9 +638,23 @@ export function FindingsView() {
                     item,
                   ];
                 })}
+                {FINDINGS_COLUMNS.some((col) => col.width != null && columnPrefs[col.id].width !== col.width) && (
+                  <>
+                    <DropdownMenu.Separator className="my-1 h-px bg-neutral-200 dark:bg-neutral-800" />
+                    {FINDINGS_COLUMNS.filter((col) => col.width != null && columnPrefs[col.id].width !== col.width).map((col) => (
+                      <DropdownMenu.Item
+                        key={`reset-width-${col.id}`}
+                        onSelect={() => resetColumnWidth(col.id)}
+                        className={cn(columnItemCls, "text-neutral-500")}
+                      >
+                        Reset {col.label} width
+                      </DropdownMenu.Item>
+                    ))}
+                  </>
+                )}
                 <DropdownMenu.Separator className="my-1 h-px bg-neutral-200 dark:bg-neutral-800" />
                 <DropdownMenu.Item
-                  onSelect={() => persistColumns(mergeFindingsColumns(null))}
+                  onSelect={() => replaceColumnPrefs(mergeFindingsColumns(null), { dropWidths: true })}
                   className={cn(columnItemCls, "text-neutral-500")}
                 >
                   Reset to default
@@ -592,16 +737,27 @@ export function FindingsView() {
               >
                 <colgroup>
                   {columns.map((col) => (
-                    <col key={col.id} style={col.flexible ? undefined : { width: col.width }} />
+                    <col key={col.id} style={col.flexible ? undefined : { width: columnPrefs[col.id].width }} />
                   ))}
                 </colgroup>
                 <thead>
                   <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
-                    {columns.map((col) => (
-                      <th key={col.id} scope="col" className="overflow-hidden px-3 py-2 font-medium whitespace-nowrap">
-                        {col.label}
-                      </th>
-                    ))}
+                    {columns.map((col, index) => {
+                      const resize = resizeHandleFor(columns, index, columnPrefs);
+                      return (
+                        <th key={col.id} scope="col" className="relative px-3 py-2 font-medium whitespace-nowrap">
+                          <span className="block truncate">{col.label}</span>
+                          {resize && (
+                            <ColumnResizeHandle
+                              target={resize}
+                              onPreview={previewColumnWidth}
+                              onCommit={commitColumnWidth}
+                              onReset={resetColumnWidth}
+                            />
+                          )}
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody>

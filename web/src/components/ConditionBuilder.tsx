@@ -22,6 +22,21 @@ interface FieldDef {
 const SEVERITY_OPTS: Option[] = SEVERITIES.map((s) => ({ value: s, label: s.toUpperCase() }));
 const STATE_OPTS: Option[] = EFFECTIVE_STATES.map((s) => ({ value: s, label: STATE_LABELS[s] }));
 const DISPOSITION_OPTS: Option[] = DISPOSITIONS.map((d) => ({ value: d, label: DISPOSITION_LABELS[d] }));
+// Nuclei result protocols. The backend matches `type` case-insensitively, so the
+// picker stores the canonical lowercase value.
+const TYPE_OPTS: Option[] = [
+  "http",
+  "dns",
+  "tcp",
+  "network",
+  "ssl",
+  "websocket",
+  "whois",
+  "file",
+  "headless",
+  "code",
+  "javascript",
+].map((t) => ({ value: t, label: t }));
 
 const FIELDS: FieldDef[] = [
   { value: "name", label: "Name / template", kind: "text", ops: ["contains", "starts_with"] },
@@ -30,6 +45,8 @@ const FIELDS: FieldDef[] = [
   { value: "disposition", label: "Disposition", kind: "enum", ops: ["any_of", "none_of"], options: DISPOSITION_OPTS },
   { value: "target", label: "Target", kind: "enum", ops: ["any_of", "none_of"] },
   { value: "host", label: "Host", kind: "text", ops: ["contains", "not_contains", "starts_with", "is_empty", "is_not_empty"] },
+  { value: "matched_at", label: "Matched at", kind: "text", ops: ["contains", "not_contains", "starts_with", "is_empty", "is_not_empty"] },
+  { value: "type", label: "Type", kind: "enum", ops: ["any_of", "none_of"], options: TYPE_OPTS },
   { value: "cve", label: "CVE", kind: "text", ops: ["contains", "not_contains", "is_empty", "is_not_empty"] },
   { value: "tag", label: "Tag", kind: "tags", ops: ["any_of", "none_of", "is_empty", "is_not_empty"] },
 ];

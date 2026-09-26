@@ -762,7 +762,7 @@ func findingQueryFromRequest(q url.Values) (store.FindingQuery, error) {
 }
 
 var findingFilterQueryParamKeys = []string{
-	"filter", "q", "severity", "state", "disposition", "target_id", "host", "cve", "tag",
+	"filter", "q", "severity", "state", "disposition", "target_id", "host", "matched_at", "type", "cve", "tag",
 }
 
 // validateFindingFilterQueryParams bounds the raw values before the legacy
@@ -802,6 +802,8 @@ func legacyFlatQuery(q url.Values) store.FindingQuery {
 	add("disposition", "any_of", multiCSV(q, "disposition"))
 	add("target", "any_of", multiCSV(q, "target_id"))
 	add("host", "contains", multiCSV(q, "host"))
+	add("matched_at", "contains", multiCSV(q, "matched_at"))
+	add("type", "any_of", multiCSV(q, "type"))
 	add("cve", "contains", multiCSV(q, "cve"))
 	add("tag", "any_of", multiCSV(q, "tag"))
 	if len(conds) == 0 {

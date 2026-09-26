@@ -150,16 +150,28 @@ const findingStateStyles: Record<string, string> = {
   false_positive: "bg-neutral-200 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-500",
 };
 
-/** FindingStateBadge renders a finding's derived effective lifecycle state. */
-export function FindingStateBadge({ state }: { state: EffectiveState | string }) {
+/** FindingStateBadge renders a finding's derived effective lifecycle state.
+ *  `description` is extra context that does not fit in the row (for example
+ *  why auto-mitigation does not apply). It is the tooltip and part of the
+ *  accessible name; the visible label stays the state. */
+export function FindingStateBadge({
+  state,
+  description,
+}: {
+  state: EffectiveState | string;
+  description?: string;
+}) {
+  const label = STATE_LABELS[state as EffectiveState] ?? state;
   return (
     <span
+      title={description || undefined}
+      aria-label={description ? `${label}. ${description}` : undefined}
       className={cn(
-        "inline-block rounded px-1.5 py-0.5 text-xs font-medium",
+        "inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-xs font-medium",
         findingStateStyles[state] ?? "bg-neutral-100 text-neutral-700",
       )}
     >
-      {STATE_LABELS[state as EffectiveState] ?? state}
+      {label}
     </span>
   );
 }

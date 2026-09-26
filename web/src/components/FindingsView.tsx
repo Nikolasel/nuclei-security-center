@@ -1,6 +1,6 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { Filter } from "lucide-react";
+import { Columns3, Filter } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, type ExportFormat, type LifecycleFinding } from "../api";
@@ -14,6 +14,20 @@ import {
   type Row,
 } from "./ConditionBuilder";
 import { type Option } from "./filters";
+import {
+  columnIdForSort,
+  endpointParts,
+  sortField,
+  FINDINGS_COLUMNS,
+  FINDINGS_COLUMNS_KEY,
+  findingsTableMinWidth,
+  mergeFindingsColumns,
+  readStoredFindingsColumns,
+  visibleFindingsColumns,
+  writeStoredFindingsColumns,
+  type FindingsColumnId,
+  type FindingsColumnVisibility,
+} from "./findingsColumns";
 import { Button, Card, cn, ErrorText, FindingStateBadge, Pill, SeverityBadge, Spinner } from "./ui";
 
 const EXPORT_FORMATS: { format: ExportFormat; label: string }[] = [
@@ -44,77 +58,173 @@ function relTime(iso: string): string {
   return `${days}d ago`;
 }
 
-/** FindingIdentity is the second line of a triage row: the matched URL, protocol,
- *  tags, resolved target names, and first-seen time. These stay under the six
- *  triage columns so a long URL wraps inside the table instead of adding columns
- *  that clip at 1280×800. */
-function FindingIdentity({
-  finding,
-  targetNames,
-}: {
-  finding: LifecycleFinding;
-  targetNames: Map<string, string>;
-}) {
-  const targets = finding.target_ids ?? [];
+const AUTO_MITIGATION_NOTE =
+  "Auto-mitigation unavailable: no network host:port, so scan absence cannot automatically mark this finding mitigated";
+
+const columnMenuCls =
+  "z-50 max-h-80 min-w-52 overflow-y-auto rounded-md border border-neutral-200 bg-white p-1 shadow-lg dark:border-neutral-800 dark:bg-neutral-900";
+const columnItemCls =
+  "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-neutral-100 dark:hover:bg-neutral-800";
+
+function EmptyMark() {
+  return <span className="text-neutral-300 dark:text-neutral-600">—</span>;
+}
+
+function timeTitle(iso: string): string | undefined {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? undefined : d.toLocaleString();
+}
+
+function CveChip({ cves }: { cves: string[] }) {
+  if (!cves.length) return null;
   return (
-    <div className="flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-1 text-xs text-neutral-600 dark:text-neutral-300">
-      <span className="min-w-0 max-w-full">
-        <span className="text-neutral-400">Matched at </span>
-        {finding.matched_at ? (
-          <span className="break-all font-mono text-neutral-700 dark:text-neutral-200" title={finding.matched_at}>
-            {finding.matched_at}
+    <span className="inline-flex shrink-0 items-center" title={cves.join(", ")}>
+      <span className="max-w-[7.5rem] truncate rounded bg-red-50 px-1.5 py-0.5 font-mono text-[11px] text-red-700 dark:bg-red-950/50 dark:text-red-300">
+        {cves[0]}
+      </span>
+      {cves.length > 1 && (
+        <span className="ml-1 font-mono text-[11px] text-red-700 dark:text-red-300">+{cves.length - 1}</span>
+      )}
+    </span>
+  );
+}
+
+function EndpointCell({ finding }: { finding: LifecycleFinding }) {
+  const parts = endpointParts(finding.matched_at, finding.host, finding.type);
+  if (!parts.hostport && !parts.path) return <EmptyMark />;
+  return (
+    <div className="flex min-w-0 max-w-full items-center gap-1.5" title={parts.title || undefined}>
+      {parts.protocol && (
+        <span className="shrink-0 rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase tracking-wide text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+          {parts.protocol}
+        </span>
+      )}
+      <span className="min-w-0 truncate">
+        {parts.hostport}
+        {parts.path && (
+          <span className="font-mono text-neutral-600 dark:text-neutral-300">
+            {parts.hostport ? " " : ""}
+            {parts.path}
           </span>
-        ) : (
-          <span className="text-neutral-300 dark:text-neutral-600">—</span>
         )}
-      </span>
-      <span>
-        <span className="text-neutral-400">Type </span>
-        {finding.type ? (
-          <span className="font-mono">{finding.type}</span>
-        ) : (
-          <span className="text-neutral-300 dark:text-neutral-600">—</span>
-        )}
-      </span>
-      <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1">
-        <span className="text-neutral-400">Tags</span>
-        {finding.tags?.length ? (
-          finding.tags.map((tag) => (
-            <span
-              key={tag}
-              className="max-w-full break-all rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[11px] text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
-            >
-              {tag}
-            </span>
-          ))
-        ) : (
-          <span className="text-neutral-300 dark:text-neutral-600">—</span>
-        )}
-      </span>
-      <span className="inline-flex min-w-0 max-w-full flex-wrap items-center gap-1">
-        <span className="text-neutral-400">Target</span>
-        {targets.length ? (
-          targets.map((id) => (
-            <Link
-              key={id}
-              to={`/targets?target=${encodeURIComponent(id)}`}
-              title={id}
-              onClick={(e) => e.stopPropagation()}
-              className="max-w-full break-all text-indigo-600 hover:underline dark:text-indigo-400"
-            >
-              {targetNames.get(id) ?? id}
-            </Link>
-          ))
-        ) : (
-          <span className="text-neutral-300 dark:text-neutral-600">—</span>
-        )}
-      </span>
-      <span title={new Date(finding.first_seen_at).toLocaleString()}>
-        <span className="text-neutral-400">First seen </span>
-        {relTime(finding.first_seen_at)}
       </span>
     </div>
   );
+}
+
+function TargetCell({ ids, names }: { ids: string[]; names: Map<string, string> }) {
+  if (!ids.length) return <EmptyMark />;
+  const label = ids.map((id) => names.get(id) ?? id).join(", ");
+  return (
+    <div className="max-w-full truncate" title={label}>
+      {ids.map((id, i) => (
+        <span key={id}>
+          {i > 0 ? ", " : null}
+          <Link
+            to={`/targets?target=${encodeURIComponent(id)}`}
+            title={id}
+            onClick={(e) => e.stopPropagation()}
+            className="text-indigo-600 hover:underline dark:text-indigo-400"
+          >
+            {names.get(id) ?? id}
+          </Link>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function FindingCell({ finding }: { finding: LifecycleFinding }) {
+  const cves = finding.cve ?? [];
+  return (
+    <div className="flex min-w-0 max-w-full items-center gap-1.5">
+      <span className="min-w-0 truncate" title={finding.name || undefined}>
+        {finding.name || <EmptyMark />}
+      </span>
+      {finding.times_mitigated > 0 && (
+        <span className="shrink-0" title="Times gone then re-observed">
+          <Pill tone="warn">↻ {finding.times_mitigated}</Pill>
+        </span>
+      )}
+      <CveChip cves={cves} />
+    </div>
+  );
+}
+
+function TagsCell({ tags }: { tags: string[] }) {
+  if (!tags.length) return <EmptyMark />;
+  return (
+    <div className="flex max-w-full gap-1 overflow-hidden" title={tags.join(", ")}>
+      {tags.map((tag) => (
+        <span
+          key={tag}
+          className="shrink-0 rounded bg-neutral-100 px-1.5 py-0.5 font-mono text-[11px] text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+        >
+          {tag}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function TimeCell({ iso }: { iso: string }) {
+  return (
+    <span className="text-xs text-neutral-500" title={timeTitle(iso)}>
+      {relTime(iso)}
+    </span>
+  );
+}
+
+function FindingCellSwitch({
+  id,
+  finding,
+  targetNames,
+}: {
+  id: FindingsColumnId;
+  finding: LifecycleFinding;
+  targetNames: Map<string, string>;
+}) {
+  switch (id) {
+    case "severity":
+      return <SeverityBadge severity={finding.effective_severity} recast={!!finding.recast_severity} />;
+    case "finding":
+      return <FindingCell finding={finding} />;
+    case "state":
+      return (
+        <FindingStateBadge
+          state={finding.effective_state}
+          description={finding.auto_mitigation_eligible ? undefined : AUTO_MITIGATION_NOTE}
+        />
+      );
+    case "endpoint":
+      return <EndpointCell finding={finding} />;
+    case "last_seen":
+      return <TimeCell iso={finding.last_seen_at} />;
+    case "target":
+      return <TargetCell ids={finding.target_ids ?? []} names={targetNames} />;
+    case "first_seen":
+      return <TimeCell iso={finding.first_seen_at} />;
+    case "cve":
+      return finding.cve?.length ? (
+        <span className="block truncate font-mono text-xs text-red-700 dark:text-red-400" title={finding.cve.join(", ")}>
+          {finding.cve.join(", ")}
+        </span>
+      ) : (
+        <EmptyMark />
+      );
+    case "tags":
+      return <TagsCell tags={finding.tags ?? []} />;
+    case "matched_at":
+      return finding.matched_at ? (
+        <span className="block truncate font-mono text-xs text-neutral-700 dark:text-neutral-200" title={finding.matched_at}>
+          {finding.matched_at}
+        </span>
+      ) : (
+        <EmptyMark />
+      );
+    default:
+      return null;
+  }
 }
 
 /** FindingsView is the deduplicated triage list: one row per tracked finding, with
@@ -145,6 +255,9 @@ export function FindingsView() {
   const [offset, setOffset] = useState(() => Math.max(0, Number(searchParams.get("offset")) || 0));
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const [exportNotice, setExportNotice] = useState<{ kind: "warning" | "error"; text: string } | null>(null);
+  const [columnVisibility, setColumnVisibility] = useState<FindingsColumnVisibility>(() =>
+    mergeFindingsColumns(readStoredFindingsColumns()),
+  );
 
   useEffect(() => {
     const t = setTimeout(() => setFilter(compiled), 300);
@@ -153,13 +266,63 @@ export function FindingsView() {
 
   // Mirror the applied filter + page into the URL (replace, so it doesn't spam
   // history). Navigating to a finding pushes a new entry, so Back restores this
-  // one with its query intact.
+  // one with its query intact. `sort` / `order` are preserved for #311 so this
+  // rewrite does not drop a sort the column picker is responsible for.
+  const searchParamsRef = useRef(searchParams);
+  searchParamsRef.current = searchParams;
   useEffect(() => {
     const p = new URLSearchParams();
     p.set("filter", JSON.stringify(filter));
     if (offset > 0) p.set("offset", String(offset));
+    const sort = searchParamsRef.current.get("sort");
+    const order = searchParamsRef.current.get("order");
+    if (sort) p.set("sort", sort);
+    if (sort && order) p.set("order", order);
     setSearchParams(p, { replace: true });
   }, [filter, offset, setSearchParams]);
+
+  // Another tab editing the same preference updates this table.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== FINDINGS_COLUMNS_KEY && e.key !== null) return;
+      setColumnVisibility(mergeFindingsColumns(readStoredFindingsColumns()));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  const sortParam = searchParams.get("sort");
+  const sortColumn = columnIdForSort(sortParam);
+  const columns = useMemo(
+    () => visibleFindingsColumns(columnVisibility, sortParam),
+    [columnVisibility, sortParam],
+  );
+  const tableMinWidth = findingsTableMinWidth(columns);
+  const endpointVisible = columns.some((col) => col.flexible);
+
+  const persistColumns = (next: FindingsColumnVisibility) => {
+    setColumnVisibility(next);
+    writeStoredFindingsColumns(next);
+  };
+
+  const clearSort = () => {
+    const p = new URLSearchParams(searchParams);
+    p.delete("sort");
+    p.delete("order");
+    setSearchParams(p, { replace: true });
+  };
+
+  const showColumn = (id: FindingsColumnId) => {
+    if (columnVisibility[id]) return;
+    persistColumns({ ...columnVisibility, [id]: true });
+  };
+
+  const hideColumn = (id: FindingsColumnId) => {
+    const remaining = columns.filter((col) => col.id !== id);
+    if (remaining.length === 0) return;
+    if (id === sortColumn) clearSort();
+    if (columnVisibility[id]) persistColumns({ ...columnVisibility, [id]: false });
+  };
 
   // Targets power the Target condition's value picker (value = id, label = name).
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
@@ -299,41 +462,96 @@ export function FindingsView() {
             <span className="text-sm text-neutral-400">No filter — showing all findings</span>
           ))}
 
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger asChild>
-            <Button
-              className="ml-auto"
-              disabled={exporting !== null || !exportReady}
-              title={
-                exportReady
-                  ? "Export the findings matching the current filter"
-                  : "Wait for the current findings list to finish loading"
-              }
-            >
-              {exporting ? "Exporting…" : "Export ▾"}
-            </Button>
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Portal>
-            <DropdownMenu.Content
-              align="end"
-              sideOffset={6}
-              className="min-w-40 rounded-md border border-neutral-200 bg-white p-1 shadow-lg dark:border-neutral-800 dark:bg-neutral-900"
-            >
-              <div className="px-2 py-1 text-xs text-neutral-500">
-                {total} finding{total === 1 ? "" : "s"} (current filter)
-              </div>
-              {EXPORT_FORMATS.map((f) => (
+        <div className="ml-auto flex items-center gap-2">
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <Button title="Choose columns">
+                <Columns3 className="h-4 w-4" aria-hidden />
+                Columns
+              </Button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content align="end" sideOffset={6} className={columnMenuCls}>
+                {sortParam && !sortColumn && (
+                  <DropdownMenu.Item
+                    onSelect={clearSort}
+                    className={cn(columnItemCls, "text-amber-700 dark:text-amber-400")}
+                  >
+                    Clear sort ({sortField(sortParam)})
+                  </DropdownMenu.Item>
+                )}
+                {FINDINGS_COLUMNS.flatMap((col, index) => {
+                  const shown = columns.some((c) => c.id === col.id);
+                  const previous = FINDINGS_COLUMNS[index - 1];
+                  const split = previous?.defaultVisible && !col.defaultVisible;
+                  const item = (
+                    <DropdownMenu.CheckboxItem
+                      key={col.id}
+                      checked={shown}
+                      onSelect={(e) => e.preventDefault()}
+                      onCheckedChange={(checked) => (checked ? showColumn(col.id) : hideColumn(col.id))}
+                      className={columnItemCls}
+                    >
+                      <span className="flex h-4 w-4 items-center justify-center rounded border border-neutral-300 text-[10px] dark:border-neutral-600">
+                        {shown ? "✓" : ""}
+                      </span>
+                      <span>{col.label}</span>
+                      {sortColumn === col.id && (
+                        <span className="ml-auto text-xs text-amber-700 dark:text-amber-400">sorted</span>
+                      )}
+                    </DropdownMenu.CheckboxItem>
+                  );
+                  if (!split) return [item];
+                  return [
+                    <DropdownMenu.Separator key={`${col.id}-split`} className="my-1 h-px bg-neutral-200 dark:bg-neutral-800" />,
+                    item,
+                  ];
+                })}
+                <DropdownMenu.Separator className="my-1 h-px bg-neutral-200 dark:bg-neutral-800" />
                 <DropdownMenu.Item
-                  key={f.format}
-                  onSelect={() => void download(f.format)}
-                  className="cursor-pointer rounded px-2 py-1.5 text-sm outline-none hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                  onSelect={() => persistColumns(mergeFindingsColumns(null))}
+                  className={cn(columnItemCls, "text-neutral-500")}
                 >
-                  {f.label}
+                  Reset to default
                 </DropdownMenu.Item>
-              ))}
-            </DropdownMenu.Content>
-          </DropdownMenu.Portal>
-        </DropdownMenu.Root>
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+          <DropdownMenu.Root>
+            <DropdownMenu.Trigger asChild>
+              <Button
+                disabled={exporting !== null || !exportReady}
+                title={
+                  exportReady
+                    ? "Export the findings matching the current filter"
+                    : "Wait for the current findings list to finish loading"
+                }
+              >
+                {exporting ? "Exporting…" : "Export ▾"}
+              </Button>
+            </DropdownMenu.Trigger>
+            <DropdownMenu.Portal>
+              <DropdownMenu.Content
+                align="end"
+                sideOffset={6}
+                className="min-w-40 rounded-md border border-neutral-200 bg-white p-1 shadow-lg dark:border-neutral-800 dark:bg-neutral-900"
+              >
+                <div className="px-2 py-1 text-xs text-neutral-500">
+                  {total} finding{total === 1 ? "" : "s"} (current filter)
+                </div>
+                {EXPORT_FORMATS.map((f) => (
+                  <DropdownMenu.Item
+                    key={f.format}
+                    onSelect={() => void download(f.format)}
+                    className="cursor-pointer rounded px-2 py-1.5 text-sm outline-none hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                  >
+                    {f.label}
+                  </DropdownMenu.Item>
+                ))}
+              </DropdownMenu.Content>
+            </DropdownMenu.Portal>
+          </DropdownMenu.Root>
+        </div>
       </div>
 
       {exportNotice && (
@@ -368,76 +586,46 @@ export function FindingsView() {
         <>
           <Card>
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table
+                className="table-fixed text-sm"
+                style={{ minWidth: tableMinWidth, width: endpointVisible ? "100%" : tableMinWidth }}
+              >
+                <colgroup>
+                  {columns.map((col) => (
+                    <col key={col.id} style={col.flexible ? undefined : { width: col.width }} />
+                  ))}
+                </colgroup>
                 <thead>
                   <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
-                    <th className="px-3 py-2 font-medium">Severity</th>
-                    <th className="px-3 py-2 font-medium">Name</th>
-                    <th className="px-3 py-2 font-medium">State</th>
-                    <th className="px-3 py-2 font-medium">CVE</th>
-                    <th className="px-3 py-2 font-medium">Host</th>
-                    <th className="px-3 py-2 font-medium">Last seen</th>
+                    {columns.map((col) => (
+                      <th key={col.id} scope="col" className="overflow-hidden px-3 py-2 font-medium whitespace-nowrap">
+                        {col.label}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
-                {items.map((f) => (
-                  <tbody
-                    key={f.id}
-                    onClick={() => navigate(`/findings/${f.id}`)}
-                    className="group cursor-pointer"
-                  >
-                    <tr className="group-hover:bg-neutral-50 dark:group-hover:bg-neutral-800/40">
-                      <td className="px-3 py-2">
-                        <SeverityBadge severity={f.effective_severity} recast={!!f.recast_severity} />
-                      </td>
-                      <td className="px-3 py-2">
-                        <div className="flex items-center gap-2">
-                          <span>{f.name || <span className="text-neutral-400">—</span>}</span>
-                          {f.times_mitigated > 0 && (
-                            <Pill tone="warn">
-                              <span title="Times gone then re-observed">↻ {f.times_mitigated}</span>
-                            </Pill>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-3 py-2">
-                        <FindingStateBadge state={f.effective_state} />
-                        {!f.auto_mitigation_eligible && (
-                          <span
-                            className="ml-2 text-xs text-amber-600 dark:text-amber-400"
-                            title="No network host:port; scan absence cannot automatically mark this finding mitigated"
-                          >
-                            auto-mitigation unavailable
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">
-                        {f.cve?.length ? (
-                          <span className="font-mono text-xs text-red-700 dark:text-red-400">{f.cve.join(", ")}</span>
-                        ) : (
-                          <span className="text-neutral-300 dark:text-neutral-600">—</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2">{f.host}</td>
-                      <td className="px-3 py-2 text-xs text-neutral-500" title={new Date(f.last_seen_at).toLocaleString()}>
-                        {relTime(f.last_seen_at)}
-                      </td>
+                <tbody>
+                  {items.map((f) => (
+                    <tr
+                      key={f.id}
+                      onClick={() => navigate(`/findings/${f.id}`)}
+                      className="cursor-pointer border-b border-neutral-100 hover:bg-neutral-50 last:border-0 dark:border-neutral-800/60 dark:hover:bg-neutral-800/40"
+                    >
+                      {columns.map((col) => (
+                        <td key={col.id} className="max-w-0 overflow-hidden px-3 py-2">
+                          <FindingCellSwitch id={col.id} finding={f} targetNames={targetNames} />
+                        </td>
+                      ))}
                     </tr>
-                    <tr className="border-b border-neutral-100 group-hover:bg-neutral-50 dark:border-neutral-800/60 dark:group-hover:bg-neutral-800/40">
-                      <td colSpan={6} className="px-3 pt-0 pb-2">
-                        <FindingIdentity finding={f} targetNames={targetNames} />
-                      </td>
-                    </tr>
-                  </tbody>
-                ))}
-                {items.length === 0 && (
-                  <tbody>
+                  ))}
+                  {items.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-3 py-8 text-center text-neutral-400">
+                      <td colSpan={columns.length} className="px-3 py-8 text-center text-neutral-400">
                         No findings match.
                       </td>
                     </tr>
-                  </tbody>
-                )}
+                  )}
+                </tbody>
               </table>
             </div>
           </Card>

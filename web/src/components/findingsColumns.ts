@@ -213,10 +213,10 @@ export interface ColumnResizeTarget {
 }
 
 /** resizeHandleFor is the separator drawn on the right edge of `columns[hostIndex]`.
- *  A fixed column owns that edge and resizes itself, unless the previous
- *  column is the flexible one — then the handle lives on the flexible
- *  column's edge and resizes the following fixed column. Endpoint never
- *  takes a pixel width; it absorbs whatever slack the fixed columns leave. */
+ *  A fixed column owns that edge and resizes itself. Endpoint has no pixel
+ *  width, so its edge resizes the next fixed column and absorbs the slack.
+ *  Those are different edges: the column after Endpoint still gets its own
+ *  right-edge handle for the boundary that follows it. */
 export function resizeHandleFor(
   columns: readonly FindingsColumn[],
   hostIndex: number,
@@ -228,7 +228,7 @@ export function resizeHandleFor(
   if (host.flexible) {
     const next = columns[hostIndex + 1];
     if (next && !next.flexible) target = next;
-  } else if (!columns[hostIndex - 1]?.flexible) {
+  } else {
     target = host;
   }
   if (!target?.width) return null;

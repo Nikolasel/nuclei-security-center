@@ -70,10 +70,24 @@ const OP_LABEL: Record<string, string> = {
 
 const fieldDef = (f: string) => FIELDS.find((x) => x.value === f) ?? FIELDS[0];
 const opNeedsValue = (op: string) => op !== "is_empty" && op !== "is_not_empty";
+const isSingleDateOp = (op: string) => op === "before" || op === "after";
 function rowComplete(r: Row): boolean {
   if (!opNeedsValue(r.op)) return true;
   if (r.op === "between") return Boolean(r.values[0]?.trim()) && Boolean(r.values[1]?.trim());
+  if (isSingleDateOp(r.op)) return Boolean(r.values[0]?.trim());
   return r.values.some((v) => v.trim() !== "");
+}
+function queryValues(r: Row): string[] {
+  if (isSingleDateOp(r.op)) return [r.values[0].trim()];
+  return r.values;
+}
+function valuesAfterOpChange(op: string, values: string[]): string[] {
+  if (!opNeedsValue(op)) return [];
+  if (isSingleDateOp(op)) {
+    const first = values[0]?.trim() ?? "";
+    return first ? [first] : [];
+  }
+  return values;
 }
 function dateInputValue(v: string | undefined): string {
   if (!v) return "";
@@ -101,7 +115,7 @@ export function rowsToQuery(rows: Row[]): FindingQuery {
   const groups: { conditions: { field: string; op: string; values?: string[] }[] }[] = [];
   rows.forEach((r, i) => {
     if (!rowComplete(r)) return;
-    const cond = opNeedsValue(r.op) ? { field: r.field, op: r.op, values: r.values } : { field: r.field, op: r.op };
+    const cond = opNeedsValue(r.op) ? { field: r.field, op: r.op, values: queryValues(r) } : { field: r.field, op: r.op };
     if (i === 0 || r.connector === "or" || groups.length === 0) groups.push({ conditions: [cond] });
     else groups[groups.length - 1].conditions.push(cond);
   });
@@ -182,8 +196,10 @@ export function ConditionBuilder({
           merged.op = fieldDef(patch.field).ops[0];
           merged.values = [];
         }
-        // Changing to/from a no-value op clears stale values.
-        if (patch.op && !opNeedsValue(patch.op)) merged.values = [];
+        // Changing to/from a no-value op clears stale values. Switching a
+        // filled `between` row to `before`/`after` must drop the second date
+        // so compileTimeCondition receives exactly one value.
+        if (patch.op) merged.values = valuesAfterOpChange(patch.op, merged.values);
         return merged;
       }),
     );

@@ -192,9 +192,38 @@ func TestBuildFindingWhereTimeRangeAndNameNegation(t *testing.T) {
 		t.Fatalf("between exclusive hi = %#v", betweenArgs[1])
 	}
 
+	emptyName, err := buildFindingWhere(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{
+		{Field: "name", Op: "is_empty"},
+	}}}}, &[]any{})
+	if err != nil {
+		t.Fatalf("name is_empty: %v", err)
+	}
+	if !strings.Contains(emptyName, "(l.name IS NULL OR l.name = '')") {
+		t.Fatalf("name is_empty SQL = %s", emptyName)
+	}
+	if strings.Contains(emptyName, "l.template_id") {
+		t.Fatalf("name is_empty must not require template_id: %s", emptyName)
+	}
+	notEmptyName, err := buildFindingWhere(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{
+		{Field: "name", Op: "is_not_empty"},
+	}}}}, &[]any{})
+	if err != nil {
+		t.Fatalf("name is_not_empty: %v", err)
+	}
+	if !strings.Contains(notEmptyName, "(l.name IS NOT NULL AND l.name <> '')") {
+		t.Fatalf("name is_not_empty SQL = %s", notEmptyName)
+	}
+	if strings.Contains(notEmptyName, "l.template_id") {
+		t.Fatalf("name is_not_empty must not treat template_id as a name: %s", notEmptyName)
+	}
+	if !strings.Contains(where, "l.template_id ILIKE ANY($") {
+		t.Fatalf("name not_contains must still search template_id: %s", where)
+	}
+
 	rejected := []FindingCondition{
 		{Field: "first_seen_at", Op: "contains", Values: []string{"2026-01-01"}},
 		{Field: "first_seen_at", Op: "after", Values: []string{"not-a-date"}},
+		{Field: "first_seen_at", Op: "after", Values: []string{"2026-01-01", "2026-01-07"}},
 		{Field: "first_seen_at", Op: "between", Values: []string{"2026-02-01", "2026-01-01"}},
 		{Field: "name", Op: "after", Values: []string{"2026-01-01"}},
 		{Field: "severity", Op: "before", Values: []string{"2026-01-01"}},

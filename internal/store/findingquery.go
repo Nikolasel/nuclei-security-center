@@ -396,10 +396,14 @@ func emptyExpr(spec fieldSpec, empty bool) string {
 		return fmt.Sprintf("coalesce(array_length(%s, 1), 0) > 0", spec.expr)
 	}
 	if spec.kind == kindTextTwo {
+		// Emptiness is the display name only. template_id is NOT NULL on every
+		// finding, so requiring both columns blank would make is_empty match
+		// nothing and is_not_empty match everything. contains / not_contains
+		// still search name OR template_id (see anyLike).
 		if empty {
-			return fmt.Sprintf("((%s IS NULL OR %s = '') AND (%s IS NULL OR %s = ''))", spec.expr, spec.expr, spec.exprB, spec.exprB)
+			return fmt.Sprintf("(%s IS NULL OR %s = '')", spec.expr, spec.expr)
 		}
-		return fmt.Sprintf("((%s IS NOT NULL AND %s <> '') OR (%s IS NOT NULL AND %s <> ''))", spec.expr, spec.expr, spec.exprB, spec.exprB)
+		return fmt.Sprintf("(%s IS NOT NULL AND %s <> '')", spec.expr, spec.expr)
 	}
 	if empty {
 		return fmt.Sprintf("(%s IS NULL OR %s = '')", spec.expr, spec.expr)

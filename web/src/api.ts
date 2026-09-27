@@ -962,6 +962,16 @@ export const api = {
   },
   fetchFindingsExport,
   getFinding: (id: number | string) => request<FindingDetail>("GET", `/api/findings/${id}`),
+  listFindingOccurrences: (id: number | string, q: { limit?: number; offset?: number } = {}) => {
+    const p = new URLSearchParams();
+    if (q.limit != null) p.set("limit", String(q.limit));
+    if (q.offset != null) p.set("offset", String(q.offset));
+    const qs = p.toString();
+    return request<Page<Occurrence>>(
+      "GET",
+      qs ? `/api/findings/${id}/occurrences?${qs}` : `/api/findings/${id}/occurrences`,
+    );
+  },
   getOccurrence: (id: number | string) => request<OccurrenceDetail>("GET", `/api/occurrences/${id}`),
   // Analyst overlays (operator only). accept_expires_at applies to "accepted".
   setDisposition: (

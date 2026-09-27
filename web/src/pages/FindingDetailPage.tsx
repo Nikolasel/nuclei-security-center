@@ -194,10 +194,13 @@ function TriagePanel({ f }: { f: FindingDetail }) {
   );
 }
 
+const OCCURRENCE_PAGE_SIZE = 50;
+
 export function FindingDetailPage() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
+  const [occOffset, setOccOffset] = useState(0);
   // Go back to the findings list preserving its filter: when we arrived here from
   // within the app, pop history (which restores /findings?filter=… with its URL
   // state). A direct visit (no in-app history) falls back to the bare list.
@@ -206,6 +209,11 @@ export function FindingDetailPage() {
     else navigate("/findings");
   };
   const q = useQuery({ queryKey: ["finding", id], queryFn: () => api.getFinding(id) });
+  const occurrences = useQuery({
+    queryKey: ["finding-occurrences", id, occOffset],
+    queryFn: () => api.listFindingOccurrences(id, { limit: OCCURRENCE_PAGE_SIZE, offset: occOffset }),
+    enabled: q.isSuccess,
+  });
   const targets = useQuery({ queryKey: ["targets"], queryFn: () => api.listTargets() });
   const targetNames = new Map((targets.data ?? []).map((target) => [target.id, target.name]));
 
@@ -246,7 +254,20 @@ export function FindingDetailPage() {
             <span className="font-mono text-xs">{raw["matched-at"] || f.matched_at || "—"}</span>
           </Meta>
           <Meta label="Type">{raw.type || f.type || "—"}</Meta>
-          <Meta label="Occurrences">{f.occurrence_count}</Meta>
+          <Meta label="Occurrences">
+            <span>{f.occurrence_count}</span>
+            {f.latest_occurrence_id != null && (
+              <>
+                {" "}
+                <Link
+                  to={`/occurrences/${f.latest_occurrence_id}`}
+                  className="text-indigo-600 hover:underline dark:text-indigo-400"
+                >
+                  latest
+                </Link>
+              </>
+            )}
+          </Meta>
           <Meta label="Targets">
             {(f.target_ids ?? []).length ? (
               <div className="flex flex-wrap gap-1">
@@ -316,6 +337,105 @@ export function FindingDetailPage() {
             )}
           </Meta>
         </dl>
+      </Section>
+
+      <Section title="Occurrences">
+        <p className="mb-3 text-xs text-neutral-500">
+          Retained per-scan observations of this finding, newest first. Occurrences from scans
+          removed by retention are deleted with those scans and are not listed here.
+        </p>
+        {f.latest_occurrence_id != null && (
+          <p className="mb-3 text-sm">
+            <Link
+              to={`/occurrences/${f.latest_occurrence_id}`}
+              className="text-indigo-600 hover:underline dark:text-indigo-400"
+            >
+              Open latest occurrence
+            </Link>
+          </p>
+        )}
+        {occurrences.isLoading && <Spinner />}
+        {occurrences.isError && <ErrorText error={occurrences.error} />}
+        {occurrences.data && (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="text-xs uppercase tracking-wide text-neutral-500">
+                  <tr>
+                    <th className="py-1 pr-3 font-medium">Seen</th>
+                    <th className="py-1 pr-3 font-medium">Scan</th>
+                    <th className="py-1 pr-3 font-medium">Target</th>
+                    <th className="py-1 pr-3 font-medium">Host</th>
+                    <th className="py-1 pr-3 font-medium">Matched at</th>
+                    <th className="py-1 font-medium">Occurrence</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {occurrences.data.items.map((row) => (
+                    <tr key={row.id} className="border-t border-neutral-200 dark:border-neutral-800">
+                      <td className="py-2 pr-3 whitespace-nowrap">
+                        {new Date(row.created_at).toLocaleString()}
+                        {row.id === f.latest_occurrence_id && (
+                          <span className="ml-2 text-xs text-neutral-500">latest</span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-3">
+                        <Link
+                          to={`/scans/${row.scan_id}`}
+                          className="font-mono text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+                        >
+                          {row.scan_id}
+                        </Link>
+                      </td>
+                      <td className="py-2 pr-3">
+                        {row.target_id ? (
+                          <Link
+                            to={`/targets?target=${encodeURIComponent(row.target_id)}`}
+                            title={row.target_id}
+                            className="text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+                          >
+                            {targetNames.get(row.target_id) ?? row.target_id}
+                          </Link>
+                        ) : (
+                          <span className="text-neutral-400">ad-hoc</span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-3 break-all">{row.host || "—"}</td>
+                      <td className="py-2 pr-3">
+                        <span className="font-mono text-xs">{row.matched_at || "—"}</span>
+                      </td>
+                      <td className="py-2">
+                        <Link
+                          to={`/occurrences/${row.id}`}
+                          className="text-indigo-600 hover:underline dark:text-indigo-400"
+                        >
+                          Open
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {occurrences.data.total > OCCURRENCE_PAGE_SIZE && (
+              <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
+                <span className="text-neutral-500">
+                  {occOffset + 1}–{Math.min(occOffset + OCCURRENCE_PAGE_SIZE, occurrences.data.total)} of{" "}
+                  {occurrences.data.total} retained
+                </span>
+                <Button disabled={occOffset === 0} onClick={() => setOccOffset(Math.max(0, occOffset - OCCURRENCE_PAGE_SIZE))}>
+                  Previous
+                </Button>
+                <Button
+                  disabled={occOffset + OCCURRENCE_PAGE_SIZE >= occurrences.data.total}
+                  onClick={() => setOccOffset(occOffset + OCCURRENCE_PAGE_SIZE)}
+                >
+                  Next
+                </Button>
+              </div>
+            )}
+          </>
+        )}
       </Section>
 
       <Section title="Result identity">

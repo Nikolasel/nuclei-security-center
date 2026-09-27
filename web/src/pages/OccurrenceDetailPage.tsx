@@ -89,6 +89,18 @@ export function OccurrenceDetailPage() {
             </Link>
           </Meta>
           <Meta label="Observed at">{new Date(occurrence.created_at).toLocaleString()}</Meta>
+          <Meta label="Lifecycle finding">
+            {occurrence.finding_id != null ? (
+              <Link
+                to={`/findings/${occurrence.finding_id}`}
+                className="text-indigo-600 hover:underline dark:text-indigo-400"
+              >
+                Open merged finding
+              </Link>
+            ) : (
+              <span className="text-neutral-400">—</span>
+            )}
+          </Meta>
           <Meta label="Target">
             {occurrence.target_id ? (
               <Link

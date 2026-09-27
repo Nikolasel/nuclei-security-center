@@ -736,8 +736,9 @@ export function FindingsView() {
               >
                 <colgroup>
                   {columns.map((col) => (
-                    <col key={col.id} style={col.flexible ? undefined : { width: columnPrefs[col.id].width }} />
+                    <col key={col.id} style={{ width: columnPrefs[col.id].width }} />
                   ))}
+                  <col />
                 </colgroup>
                 <thead>
                   <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
@@ -757,6 +758,7 @@ export function FindingsView() {
                         </th>
                       );
                     })}
+                    <th aria-hidden className="p-0" />
                   </tr>
                 </thead>
                 <tbody>
@@ -764,18 +766,19 @@ export function FindingsView() {
                     <tr
                       key={f.id}
                       onClick={() => navigate(`/findings/${f.id}`)}
-                      className="cursor-pointer border-b border-neutral-100 hover:bg-neutral-50 last:border-0 dark:border-neutral-800/60 dark:hover:bg-neutral-800/40"
+                      className="group/finding cursor-pointer border-b border-neutral-100 hover:bg-neutral-50 last:border-0 dark:border-neutral-800/60 dark:hover:bg-neutral-800/40"
                     >
                       {columns.map((col) => (
                         <td key={col.id} className="max-w-0 overflow-hidden px-3 py-2">
                           <FindingCellSwitch id={col.id} finding={f} targetNames={targetNames} />
                         </td>
                       ))}
+                      <td className="border-b border-neutral-100 p-0 group-last/finding:border-b-0 dark:border-neutral-800/60" />
                     </tr>
                   ))}
                   {items.length === 0 && (
                     <tr>
-                      <td colSpan={columns.length} className="px-3 py-8 text-center text-neutral-400">
+                      <td colSpan={columns.length + 1} className="px-3 py-8 text-center text-neutral-400">
                         No findings match.
                       </td>
                     </tr>

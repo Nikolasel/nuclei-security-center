@@ -13,9 +13,13 @@
 export const FINDINGS_COLUMNS_KEY = "nsc.findings.columns";
 
 /** Drag floor for Endpoint. A protocol pill plus host and path needs more than
- *  the 72–96px floors used by the other columns. When Endpoint is the last
- *  visible column it stretches, and the table min-width counts this floor. */
+ *  the 72–96px floors used by the other columns. */
 export const ENDPOINT_MIN_PX = 240;
+
+/** Minimum width of the trailing filler column. It absorbs leftover table
+ *  width so every real column keeps a stored pixel width. The table scrolls
+ *  once the real widths plus this floor exceed the container. */
+export const FINDINGS_FILLER_MIN_PX = 24;
 
 export type FindingsColumnId =
   | "severity"
@@ -33,13 +37,11 @@ export interface FindingsColumn {
   id: FindingsColumnId;
   label: string;
   defaultVisible: boolean;
-  /** Fixed layout width in px. The last visible column ignores it and stretches. */
+  /** Fixed layout width in px. Leftover table width goes to the filler column. */
   width?: number;
   /** Inclusive drag and keyboard range. */
   minWidth?: number;
   maxWidth?: number;
-  /** Runtime mark on the last visible column: it fills leftover table width. */
-  flexible?: boolean;
   /** `sort` query values that refer to this column (#311). Hiding the column
    *  clears that sort so the list order is not unexplained. */
   sortFields: readonly string[];
@@ -47,7 +49,8 @@ export interface FindingsColumn {
 
 // Floors sit in the 72–96px range: short labels near 72, content columns at 96.
 // Endpoint's floor is ENDPOINT_MIN_PX. maxWidth is what a stored 5000px preference clamps to.
-// No catalog column is flexible — visibleFindingsColumns marks the last visible one.
+// Every catalog column has a pixel width. A filler column after the last real
+// one absorbs leftover table width.
 export const FINDINGS_COLUMNS: readonly FindingsColumn[] = [
   { id: "severity", label: "Severity", defaultVisible: true, width: 112, minWidth: 80, maxWidth: 240, sortFields: ["severity", "effective_severity"] },
   { id: "finding", label: "Finding", defaultVisible: true, width: 320, minWidth: 96, maxWidth: 640, sortFields: ["name", "template_id"] },
@@ -192,21 +195,16 @@ export function columnIdForSort(sort: string | null): FindingsColumnId | null {
 }
 
 /** visibleFindingsColumns is the catalog order, with a hidden sort column
- *  forced on so the row order has a visible cause. The last visible column
- *  stretches to fill the table; every column before it keeps a pixel width. */
+ *  forced on so the row order has a visible cause. Every returned column keeps
+ *  a pixel width; leftover table width belongs to the filler column. */
 export function visibleFindingsColumns(prefs: FindingsColumnPrefs, sort: string | null): FindingsColumn[] {
   const sortColumn = columnIdForSort(sort);
-  const visible = FINDINGS_COLUMNS.filter((c) => prefs[c.id].visible || c.id === sortColumn);
-  if (visible.length === 0) return visible;
-  const last = visible.length - 1;
-  return visible.map((col, index) => (index === last ? { ...col, flexible: true } : col));
+  return FINDINGS_COLUMNS.filter((c) => prefs[c.id].visible || c.id === sortColumn);
 }
 
 export function findingsTableMinWidth(columns: readonly FindingsColumn[], prefs: FindingsColumnPrefs): number {
-  return columns.reduce((sum, col) => {
-    if (col.flexible) return sum + (col.minWidth ?? 0);
-    return sum + (prefs[col.id].width ?? col.width ?? 0);
-  }, 0);
+  const real = columns.reduce((sum, col) => sum + (prefs[col.id].width ?? col.width ?? 0), 0);
+  return real + FINDINGS_FILLER_MIN_PX;
 }
 
 export interface ColumnResizeTarget {
@@ -218,14 +216,14 @@ export interface ColumnResizeTarget {
 }
 
 /** resizeHandleFor is the separator on the right edge of `columns[hostIndex]`.
- *  That boundary resizes the column on its left. The last visible column
- *  stretches to the table edge, so it has no handle. */
+ *  That boundary resizes the column on its left. The filler column is not in
+ *  `columns`, so every real column has a handle and the filler has none. */
 export function resizeHandleFor(
   columns: readonly FindingsColumn[],
   hostIndex: number,
   prefs: FindingsColumnPrefs,
 ): ColumnResizeTarget | null {
-  if (hostIndex < 0 || hostIndex >= columns.length - 1) return null;
+  if (hostIndex < 0 || hostIndex >= columns.length) return null;
   const host = columns[hostIndex];
   if (!host?.width) return null;
   const bounds = columnBounds(host);

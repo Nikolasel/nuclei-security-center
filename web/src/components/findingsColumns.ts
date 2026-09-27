@@ -31,7 +31,8 @@ export type FindingsColumnId =
   | "first_seen"
   | "cve"
   | "tags"
-  | "matched_at";
+  | "matched_at"
+  | "result_identity";
 
 export interface FindingsColumn {
   id: FindingsColumnId;
@@ -62,6 +63,7 @@ export const FINDINGS_COLUMNS: readonly FindingsColumn[] = [
   { id: "cve", label: "CVE", defaultVisible: false, width: 168, minWidth: 72, maxWidth: 420, sortFields: ["cve"] },
   { id: "tags", label: "Tags", defaultVisible: false, width: 180, minWidth: 72, maxWidth: 420, sortFields: ["tags", "tag"] },
   { id: "matched_at", label: "Matched at", defaultVisible: false, width: 280, minWidth: 96, maxWidth: 640, sortFields: ["matched_at"] },
+  { id: "result_identity", label: "Result identity", defaultVisible: false, width: 280, minWidth: 96, maxWidth: 640, sortFields: ["matcher_name", "extractor_name", "extracted_results"] },
 ];
 
 export interface FindingsColumnPref {
@@ -320,4 +322,31 @@ function splitAuthorityPath(raw: string): { hostport: string; path: string } | n
   else if (rest.startsWith("?") || rest.startsWith("#")) path = `/${rest}`;
   if (!authority && !path) return null;
   return { hostport: authority, path };
+}
+
+export interface ResultIdentityFields {
+  matcher_name?: string;
+  extractor_name?: string;
+  extracted_results?: string[];
+}
+
+/** resultIdentityLine is the unlabeled compact tuple shown under Finding
+ *  (and in the Result identity column). Empty when none of the three parts
+ *  are present. */
+export function resultIdentityLine(finding: ResultIdentityFields): string {
+  const bits: string[] = [];
+  if (finding.matcher_name) bits.push(finding.matcher_name);
+  if (finding.extractor_name) bits.push(finding.extractor_name);
+  if (finding.extracted_results?.length) bits.push(finding.extracted_results.join(", "));
+  return bits.join(" · ");
+}
+
+/** resultIdentityTitle labels each part so a hover matches the detail page
+ *  (matcher / extractor / extracted) without spending list-cell space. */
+export function resultIdentityTitle(finding: ResultIdentityFields): string {
+  const bits: string[] = [];
+  if (finding.matcher_name) bits.push(`matcher: ${finding.matcher_name}`);
+  if (finding.extractor_name) bits.push(`extractor: ${finding.extractor_name}`);
+  if (finding.extracted_results?.length) bits.push(`extracted: ${finding.extracted_results.join(", ")}`);
+  return bits.join(" · ");
 }

@@ -2,6 +2,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
+import { resultIdentityLine, resultIdentityTitle } from "./findingsColumns";
 import { Button, Card, cn, ErrorText, Input, SeverityBadge, Spinner } from "./ui";
 
 const SEVERITIES = ["critical", "high", "medium", "low", "info"];
@@ -120,8 +121,8 @@ export function ScanFindingsView({ scanId }: { scanId: string }) {
                       <td className="px-3 py-2">
                         <div>{f.name || <span className="text-neutral-400">—</span>}</div>
                         {(f.matcher_name || f.extractor_name || f.extracted_results?.length) ? (
-                          <div className="truncate font-mono text-[11px] text-neutral-500" title={[f.matcher_name, f.extractor_name, ...(f.extracted_results ?? [])].filter(Boolean).join(" · ")}>
-                            {[f.matcher_name, f.extractor_name, ...(f.extracted_results ?? [])].filter(Boolean).join(" · ")}
+                          <div className="truncate font-mono text-[11px] text-neutral-500" title={resultIdentityTitle(f)}>
+                            {resultIdentityLine(f)}
                           </div>
                         ) : null}
                       </td>

@@ -289,9 +289,9 @@ empty)*. Each condition is `{field, op, values}`:
 
 | Field | Operators |
 | --- | --- |
-| `severity`, `state`, `disposition`, `target` | `any_of`, `none_of` |
+| `severity`, `state`, `disposition`, `target`, `type` | `any_of`, `none_of` |
 | `name` (name/template) | `contains`, `starts_with` |
-| `host` | `contains`, `not_contains`, `starts_with`, `is_empty`, `is_not_empty` |
+| `host`, `matched_at` | `contains`, `not_contains`, `starts_with`, `is_empty`, `is_not_empty` |
 | `cve` | `contains`, `not_contains`, `is_empty`, `is_not_empty` |
 | `tag` | `any_of`, `none_of`, `is_empty`, `is_not_empty` |
 
@@ -308,9 +308,11 @@ FILTER='{"groups":[{"conditions":[
 curl -sb jar.txt --get "localhost:8080/api/findings" --data-urlencode "filter=$FILTER" --data limit=50 | jq
 ```
 
-The legacy flat params (`severity=critical,high&host=…`, repeated or comma-separated) are still
-accepted when no `filter` is given — compiled into a single AND-group — so old bookmarks and API
-callers keep working. Arbitrary nested parenthesized grouping (beyond OR-of-AND) remains a
+The legacy flat params (`severity=critical,high&host=…&matched_at=…&type=http,dns`, repeated
+or comma-separated) are still accepted when no `filter` is given — compiled into a single
+AND-group — so old bookmarks and API callers keep working. `matched_at` is a substring match;
+`type` is an exact protocol match (`http`, `dns`, `tcp`, `whois`, and the other Nuclei result
+types), compared case-insensitively. Arbitrary nested parenthesized grouping (beyond OR-of-AND) remains a
 possible future extension.
 
 ## Export

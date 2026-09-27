@@ -295,7 +295,7 @@ export function ConditionBuilder({
                   <Select
                     value={r.values[0] ?? ""}
                     onChange={(e) => setRow(r.id, { values: e.target.value ? [e.target.value] : [] })}
-                    className="w-full"
+                    className="w-28 shrink-0"
                     aria-label="Boolean value"
                   >
                     <option value="">Select…</option>
@@ -312,7 +312,7 @@ export function ConditionBuilder({
                     value={r.values[0] ?? ""}
                     onChange={(e) => setRow(r.id, { values: e.target.value.trim() ? [e.target.value.trim()] : [] })}
                     placeholder="number…"
-                    className="w-full"
+                    className="w-24 shrink-0 tabular-nums"
                   />
                 ) : def.kind === "time" ? (
                   <div className="flex flex-nowrap items-center gap-2">

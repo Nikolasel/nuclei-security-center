@@ -304,16 +304,17 @@ function TimeCell({ iso }: { iso: string }) {
 }
 
 function AcceptExpiryNote({ iso }: { iso?: string }) {
+  const noteClass = "min-w-0 max-w-full truncate text-[11px] text-neutral-500";
   if (!iso) {
-    return <span className="truncate text-[11px] text-neutral-500">no expiry</span>;
+    return <span className={noteClass}>no expiry</span>;
   }
   const at = new Date(iso);
   if (Number.isNaN(at.getTime())) {
-    return <span className="truncate text-[11px] text-neutral-500">expires —</span>;
+    return <span className={noteClass}>expires —</span>;
   }
   const lapsed = at.getTime() <= Date.now();
   return (
-    <span className="truncate text-[11px] text-neutral-500" title={timeTitle(iso)}>
+    <span className={noteClass} title={timeTitle(iso)}>
       {lapsed ? "expired" : "expires"} {at.toLocaleDateString()}
     </span>
   );
@@ -337,7 +338,7 @@ function FindingCellSwitch({
       return <FindingCell finding={finding} showIdentity={showInlineIdentity} />;
     case "state":
       return (
-        <div className="flex min-w-0 flex-col gap-0.5">
+        <div className="flex min-w-0 flex-col items-start gap-0.5">
           <FindingStateBadge
             state={finding.effective_state}
             description={finding.auto_mitigation_eligible ? undefined : AUTO_MITIGATION_NOTE}

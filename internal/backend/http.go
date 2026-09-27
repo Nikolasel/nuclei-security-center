@@ -154,6 +154,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/findings", s.requireRole(RoleViewer, s.handleListFindings))
 	mux.HandleFunc("GET /api/findings/export", s.requireRole(RoleViewer, s.handleExportFindings))
 	mux.HandleFunc("GET /api/findings/{id}", s.requireRole(RoleViewer, s.handleGetFinding))
+	mux.HandleFunc("GET /api/findings/{id}/occurrences", s.requireRole(RoleViewer, s.handleListFindingOccurrences))
 	mux.HandleFunc("GET /api/occurrences/{id}", s.requireRole(RoleViewer, s.handleGetOccurrence))
 	mux.HandleFunc("PATCH /api/findings/{id}/disposition", s.mutation(eventFindingTriaged, "finding.disposition", "finding", RoleOperator, s.handleSetDisposition))
 	mux.HandleFunc("PATCH /api/findings/{id}/severity", s.mutation(eventFindingTriaged, "finding.recast", "finding", RoleOperator, s.handleRecastSeverity))
@@ -898,6 +899,27 @@ func (s *Server) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// handleListFindingOccurrences returns retained per-scan occurrences of one
+// lifecycle finding, paginated, most recent first. Unknown finding → 404; a
+// finding with no remaining occurrences is an empty page, not an error.
+func (s *Server) handleListFindingOccurrences(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid finding id", http.StatusBadRequest)
+		return
+	}
+	limit, offset := pageParams(r.URL.Query())
+	rows, total, err := s.store.ListFindingOccurrences(r.Context(), id, limit, offset)
+	if err != nil {
+		s.writeStoreErr(w, err)
+		return
+	}
+	if rows == nil {
+		rows = []store.FindingRow{}
+	}
+	writeJSON(w, http.StatusOK, occurrencesPage{Items: rows, Total: total, Limit: limit, Offset: offset})
 }
 
 func (s *Server) handleGetOccurrence(w http.ResponseWriter, r *http.Request) {

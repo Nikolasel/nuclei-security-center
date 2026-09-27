@@ -1104,6 +1104,59 @@ func (s *Store) GetOccurrence(ctx context.Context, id int64) (OccurrenceDetail, 
 	return detail, nil
 }
 
+// ListFindingOccurrences returns retained per-scan occurrences of one lifecycle
+// finding, most recent first. Unknown findings are ErrNotFound; a known finding
+// with no remaining rows (for example after scan retention) is an empty page.
+func (s *Store) ListFindingOccurrences(ctx context.Context, findingID int64, limit, offset int) ([]FindingRow, int, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	var exists bool
+	if err := s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM finding_lifecycle WHERE id = $1)`, findingID).Scan(&exists); err != nil {
+		return nil, 0, err
+	}
+	if !exists {
+		return nil, 0, ErrNotFound
+	}
+
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM findings WHERE finding_id = $1`, findingID).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, scan_id, target_id, finding_id, template_id, name, severity, host, matched_at, type, cve, tags,
+		        matcher_name, extractor_name, extracted_results, created_at
+		   FROM findings
+		  WHERE finding_id = $1
+		  ORDER BY created_at DESC, id DESC
+		  LIMIT $2 OFFSET $3`,
+		findingID, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	out := []FindingRow{}
+	for rows.Next() {
+		var fr FindingRow
+		if err := rows.Scan(&fr.ID, &fr.ScanID, &fr.TargetID, &fr.FindingID, &fr.TemplateID, &fr.Name, &fr.Severity,
+			&fr.Host, &fr.MatchedAt, &fr.Type, &fr.CVE, &fr.Tags,
+			&fr.MatcherName, &fr.ExtractorName, &fr.ExtractedResults, &fr.CreatedAt); err != nil {
+			return nil, 0, err
+		}
+		if fr.ExtractedResults == nil {
+			fr.ExtractedResults = []string{}
+		}
+		out = append(out, fr)
+	}
+	return out, total, rows.Err()
+}
+
 func deref(p *string) string {
 	if p == nil {
 		return ""

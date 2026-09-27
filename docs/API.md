@@ -265,11 +265,21 @@ continuity is desired. Each has:
 has its own exact detail at `GET /api/occurrences/{occurrence_id}`. The scan UI opens that route
 directly; it never substitutes the lifecycle's latest occurrence.
 
+`GET /api/findings/{id}/occurrences` lists the **retained** occurrences of one lifecycle finding
+(viewer, paginated `limit`/`offset`, most recent first). Unknown findings are `404`. A finding
+whose scans were deleted by retention still returns `200` with an empty `items` list when the
+lifecycle row remains; those deleted occurrences are gone (`ON DELETE CASCADE`) and are not
+implied by this list. Each row includes `scan_id`, `target_id`, `host`, `matched_at`, and
+`created_at`. The finding detail payload's `latest_occurrence_id` is the one-click jump to the
+newest retained occurrence.
+
 ```sh
 # deduplicated lifecycle list (paginated + filtered)
 curl -sb jar.txt "localhost:8080/api/findings" | jq
 # one tracked finding + full raw Nuclei output of its latest occurrence
 curl -sb jar.txt "localhost:8080/api/findings/<finding_id>" | jq
+# retained occurrences of that finding (newest first)
+curl -sb jar.txt "localhost:8080/api/findings/<finding_id>/occurrences" | jq
 # one exact immutable result from a concrete scan
 curl -sb jar.txt "localhost:8080/api/occurrences/<occurrence_id>" | jq
 # disposition (operator) — none | false_positive | accepted (+ optional accept_expires_at)

@@ -98,7 +98,10 @@ var opsForKind = map[fieldKind]map[string]bool{
 }
 
 // findingSortColumns is the ORDER BY allowlist. Keys are the public `sort`
-// values; expressions are fixed SQL (never user text).
+// values; expressions are fixed SQL (never user text). The findings table
+// header uses the first catalog sort field for each column; this map is the
+// SQL-safety gate and may include API-only keys (times_mitigated) that have
+// no column.
 var findingSortColumns = map[string]string{
 	"first_seen_at":   "l.first_seen_at",
 	"last_seen_at":    "l.last_seen_at",
@@ -106,6 +109,10 @@ var findingSortColumns = map[string]string{
 	"matched_at":      "l.matched_at",
 	"name":            "l.name",
 	"times_mitigated": "l.times_mitigated",
+	"state":           "(" + lcEffectiveExpr + ")",
+	"detection_state": "(" + lcDetectionExpr + ")",
+	"host":            "l.host",
+	"matcher_name":    "l.matcher_name",
 }
 
 func CanonicalFindingSortField(field string) string {
@@ -116,6 +123,10 @@ func CanonicalFindingSortField(field string) string {
 		return "first_seen_at"
 	case "last_seen":
 		return "last_seen_at"
+	case "effective_state":
+		return "state"
+	case "matcher":
+		return "matcher_name"
 	default:
 		return field
 	}

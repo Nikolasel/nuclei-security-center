@@ -302,8 +302,11 @@ Date-only values are UTC: `after`/`between` start at midnight, and `before`/`bet
 whole named day. `target none_of` also
 includes ad-hoc-only findings because they have no occurrence belonging to an excluded target.
 Plus `limit`, `offset`, and optional `sort` / `order`. `sort` is allowlisted
-(`first_seen_at`, `last_seen_at`, `severity`, `matched_at`, `name`, `times_mitigated`); `order` is
+(`first_seen_at`, `last_seen_at`, `severity`, `matched_at`, `name`, `state`,
+`detection_state`, `host`, `matcher_name`, `times_mitigated`); `order` is
 `asc` or `desc`. Omitting `sort` keeps the historical order (effective severity, then last seen).
+Header clicks use `state` (effective state, what the State column shows), `host`, and
+`matcher_name`. `times_mitigated` is API-only (no list column). `cve` / `tags` are not sortable.
 The export endpoint takes the same `filter` / `sort` / `order` params so a download matches the UI.
 
 ```sh

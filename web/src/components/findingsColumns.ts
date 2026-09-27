@@ -43,8 +43,10 @@ export interface FindingsColumn {
   /** Inclusive drag and keyboard range. */
   minWidth?: number;
   maxWidth?: number;
-  /** `sort` query values that refer to this column (#311). Hiding the column
-   *  clears that sort so the list order is not unexplained. */
+  /** `sort` query values that refer to this column (#311). `sortFields[0]` is
+   *  the header click key (empty = not sortable). Hiding the column clears that
+   *  sort so the list order is not unexplained. Arrays (cve/tags/target ids)
+   *  stay unsorted — lexicographic order is noise. */
   sortFields: readonly string[];
 }
 
@@ -54,16 +56,16 @@ export interface FindingsColumn {
 // one absorbs leftover table width.
 export const FINDINGS_COLUMNS: readonly FindingsColumn[] = [
   { id: "severity", label: "Severity", defaultVisible: true, width: 112, minWidth: 80, maxWidth: 240, sortFields: ["severity", "effective_severity"] },
-  { id: "finding", label: "Finding", defaultVisible: true, width: 320, minWidth: 96, maxWidth: 640, sortFields: ["name", "template_id"] },
+  { id: "finding", label: "Finding", defaultVisible: true, width: 320, minWidth: 96, maxWidth: 640, sortFields: ["name"] },
   { id: "state", label: "State", defaultVisible: true, width: 140, minWidth: 72, maxWidth: 240, sortFields: ["state", "effective_state", "detection_state"] },
-  { id: "endpoint", label: "Endpoint", defaultVisible: true, width: 320, minWidth: ENDPOINT_MIN_PX, maxWidth: 640, sortFields: ["host", "type"] },
+  { id: "endpoint", label: "Endpoint", defaultVisible: true, width: 320, minWidth: ENDPOINT_MIN_PX, maxWidth: 640, sortFields: ["host"] },
   { id: "last_seen", label: "Last seen", defaultVisible: true, width: 112, minWidth: 96, maxWidth: 240, sortFields: ["last_seen_at", "last_seen"] },
-  { id: "target", label: "Target", defaultVisible: false, width: 168, minWidth: 80, maxWidth: 420, sortFields: ["target", "target_id"] },
+  { id: "target", label: "Target", defaultVisible: false, width: 168, minWidth: 80, maxWidth: 420, sortFields: [] },
   { id: "first_seen", label: "First seen", defaultVisible: false, width: 112, minWidth: 96, maxWidth: 240, sortFields: ["first_seen_at", "first_seen"] },
-  { id: "cve", label: "CVE", defaultVisible: false, width: 168, minWidth: 72, maxWidth: 420, sortFields: ["cve"] },
-  { id: "tags", label: "Tags", defaultVisible: false, width: 180, minWidth: 72, maxWidth: 420, sortFields: ["tags", "tag"] },
+  { id: "cve", label: "CVE", defaultVisible: false, width: 168, minWidth: 72, maxWidth: 420, sortFields: [] },
+  { id: "tags", label: "Tags", defaultVisible: false, width: 180, minWidth: 72, maxWidth: 420, sortFields: [] },
   { id: "matched_at", label: "Matched at", defaultVisible: false, width: 280, minWidth: 96, maxWidth: 640, sortFields: ["matched_at"] },
-  { id: "result_identity", label: "Result identity", defaultVisible: false, width: 280, minWidth: 96, maxWidth: 640, sortFields: ["matcher_name", "extractor_name", "extracted_results"] },
+  { id: "result_identity", label: "Result identity", defaultVisible: false, width: 280, minWidth: 96, maxWidth: 640, sortFields: ["matcher_name", "matcher"] },
 ];
 
 export interface FindingsColumnPref {
@@ -197,6 +199,10 @@ export function canonicalFindingsSortField(field: string): string {
       return "first_seen_at";
     case "last_seen":
       return "last_seen_at";
+    case "effective_state":
+      return "state";
+    case "matcher":
+      return "matcher_name";
     default:
       return field;
   }

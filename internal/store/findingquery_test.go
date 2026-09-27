@@ -241,8 +241,23 @@ func TestValidateFindingSort(t *testing.T) {
 	if err := ValidateFindingSort("", ""); err != nil {
 		t.Fatalf("default sort: %v", err)
 	}
-	if err := ValidateFindingSort("first_seen_at", "desc"); err != nil {
-		t.Fatalf("allowlisted sort: %v", err)
+	if err := ValidateFindingSort("host", "asc"); err != nil {
+		t.Fatalf("host sort: %v", err)
+	}
+	if err := ValidateFindingSort("state", "asc"); err != nil {
+		t.Fatalf("state sort: %v", err)
+	}
+	if err := ValidateFindingSort("matcher_name", "asc"); err != nil {
+		t.Fatalf("matcher_name sort: %v", err)
+	}
+	if CanonicalFindingSortField("effective_state") != "state" {
+		t.Fatal("effective_state alias")
+	}
+	if CanonicalFindingSortField("matcher") != "matcher_name" {
+		t.Fatal("matcher alias")
+	}
+	if err := ValidateFindingSort("detection_state", "desc"); err != nil {
+		t.Fatalf("detection_state sort: %v", err)
 	}
 	if err := ValidateFindingSort("bogus", "asc"); err == nil {
 		t.Fatal("unknown sort field accepted")
@@ -276,6 +291,27 @@ func TestLifecycleOrderBy(t *testing.T) {
 	}
 	if !strings.Contains(got, strings.ToUpper(defaultFindingSortOrder("severity"))) {
 		t.Fatalf("severity default direction missing: %q", got)
+	}
+	got, err = lifecycleOrderBy(FindingQuery{Sort: "state", Order: "asc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, findingSortColumns["state"]) || !strings.Contains(got, "ASC") {
+		t.Fatalf("state order = %q", got)
+	}
+	got, err = lifecycleOrderBy(FindingQuery{Sort: "host", Order: "asc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "l.host ASC") {
+		t.Fatalf("host order = %q", got)
+	}
+	got, err = lifecycleOrderBy(FindingQuery{Sort: "matcher_name", Order: "desc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "l.matcher_name DESC") {
+		t.Fatalf("matcher_name order = %q", got)
 	}
 	if _, err := lifecycleOrderBy(FindingQuery{Sort: "not_a_column"}); err == nil {
 		t.Fatal("unknown sort compiled")

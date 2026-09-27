@@ -483,19 +483,8 @@ export function FindingsView() {
   };
 
   const headerSortField = (id: FindingsColumnId): string | null => {
-    const col = FINDINGS_COLUMNS.find((c) => c.id === id);
-    const field = col?.sortFields[0];
-    if (!field) return null;
-    switch (field) {
-      case "severity":
-      case "name":
-      case "last_seen_at":
-      case "first_seen_at":
-      case "matched_at":
-        return field;
-      default:
-        return null;
-    }
+    const field = FINDINGS_COLUMNS.find((c) => c.id === id)?.sortFields[0];
+    return field || null;
   };
 
   const showColumn = (id: FindingsColumnId) => {

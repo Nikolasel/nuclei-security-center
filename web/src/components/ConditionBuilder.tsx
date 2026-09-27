@@ -9,7 +9,7 @@ import {
 import { MultiSelect, TokenInput, type Option } from "./filters";
 import { Button, Input, Select } from "./ui";
 
-type ValueKind = "enum" | "tags" | "text";
+type ValueKind = "enum" | "tags" | "text" | "time";
 
 interface FieldDef {
   value: string;
@@ -39,7 +39,7 @@ const TYPE_OPTS: Option[] = [
 ].map((t) => ({ value: t, label: t }));
 
 const FIELDS: FieldDef[] = [
-  { value: "name", label: "Name / template", kind: "text", ops: ["contains", "starts_with"] },
+  { value: "name", label: "Name / template", kind: "text", ops: ["contains", "not_contains", "starts_with", "is_empty", "is_not_empty"] },
   { value: "severity", label: "Severity", kind: "enum", ops: ["any_of", "none_of"], options: SEVERITY_OPTS },
   { value: "state", label: "State", kind: "enum", ops: ["any_of", "none_of"], options: STATE_OPTS },
   { value: "disposition", label: "Disposition", kind: "enum", ops: ["any_of", "none_of"], options: DISPOSITION_OPTS },
@@ -49,6 +49,8 @@ const FIELDS: FieldDef[] = [
   { value: "extracted_result", label: "Extracted result", kind: "text", ops: ["contains", "not_contains", "is_empty", "is_not_empty"] },
   { value: "matched_at", label: "Matched at", kind: "text", ops: ["contains", "not_contains", "starts_with", "is_empty", "is_not_empty"] },
   { value: "type", label: "Type", kind: "enum", ops: ["any_of", "none_of"], options: TYPE_OPTS },
+  { value: "first_seen_at", label: "First seen", kind: "time", ops: ["after", "before", "between"] },
+  { value: "last_seen_at", label: "Last seen", kind: "time", ops: ["after", "before", "between"] },
   { value: "cve", label: "CVE", kind: "text", ops: ["contains", "not_contains", "is_empty", "is_not_empty"] },
   { value: "tag", label: "Tag", kind: "tags", ops: ["any_of", "none_of", "is_empty", "is_not_empty"] },
 ];
@@ -61,10 +63,36 @@ const OP_LABEL: Record<string, string> = {
   starts_with: "starts with",
   is_empty: "is empty",
   is_not_empty: "is not empty",
+  after: "after",
+  before: "before",
+  between: "between",
 };
 
 const fieldDef = (f: string) => FIELDS.find((x) => x.value === f) ?? FIELDS[0];
 const opNeedsValue = (op: string) => op !== "is_empty" && op !== "is_not_empty";
+const isSingleDateOp = (op: string) => op === "before" || op === "after";
+function rowComplete(r: Row): boolean {
+  if (!opNeedsValue(r.op)) return true;
+  if (r.op === "between") return Boolean(r.values[0]?.trim()) && Boolean(r.values[1]?.trim());
+  if (isSingleDateOp(r.op)) return Boolean(r.values[0]?.trim());
+  return r.values.some((v) => v.trim() !== "");
+}
+function queryValues(r: Row): string[] {
+  if (isSingleDateOp(r.op)) return [r.values[0].trim()];
+  return r.values;
+}
+function valuesAfterOpChange(op: string, values: string[]): string[] {
+  if (!opNeedsValue(op)) return [];
+  if (isSingleDateOp(op)) {
+    const first = values[0]?.trim() ?? "";
+    return first ? [first] : [];
+  }
+  return values;
+}
+function dateInputValue(v: string | undefined): string {
+  if (!v) return "";
+  return /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : "";
+}
 let rowSeq = 0;
 
 export interface Row {
@@ -86,8 +114,8 @@ export function makeRow(partial?: Partial<Row>): Row {
 export function rowsToQuery(rows: Row[]): FindingQuery {
   const groups: { conditions: { field: string; op: string; values?: string[] }[] }[] = [];
   rows.forEach((r, i) => {
-    if (opNeedsValue(r.op) && r.values.length === 0) return;
-    const cond = opNeedsValue(r.op) ? { field: r.field, op: r.op, values: r.values } : { field: r.field, op: r.op };
+    if (!rowComplete(r)) return;
+    const cond = opNeedsValue(r.op) ? { field: r.field, op: r.op, values: queryValues(r) } : { field: r.field, op: r.op };
     if (i === 0 || r.connector === "or" || groups.length === 0) groups.push({ conditions: [cond] });
     else groups[groups.length - 1].conditions.push(cond);
   });
@@ -128,7 +156,7 @@ export interface Crumb {
  *  shown even when the builder is collapsed so the active filter stays visible. */
 export function rowsToCrumbs(rows: Row[], targetOptions: Option[]): Crumb[] {
   return rows
-    .filter((r) => !opNeedsValue(r.op) || r.values.length > 0)
+    .filter((r) => rowComplete(r))
     .map((r, i) => ({
       connector: i === 0 ? "" : r.connector,
       field: fieldDef(r.field).label,
@@ -140,7 +168,7 @@ export function rowsToCrumbs(rows: Row[], targetOptions: Option[]): Crumb[] {
 /** countActiveConditions is how many complete conditions the filter has (drives
  *  the funnel-icon badge). */
 export function countActiveConditions(rows: Row[]): number {
-  return rows.filter((r) => !opNeedsValue(r.op) || r.values.length > 0).length;
+  return rows.filter((r) => rowComplete(r)).length;
 }
 
 /** ConditionBuilder is a ServiceNow-style filter: rows of field / operator /
@@ -168,8 +196,10 @@ export function ConditionBuilder({
           merged.op = fieldDef(patch.field).ops[0];
           merged.values = [];
         }
-        // Changing to/from a no-value op clears stale values.
-        if (patch.op && !opNeedsValue(patch.op)) merged.values = [];
+        // Changing to/from a no-value op clears stale values. Switching a
+        // filled `between` row to `before`/`after` must drop the second date
+        // so compileTimeCondition receives exactly one value.
+        if (patch.op) merged.values = valuesAfterOpChange(patch.op, merged.values);
         return merged;
       }),
     );
@@ -200,7 +230,7 @@ export function ConditionBuilder({
                 )}
               </div>
 
-              <Select value={r.field} onChange={(e) => setRow(r.id, { field: e.target.value })} className="w-40">
+              <Select value={r.field} onChange={(e) => setRow(r.id, { field: e.target.value })} className="w-44">
                 {FIELDS.map((f) => (
                   <option key={f.value} value={f.value}>
                     {f.label}
@@ -228,6 +258,38 @@ export function ConditionBuilder({
                   />
                 ) : def.kind === "tags" ? (
                   <TokenInput values={r.values} onChange={(vals) => setRow(r.id, { values: vals })} placeholder="add value…" />
+                ) : def.kind === "time" ? (
+                  <div className="flex flex-nowrap items-center gap-2">
+                    <label className="flex shrink-0 items-center gap-1.5">
+                      {r.op === "between" ? (
+                        <span className="text-xs text-neutral-500">From</span>
+                      ) : null}
+                      <Input
+                        type="date"
+                        value={dateInputValue(r.values[0])}
+                        onChange={(e) =>
+                          setRow(r.id, { values: r.op === "between" ? [e.target.value, r.values[1] ?? ""] : e.target.value ? [e.target.value] : [] })
+                        }
+                        aria-label={r.op === "between" ? "From date" : "Date"}
+                        className="w-40 shrink-0"
+                      />
+                    </label>
+                    {r.op === "between" && (
+                      <>
+                        <span className="shrink-0 text-xs text-neutral-400">and</span>
+                        <label className="flex shrink-0 items-center gap-1.5">
+                          <span className="text-xs text-neutral-500">To</span>
+                          <Input
+                            type="date"
+                            value={dateInputValue(r.values[1])}
+                            onChange={(e) => setRow(r.id, { values: [r.values[0] ?? "", e.target.value] })}
+                            aria-label="To date"
+                            className="w-40 shrink-0"
+                          />
+                        </label>
+                      </>
+                    )}
+                  </div>
                 ) : (
                   <Input
                     value={r.values[0] ?? ""}

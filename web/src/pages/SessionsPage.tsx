@@ -126,7 +126,7 @@ export function SessionsPage() {
               setStack([]);
             }}
             placeholder="Filter by subject, email or role…"
-            className="max-w-sm"
+            className="w-full max-w-sm"
           />
           <span className="text-xs text-neutral-400">
             {q.data ? (search ? `${total} match${total === 1 ? "" : "es"} for “${search}”` : `${total} total`) : ""}

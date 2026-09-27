@@ -118,6 +118,7 @@ function CreateModal({
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="defectdojo-export"
+            className="w-full"
           />
         </Field>
 
@@ -142,6 +143,7 @@ function CreateModal({
             value={ttl}
             onChange={(e) => setTtl(e.target.value)}
             placeholder={String(DEFAULT_TOKEN_TTL_DAYS)}
+            className="w-full"
           />
         </Field>
         {ttlNum === 0 && !ttlInvalid && (

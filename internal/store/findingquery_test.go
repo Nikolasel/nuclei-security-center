@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestValidateFindingQueryRejectsTooManyValues(t *testing.T) {
@@ -139,5 +140,180 @@ func TestListFindingsRejectsInvalidFilterBeforeDatabase(t *testing.T) {
 	_, _, err := (&Store{}).ListFindings(context.Background(), FindingFilter{Query: strings.Repeat("x", 257)})
 	if err == nil || !strings.Contains(err.Error(), "query exceeds") {
 		t.Fatalf("ListFindings error = %v, want pre-database filter validation error", err)
+	}
+}
+
+func TestBuildFindingWhereTimeRangeAndNameNegation(t *testing.T) {
+	var args []any
+	where, err := buildFindingWhere(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{
+		{Field: "state", Op: "any_of", Values: []string{"new", "active", "resurfaced"}},
+		{Field: "first_seen_at", Op: "after", Values: []string{"2026-01-01"}},
+		{Field: "name", Op: "not_contains", Values: []string{"log4j"}},
+	}}}}, &args)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if !strings.Contains(where, "l.first_seen_at >= $") {
+		t.Fatalf("first_seen_at SQL = %s", where)
+	}
+	if !strings.Contains(where, "NOT (") || !strings.Contains(where, "l.name ILIKE ANY($") {
+		t.Fatalf("name not_contains SQL = %s", where)
+	}
+	if _, ok := args[1].(time.Time); !ok {
+		t.Fatalf("first_seen_at bound = %#v, want time.Time", args[1])
+	}
+
+	afterRFC, err := buildFindingWhere(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{
+		{Field: "last_seen_at", Op: "before", Values: []string{"2026-01-15T12:00:00Z"}},
+	}}}}, &[]any{})
+	if err != nil {
+		t.Fatalf("rfc3339 before: %v", err)
+	}
+	if !strings.Contains(afterRFC, "l.last_seen_at <= $1") {
+		t.Fatalf("rfc3339 before SQL = %s", afterRFC)
+	}
+
+	var betweenArgs []any
+	between, err := buildFindingWhere(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{
+		{Field: "first_seen_at", Op: "between", Values: []string{"2026-01-01", "2026-01-07"}},
+	}}}}, &betweenArgs)
+	if err != nil {
+		t.Fatalf("between: %v", err)
+	}
+	if !strings.Contains(between, "l.first_seen_at >= $1 AND l.first_seen_at < $2") {
+		t.Fatalf("date-only between SQL = %s", between)
+	}
+	lo, ok := betweenArgs[0].(time.Time)
+	if !ok || !lo.Equal(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("between lo = %#v", betweenArgs[0])
+	}
+	hi, ok := betweenArgs[1].(time.Time)
+	if !ok || !hi.Equal(time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("between exclusive hi = %#v", betweenArgs[1])
+	}
+
+	emptyName, err := buildFindingWhere(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{
+		{Field: "name", Op: "is_empty"},
+	}}}}, &[]any{})
+	if err != nil {
+		t.Fatalf("name is_empty: %v", err)
+	}
+	if !strings.Contains(emptyName, "(l.name IS NULL OR l.name = '')") {
+		t.Fatalf("name is_empty SQL = %s", emptyName)
+	}
+	if strings.Contains(emptyName, "l.template_id") {
+		t.Fatalf("name is_empty must not require template_id: %s", emptyName)
+	}
+	notEmptyName, err := buildFindingWhere(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{
+		{Field: "name", Op: "is_not_empty"},
+	}}}}, &[]any{})
+	if err != nil {
+		t.Fatalf("name is_not_empty: %v", err)
+	}
+	if !strings.Contains(notEmptyName, "(l.name IS NOT NULL AND l.name <> '')") {
+		t.Fatalf("name is_not_empty SQL = %s", notEmptyName)
+	}
+	if strings.Contains(notEmptyName, "l.template_id") {
+		t.Fatalf("name is_not_empty must not treat template_id as a name: %s", notEmptyName)
+	}
+	if !strings.Contains(where, "l.template_id ILIKE ANY($") {
+		t.Fatalf("name not_contains must still search template_id: %s", where)
+	}
+
+	rejected := []FindingCondition{
+		{Field: "first_seen_at", Op: "contains", Values: []string{"2026-01-01"}},
+		{Field: "first_seen_at", Op: "after", Values: []string{"not-a-date"}},
+		{Field: "first_seen_at", Op: "after", Values: []string{"2026-01-01", "2026-01-07"}},
+		{Field: "first_seen_at", Op: "between", Values: []string{"2026-02-01", "2026-01-01"}},
+		{Field: "name", Op: "after", Values: []string{"2026-01-01"}},
+		{Field: "severity", Op: "before", Values: []string{"2026-01-01"}},
+	}
+	for _, cond := range rejected {
+		var bound []any
+		_, err := buildFindingWhere(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{cond}}}}, &bound)
+		if err == nil {
+			t.Fatalf("condition %+v compiled, want validation error", cond)
+		}
+	}
+}
+
+func TestValidateFindingSort(t *testing.T) {
+	if err := ValidateFindingSort("", ""); err != nil {
+		t.Fatalf("default sort: %v", err)
+	}
+	if err := ValidateFindingSort("host", "asc"); err != nil {
+		t.Fatalf("host sort: %v", err)
+	}
+	if err := ValidateFindingSort("state", "asc"); err != nil {
+		t.Fatalf("state sort: %v", err)
+	}
+	if err := ValidateFindingSort("matcher_name", "asc"); err != nil {
+		t.Fatalf("matcher_name sort: %v", err)
+	}
+	if CanonicalFindingSortField("effective_state") != "state" {
+		t.Fatal("effective_state alias")
+	}
+	if CanonicalFindingSortField("matcher") != "matcher_name" {
+		t.Fatal("matcher alias")
+	}
+	if err := ValidateFindingSort("detection_state", "desc"); err != nil {
+		t.Fatalf("detection_state sort: %v", err)
+	}
+	if err := ValidateFindingSort("bogus", "asc"); err == nil {
+		t.Fatal("unknown sort field accepted")
+	}
+	if err := ValidateFindingSort("severity", "sideways"); err == nil {
+		t.Fatal("bad order accepted")
+	}
+	if err := ValidateFindingSort("", "desc"); err == nil {
+		t.Fatal("order without sort accepted")
+	}
+}
+
+func TestLifecycleOrderBy(t *testing.T) {
+	got, err := lifecycleOrderBy(FindingQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != lcDefaultOrderBy {
+		t.Fatalf("default order = %q", got)
+	}
+	got, err = lifecycleOrderBy(FindingQuery{Sort: "first_seen_at", Order: "asc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "l.first_seen_at ASC") || !strings.Contains(got, "l.id DESC") {
+		t.Fatalf("first_seen_at order = %q", got)
+	}
+	got, err = lifecycleOrderBy(FindingQuery{Sort: "severity"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, strings.ToUpper(defaultFindingSortOrder("severity"))) {
+		t.Fatalf("severity default direction missing: %q", got)
+	}
+	got, err = lifecycleOrderBy(FindingQuery{Sort: "state", Order: "asc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, findingSortColumns["state"]) || !strings.Contains(got, "ASC") {
+		t.Fatalf("state order = %q", got)
+	}
+	got, err = lifecycleOrderBy(FindingQuery{Sort: "host", Order: "asc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "l.host ASC") {
+		t.Fatalf("host order = %q", got)
+	}
+	got, err = lifecycleOrderBy(FindingQuery{Sort: "matcher_name", Order: "desc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "l.matcher_name DESC") {
+		t.Fatalf("matcher_name order = %q", got)
+	}
+	if _, err := lifecycleOrderBy(FindingQuery{Sort: "not_a_column"}); err == nil {
+		t.Fatal("unknown sort compiled")
 	}
 }

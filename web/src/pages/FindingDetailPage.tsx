@@ -160,10 +160,10 @@ function TriagePanel({ f }: { f: FindingDetail }) {
             {disposition === "accepted" && (
               <label className="block space-y-1">
                 <span className="block text-xs text-neutral-500">Accept until (optional)</span>
-                <Input type="date" value={expires} onChange={(e) => setExpires(e.target.value)} />
+                <Input type="date" value={expires} onChange={(e) => setExpires(e.target.value)} className="w-full" />
               </label>
             )}
-            <Input value={dispNote} onChange={(e) => setDispNote(e.target.value)} placeholder="note (optional)…" />
+            <Input value={dispNote} onChange={(e) => setDispNote(e.target.value)} placeholder="note (optional)…" className="w-full" />
             <Button variant="primary" disabled={!dispDirty || dispMut.isPending} onClick={() => dispMut.mutate()}>
               {dispMut.isPending ? "Saving…" : "Save disposition"}
             </Button>
@@ -180,7 +180,7 @@ function TriagePanel({ f }: { f: FindingDetail }) {
                 </option>
               ))}
             </Select>
-            <Input value={recastNote} onChange={(e) => setRecastNote(e.target.value)} placeholder="note (optional)…" />
+            <Input value={recastNote} onChange={(e) => setRecastNote(e.target.value)} placeholder="note (optional)…" className="w-full" />
             <Button variant="primary" disabled={!recastDirty || recastMut.isPending} onClick={() => recastMut.mutate()}>
               {recastMut.isPending ? "Saving…" : recast ? "Save recast" : "Clear recast"}
             </Button>

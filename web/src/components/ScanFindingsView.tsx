@@ -55,7 +55,7 @@ export function ScanFindingsView({ scanId }: { scanId: string }) {
         <div className="flex flex-wrap items-end gap-3">
           <label className="space-y-1">
             <span className="block text-xs font-medium text-neutral-500">Search (name or template)</span>
-            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="e.g. ssl, log4j…" className="w-56" />
+            <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="e.g. ssl, log4j…" className="w-56 shrink-0" />
           </label>
           <div className="space-y-1">
             <span className="block text-xs font-medium text-neutral-500">Severity</span>

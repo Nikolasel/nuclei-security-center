@@ -168,7 +168,7 @@ function ScanPolicyModal({
     >
       <div className="space-y-4">
         <Field label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="fragile-device" />
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="fragile-device" className="w-full" />
         </Field>
         <Field label="Template set">
           <Select value={templateSetId} onChange={(e) => setTemplateSetId(e.target.value)} className="w-full">
@@ -199,6 +199,7 @@ function ScanPolicyModal({
               value={rateLimit}
               onChange={(e) => setRateLimit(e.target.value)}
               placeholder={String(DEFAULTS.rate_limit)}
+              className="w-full"
             />
           </Field>
           <Field label="Concurrency">
@@ -208,6 +209,7 @@ function ScanPolicyModal({
               value={concurrency}
               onChange={(e) => setConcurrency(e.target.value)}
               placeholder={String(DEFAULTS.concurrency)}
+              className="w-full"
             />
           </Field>
           <Field label="Timeout (seconds)">
@@ -217,6 +219,7 @@ function ScanPolicyModal({
               value={timeoutSec}
               onChange={(e) => setTimeoutSec(e.target.value)}
               placeholder={String(DEFAULTS.timeout_sec)}
+              className="w-full"
             />
           </Field>
           <Field label="Max host error">
@@ -226,6 +229,7 @@ function ScanPolicyModal({
               value={maxHostError}
               onChange={(e) => setMaxHostError(e.target.value)}
               placeholder={String(DEFAULTS.max_host_error)}
+              className="w-full"
             />
           </Field>
           <Field label="Response size read (bytes)">
@@ -235,6 +239,7 @@ function ScanPolicyModal({
               value={responseSizeRead}
               onChange={(e) => setResponseSizeRead(e.target.value)}
               placeholder={String(DEFAULTS.response_size_read)}
+              className="w-full"
             />
             <span className="mt-1 block text-xs text-neutral-500">
               Max bytes read per response (nuclei -response-size-read, default 10 MiB). Lower to bound heap on
@@ -248,6 +253,7 @@ function ScanPolicyModal({
               value={responseSizeSave}
               onChange={(e) => setResponseSizeSave(e.target.value)}
               placeholder={String(DEFAULTS.response_size_save)}
+              className="w-full"
             />
             <span className="mt-1 block text-xs text-neutral-500">
               Max bytes kept for output (nuclei -response-size-save, default 1 MiB).
@@ -329,7 +335,7 @@ function ScanPolicyModal({
                   value={discoveryTimeoutSec}
                   onChange={(e) => setDiscoveryTimeoutSec(e.target.value)}
                   placeholder="300"
-                  className="max-w-xs"
+                  className="w-full max-w-xs"
                 />
               </Field>
               <p className="text-xs text-neutral-500">
@@ -344,6 +350,7 @@ function ScanPolicyModal({
                     value={discoveryRate}
                     onChange={(e) => setDiscoveryRate(e.target.value)}
                     placeholder="1000"
+                    className="w-full"
                   />
                 </Field>
                 <Field label="Probe timeout (ms)">
@@ -353,6 +360,7 @@ function ScanPolicyModal({
                     value={discoveryProbeTimeoutMs}
                     onChange={(e) => setDiscoveryProbeTimeoutMs(e.target.value)}
                     placeholder="1000"
+                    className="w-full"
                   />
                 </Field>
                 <Field label="Retries">
@@ -362,6 +370,7 @@ function ScanPolicyModal({
                     value={discoveryRetries}
                     onChange={(e) => setDiscoveryRetries(e.target.value)}
                     placeholder="3"
+                    className="w-full"
                   />
                 </Field>
               </div>

@@ -50,6 +50,7 @@ function TargetModal({
             placeholder="prod-web"
             required
             aria-required="true"
+            className="w-full"
           />
         </Field>
         <Field label="Hosts (one per line — the scope allowlist)" required>
@@ -64,7 +65,7 @@ function TargetModal({
           />
         </Field>
         <Field label="Tags (comma separated)">
-          <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="prod, external" />
+          <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="prod, external" className="w-full" />
         </Field>
         {save.isError && <ErrorText error={save.error} />}
         <div className="flex justify-end gap-2">

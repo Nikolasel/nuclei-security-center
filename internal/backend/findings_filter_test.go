@@ -152,3 +152,46 @@ func TestFindingFilterQueryParamsRejectsDuplicateStructuredFilters(t *testing.T)
 		t.Fatalf("validateFindingFilterQueryParams error = %v, want duplicate-filter error", err)
 	}
 }
+
+func TestFindingSortParamsSharedByListAndExport(t *testing.T) {
+	fq, err := findingQueryFromRequest(url.Values{
+		"filter": {`{"groups":[{"conditions":[{"field":"state","op":"any_of","values":["new"]}]}]}`},
+		"sort":   {"first_seen_at"},
+		"order":  {"asc"},
+	})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if fq.Sort != "first_seen_at" || fq.Order != "asc" {
+		t.Fatalf("sort=%q order=%q", fq.Sort, fq.Order)
+	}
+	if err := store.ValidateFindingQuery(fq); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+
+	colon, err := findingQueryFromRequest(url.Values{"sort": {"last_seen_at:desc"}})
+	if err != nil {
+		t.Fatalf("colon sort: %v", err)
+	}
+	if colon.Sort != "last_seen_at" || colon.Order != "desc" {
+		t.Fatalf("colon sort=%q order=%q", colon.Sort, colon.Order)
+	}
+
+	alias, err := findingQueryFromRequest(url.Values{"sort": {"-first_seen"}})
+	if err != nil {
+		t.Fatalf("alias sort: %v", err)
+	}
+	if alias.Sort != "first_seen_at" || alias.Order != "desc" {
+		t.Fatalf("alias sort=%q order=%q", alias.Sort, alias.Order)
+	}
+
+	if _, err := findingQueryFromRequest(url.Values{"sort": {"not_a_column"}}); err == nil {
+		t.Fatal("unknown sort accepted")
+	}
+	if _, err := findingQueryFromRequest(url.Values{"order": {"desc"}}); err == nil {
+		t.Fatal("order without sort accepted")
+	}
+	if _, err := findingQueryFromRequest(url.Values{"sort": {"severity", "name"}}); err == nil {
+		t.Fatal("duplicate sort accepted")
+	}
+}

@@ -462,9 +462,28 @@ func scanLifecycleRow(row pgx.Row, r *LifecycleRow) error {
 	return nil
 }
 
-// lcOrderBy is the shared sort: highest effective severity first, then most
-// recently seen. Kept identical across list + export so an export matches the UI.
-const lcOrderBy = ` ORDER BY ` + effSevOrder + ` DESC, l.last_seen_at DESC, l.id DESC`
+// lcDefaultOrderBy is the historical sort: highest effective severity first,
+// then most recently seen. Used when the request does not name a sort field.
+const lcDefaultOrderBy = ` ORDER BY ` + effSevOrder + ` DESC, l.last_seen_at DESC, l.id DESC`
+
+// lifecycleOrderBy is shared by list + export so an export matches the UI.
+func lifecycleOrderBy(q FindingQuery) (string, error) {
+	if err := ValidateFindingSort(q.Sort, q.Order); err != nil {
+		return "", err
+	}
+	if q.Sort == "" {
+		return lcDefaultOrderBy, nil
+	}
+	expr := findingSortColumns[q.Sort]
+	order := q.Order
+	if order == "" {
+		order = defaultFindingSortOrder(q.Sort)
+	}
+	if order != "asc" && order != "desc" {
+		return "", fmt.Errorf("order must be 'asc' or 'desc'")
+	}
+	return fmt.Sprintf(" ORDER BY %s %s, l.id DESC", expr, strings.ToUpper(order)), nil
+}
 
 // exportMaxRows caps an export so a pathological filter can't OOM the backend.
 const exportMaxRows = 50000
@@ -484,6 +503,10 @@ func (s *Store) ListLifecycleFindings(ctx context.Context, q FindingQuery, limit
 	if err != nil {
 		return nil, 0, err
 	}
+	orderBy, err := lifecycleOrderBy(q)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	var total int
 	if err := s.pool.QueryRow(ctx,
@@ -497,7 +520,7 @@ func (s *Store) ListLifecycleFindings(ctx context.Context, q FindingQuery, limit
 	args = append(args, offset)
 	offsetPH := len(args)
 	query := fmt.Sprintf(`SELECT %s %s %s%s LIMIT $%d OFFSET $%d`,
-		lcSelectCols, lifecycleFrom, where, lcOrderBy, limitPH, offsetPH)
+		lcSelectCols, lifecycleFrom, where, orderBy, limitPH, offsetPH)
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
@@ -540,12 +563,16 @@ func (s *Store) StreamLifecycleFindings(ctx context.Context, q FindingQuery, fn 
 	if err != nil {
 		return false, err
 	}
+	orderBy, err := lifecycleOrderBy(q)
+	if err != nil {
+		return false, err
+	}
 	// Fetch one probe row beyond the delivered cap so the caller can distinguish
 	// "exactly capped" from "there were more matching findings".
 	args = append(args, exportMaxRows+1)
 	limitPH := len(args)
 	query := fmt.Sprintf(`SELECT %s %s %s%s LIMIT $%d`,
-		lcSelectCols, lifecycleFrom, where, lcOrderBy, limitPH)
+		lcSelectCols, lifecycleFrom, where, orderBy, limitPH)
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return false, err
@@ -605,10 +632,14 @@ func (s *Store) StreamLifecycleRaw(ctx context.Context, q FindingQuery, fn func(
 	if err != nil {
 		return false, 0, err
 	}
+	orderBy, err := lifecycleOrderBy(q)
+	if err != nil {
+		return false, 0, err
+	}
 	args = append(args, exportMaxRows+1)
 	limitPH := len(args)
 	query := fmt.Sprintf(`SELECT l.id, (o.id IS NULL), COALESCE(o.raw_line, o.raw::text) %s LEFT JOIN findings o ON o.id = l.latest_occurrence_id %s%s LIMIT $%d`,
-		lifecycleFrom, where, lcOrderBy, limitPH)
+		lifecycleFrom, where, orderBy, limitPH)
 	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return false, 0, err

@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // FindingQuery is a structured findings filter (#97): OR-of-AND groups. Groups
@@ -12,6 +13,10 @@ import (
 // to a fully parameterized WHERE clause — user values never touch the SQL text.
 type FindingQuery struct {
 	Groups []FindingGroup `json:"groups"`
+	// Sort and Order come from the URL (not the filter JSON) so the list and
+	// export stay in lockstep. Empty Sort keeps the historical default order.
+	Sort  string `json:"-"`
+	Order string `json:"-"`
 }
 
 // FindingGroup is a set of AND-ed conditions (one OR-clause of the query).
@@ -48,6 +53,7 @@ const (
 	kindTextTwo                    // substring over two columns (name OR template)
 	kindTextArray                  // text[] membership/substring (cve, tag)
 	kindTarget                     // occurrence provenance target membership
+	kindTime                       // timestamptz range (first_seen_at / last_seen_at)
 )
 
 // fieldSpec maps a filter field name to the SQL it filters on. expr is the column
@@ -77,21 +83,91 @@ var findingFields = map[string]fieldSpec{
 	"type":             {kind: kindEnum, expr: "l.type", lowered: true},
 	"cve":              {kind: kindTextArray, expr: "l.cve"},
 	"tag":              {kind: kindTextArray, expr: "l.tags"},
+	"first_seen_at":    {kind: kindTime, expr: "l.first_seen_at"},
+	"last_seen_at":     {kind: kindTime, expr: "l.last_seen_at"},
 }
 
 // opsForKind lists the operators each field kind accepts (also drives the UI).
 var opsForKind = map[fieldKind]map[string]bool{
 	kindEnum:      {"any_of": true, "none_of": true},
 	kindText:      {"contains": true, "not_contains": true, "starts_with": true, "is_empty": true, "is_not_empty": true},
-	kindTextTwo:   {"contains": true, "starts_with": true},
+	kindTextTwo:   {"contains": true, "not_contains": true, "starts_with": true, "is_empty": true, "is_not_empty": true},
 	kindTextArray: {"any_of": true, "none_of": true, "contains": true, "not_contains": true, "is_empty": true, "is_not_empty": true},
 	kindTarget:    {"any_of": true, "none_of": true},
+	kindTime:      {"before": true, "after": true, "between": true},
+}
+
+// findingSortColumns is the ORDER BY allowlist. Keys are the public `sort`
+// values; expressions are fixed SQL (never user text). The findings table
+// header uses the first catalog sort field for each column; this map is the
+// SQL-safety gate and may include API-only keys (times_mitigated) that have
+// no column.
+var findingSortColumns = map[string]string{
+	"first_seen_at":   "l.first_seen_at",
+	"last_seen_at":    "l.last_seen_at",
+	"severity":        effSevOrder,
+	"matched_at":      "l.matched_at",
+	"name":            "l.name",
+	"times_mitigated": "l.times_mitigated",
+	"state":           "(" + lcEffectiveExpr + ")",
+	"detection_state": "(" + lcDetectionExpr + ")",
+	"host":            "l.host",
+	"matcher_name":    "l.matcher_name",
+}
+
+func CanonicalFindingSortField(field string) string {
+	switch field {
+	case "effective_severity":
+		return "severity"
+	case "first_seen":
+		return "first_seen_at"
+	case "last_seen":
+		return "last_seen_at"
+	case "effective_state":
+		return "state"
+	case "matcher":
+		return "matcher_name"
+	default:
+		return field
+	}
+}
+
+func defaultFindingSortOrder(field string) string {
+	switch field {
+	case "severity", "last_seen_at", "first_seen_at", "times_mitigated":
+		return "desc"
+	default:
+		return "asc"
+	}
+}
+
+// ValidateFindingSort reports whether sort/order are allowlisted. Empty sort
+// (and empty order) is the historical default.
+func ValidateFindingSort(sort, order string) error {
+	if sort == "" {
+		if order != "" {
+			return fmt.Errorf("order requires a sort field")
+		}
+		return nil
+	}
+	if _, ok := findingSortColumns[sort]; !ok {
+		return fmt.Errorf("unknown sort field %q", sort)
+	}
+	switch order {
+	case "", "asc", "desc":
+		return nil
+	default:
+		return fmt.Errorf("order must be 'asc' or 'desc'")
+	}
 }
 
 // ValidateFindingQuery reports whether a query compiles (all fields/operators
 // known, values present where required) without running it — so the HTTP layer
 // can reject a bad filter as a 400 before touching the database.
 func ValidateFindingQuery(q FindingQuery) error {
+	if err := ValidateFindingSort(q.Sort, q.Order); err != nil {
+		return err
+	}
 	var args []any
 	_, err := buildFindingWhere(q, &args)
 	return err
@@ -209,8 +285,96 @@ func compileCondition(c FindingCondition, push func(any) int) (string, error) {
 			return "NOT (" + matches + ")", nil
 		}
 		return matches, nil
+
+	case kindTime:
+		return compileTimeCondition(spec.expr, c.Op, vals, push)
 	}
 	return "", fmt.Errorf("operator %q not valid for field %q", c.Op, c.Field)
+}
+
+func compileTimeCondition(col, op string, vals []string, push func(any) int) (string, error) {
+	switch op {
+	case "after", "before":
+		if len(vals) != 1 {
+			return "", fmt.Errorf("operator %q needs exactly one value", op)
+		}
+	case "between":
+		if len(vals) != 2 {
+			return "", fmt.Errorf("operator %q needs exactly two values", op)
+		}
+	}
+	switch op {
+	case "after":
+		lo, err := afterInstant(vals[0])
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s >= $%d", col, push(lo)), nil
+	case "before":
+		hi, exclusive, err := beforeCutoff(vals[0])
+		if err != nil {
+			return "", err
+		}
+		cmp := "<="
+		if exclusive {
+			cmp = "<"
+		}
+		return fmt.Sprintf("%s %s $%d", col, cmp, push(hi)), nil
+	case "between":
+		lo, err := afterInstant(vals[0])
+		if err != nil {
+			return "", err
+		}
+		hi, exclusive, err := beforeCutoff(vals[1])
+		if err != nil {
+			return "", err
+		}
+		last := hi
+		if exclusive {
+			last = hi.Add(-time.Nanosecond)
+		}
+		if lo.After(last) {
+			return "", fmt.Errorf("between range is inverted")
+		}
+		cmp := "<="
+		if exclusive {
+			cmp = "<"
+		}
+		return fmt.Sprintf("%s >= $%d AND %s %s $%d", col, push(lo), col, cmp, push(hi)), nil
+	}
+	return "", fmt.Errorf("operator %q not valid for time field", op)
+}
+
+func parseFilterTime(s string) (time.Time, bool, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, false, fmt.Errorf("invalid time %q (want RFC3339 or YYYY-MM-DD)", s)
+	}
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t.UTC(), false, nil
+	}
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC), true, nil
+	}
+	return time.Time{}, false, fmt.Errorf("invalid time %q (want RFC3339 or YYYY-MM-DD)", s)
+}
+
+func afterInstant(s string) (time.Time, error) {
+	t, _, err := parseFilterTime(s)
+	return t, err
+}
+
+// beforeCutoff returns the upper bound for an inclusive before/between end.
+// Date-only values include the whole UTC day via an exclusive next-midnight cutoff.
+func beforeCutoff(s string) (time.Time, bool, error) {
+	t, dateOnly, err := parseFilterTime(s)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if dateOnly {
+		return t.AddDate(0, 0, 1), true, nil
+	}
+	return t, false, nil
 }
 
 func validateFilterValues(values []string) error {
@@ -241,6 +405,16 @@ func emptyExpr(spec fieldSpec, empty bool) string {
 			return fmt.Sprintf("coalesce(array_length(%s, 1), 0) = 0", spec.expr)
 		}
 		return fmt.Sprintf("coalesce(array_length(%s, 1), 0) > 0", spec.expr)
+	}
+	if spec.kind == kindTextTwo {
+		// Emptiness is the display name only. template_id is NOT NULL on every
+		// finding, so requiring both columns blank would make is_empty match
+		// nothing and is_not_empty match everything. contains / not_contains
+		// still search name OR template_id (see anyLike).
+		if empty {
+			return fmt.Sprintf("(%s IS NULL OR %s = '')", spec.expr, spec.expr)
+		}
+		return fmt.Sprintf("(%s IS NOT NULL AND %s <> '')", spec.expr, spec.expr)
 	}
 	if empty {
 		return fmt.Sprintf("(%s IS NULL OR %s = '')", spec.expr, spec.expr)

@@ -72,7 +72,7 @@ function ScheduleModal({
     >
       <div className="space-y-4">
         <Field label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="nightly-prod" />
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="nightly-prod" className="w-full" />
         </Field>
         <Field label="Scan policy (templates + execution settings)">
           <Select value={scanPolicyId} onChange={(e) => setScanPolicyId(e.target.value)} className="w-full">
@@ -105,7 +105,7 @@ function ScheduleModal({
           </p>
         )}
         <Field label="Cron (min hour day-of-month month day-of-week)">
-          <Input value={cron} onChange={(e) => setCron(e.target.value)} placeholder="0 3 * * *" className="font-mono" />
+          <Input value={cron} onChange={(e) => setCron(e.target.value)} placeholder="0 3 * * *" className="w-full font-mono" />
         </Field>
         <div className="flex flex-wrap gap-1">
           {CRON_PRESETS.map((p) => (

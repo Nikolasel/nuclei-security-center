@@ -168,7 +168,7 @@ function TemplateSetModal({
       <div className="flex h-full min-h-0 flex-col">
         <div className="grid shrink-0 gap-4 px-5 py-4 md:grid-cols-2">
           <Field label="Name">
-            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="critical-cves" autoFocus disabled={readOnly} />
+            <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="critical-cves" autoFocus disabled={readOnly} className="w-full" />
           </Field>
           <Field label="Membership mode">
             <Select
@@ -281,7 +281,7 @@ function TemplateSetModal({
             </div>
           )}
           <div className="grid shrink-0 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-            <Input value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} placeholder="Search templates" aria-label="Search templates" />
+            <Input className="w-full" value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} placeholder="Search templates" aria-label="Search templates" />
             <Select value={source} onChange={(event) => { setSource(event.target.value as TemplateSource | ""); resetPage(); }} aria-label="Template source">
               <option value="">All sources</option>
               <option value="upstream">Upstream</option>
@@ -291,7 +291,7 @@ function TemplateSetModal({
               <option value="">All severities</option>
               {SEVERITIES.map((value) => <option key={value} value={value}>{value}</option>)}
             </Select>
-            <Input value={tags} onChange={(event) => { setTags(event.target.value); resetPage(); }} placeholder="Tags: cve, rce" aria-label="Template tags" />
+            <Input className="w-full" value={tags} onChange={(event) => { setTags(event.target.value); resetPage(); }} placeholder="Tags: cve, rce" aria-label="Template tags" />
           </div>
 
           {selectMatching.isError && <ErrorText error={selectMatching.error} />}

@@ -917,19 +917,22 @@ func (s *Store) DeleteScan(ctx context.Context, id string) (rawKey, logKey strin
 // scan UI opens this occurrence itself so exact historical evidence is never
 // substituted with a newer merged result.
 type FindingRow struct {
-	ID         int64     `json:"id"`
-	ScanID     string    `json:"scan_id"`
-	TargetID   *string   `json:"target_id,omitempty"`
-	FindingID  *int64    `json:"finding_id,omitempty"`
-	TemplateID string    `json:"template_id"`
-	Name       string    `json:"name"`
-	Severity   string    `json:"severity"`
-	Host       string    `json:"host"`
-	MatchedAt  string    `json:"matched_at"`
-	Type       string    `json:"type"`
-	CVE        []string  `json:"cve"`
-	Tags       []string  `json:"tags"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID               int64     `json:"id"`
+	ScanID           string    `json:"scan_id"`
+	TargetID         *string   `json:"target_id,omitempty"`
+	FindingID        *int64    `json:"finding_id,omitempty"`
+	TemplateID       string    `json:"template_id"`
+	Name             string    `json:"name"`
+	Severity         string    `json:"severity"`
+	Host             string    `json:"host"`
+	MatchedAt        string    `json:"matched_at"`
+	Type             string    `json:"type"`
+	CVE              []string  `json:"cve"`
+	Tags             []string  `json:"tags"`
+	MatcherName      string    `json:"matcher_name"`
+	ExtractorName    string    `json:"extractor_name"`
+	ExtractedResults []string  `json:"extracted_results"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 // FindingFilter narrows and pages a findings query. All filter fields are
@@ -1039,7 +1042,8 @@ func (s *Store) ListFindings(ctx context.Context, f FindingFilter) ([]FindingRow
 	limitPH := push(f.Limit)
 	offsetPH := push(f.Offset)
 	query := fmt.Sprintf(
-		`SELECT id, scan_id, target_id, finding_id, template_id, name, severity, host, matched_at, type, cve, tags, created_at
+		`SELECT id, scan_id, target_id, finding_id, template_id, name, severity, host, matched_at, type, cve, tags,
+		        matcher_name, extractor_name, extracted_results, created_at
 		 FROM findings %s ORDER BY %s DESC, id DESC LIMIT $%d OFFSET $%d`,
 		where, severityOrder, limitPH, offsetPH)
 	rows, err := s.pool.Query(ctx, query, args...)
@@ -1052,8 +1056,12 @@ func (s *Store) ListFindings(ctx context.Context, f FindingFilter) ([]FindingRow
 	for rows.Next() {
 		var fr FindingRow
 		if err := rows.Scan(&fr.ID, &fr.ScanID, &fr.TargetID, &fr.FindingID, &fr.TemplateID, &fr.Name, &fr.Severity,
-			&fr.Host, &fr.MatchedAt, &fr.Type, &fr.CVE, &fr.Tags, &fr.CreatedAt); err != nil {
+			&fr.Host, &fr.MatchedAt, &fr.Type, &fr.CVE, &fr.Tags,
+			&fr.MatcherName, &fr.ExtractorName, &fr.ExtractedResults, &fr.CreatedAt); err != nil {
 			return nil, 0, err
+		}
+		if fr.ExtractedResults == nil {
+			fr.ExtractedResults = []string{}
 		}
 		out = append(out, fr)
 	}
@@ -1073,7 +1081,7 @@ func (s *Store) GetOccurrence(ctx context.Context, id int64) (OccurrenceDetail, 
 	var raw string
 	err := s.pool.QueryRow(ctx,
 		`SELECT id, scan_id, target_id, finding_id, template_id, name, severity,
-		        host, matched_at, type, cve, tags, created_at,
+		        host, matched_at, type, cve, tags, matcher_name, extractor_name, extracted_results, created_at,
 		        COALESCE(raw_line, raw::text)
 		   FROM findings
 		  WHERE id = $1`,
@@ -1081,6 +1089,7 @@ func (s *Store) GetOccurrence(ctx context.Context, id int64) (OccurrenceDetail, 
 		&detail.ID, &detail.ScanID, &detail.TargetID, &detail.FindingID,
 		&detail.TemplateID, &detail.Name, &detail.Severity, &detail.Host,
 		&detail.MatchedAt, &detail.Type, &detail.CVE, &detail.Tags,
+		&detail.MatcherName, &detail.ExtractorName, &detail.ExtractedResults,
 		&detail.CreatedAt, &raw)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1089,6 +1098,9 @@ func (s *Store) GetOccurrence(ctx context.Context, id int64) (OccurrenceDetail, 
 		return OccurrenceDetail{}, err
 	}
 	detail.Raw = json.RawMessage(raw)
+	if detail.ExtractedResults == nil {
+		detail.ExtractedResults = []string{}
+	}
 	return detail, nil
 }
 

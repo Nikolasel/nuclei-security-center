@@ -116,7 +116,11 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
 
 - **findings** (occurrences) — the immutable per-scan observation log: `id, scan_id,
   target_id, finding_id, dedup_key, result_discriminator, template_id, name, severity,
-  host, matched_at, raw_line, raw`.
+  host, matched_at, matcher_name, extractor_name, extracted_results, raw_line, raw`.
+  `matcher_name` / `extractor_name` / `extracted_results` are the plain Nuclei result-identity
+  fields (display, filter, export). They do not change the hashed `result_discriminator`.
+  Existing rows were backfilled from `raw` in migration `0003_finding_result_identity.sql`;
+  a result that never carried those Nuclei keys stays as empty string / empty array.
   `raw_line` preserves valid Nuclei JSONL text (invalid UTF-8 becomes U+FFFD; the object
   archive remains byte-exact); `raw` is a NUL-safe JSONB projection retained for ad-hoc
   operator SQL because affected source lines cannot be cast to JSONB. Historical rows may

@@ -45,6 +45,8 @@ const FIELDS: FieldDef[] = [
   { value: "disposition", label: "Disposition", kind: "enum", ops: ["any_of", "none_of"], options: DISPOSITION_OPTS },
   { value: "target", label: "Target", kind: "enum", ops: ["any_of", "none_of"] },
   { value: "host", label: "Host", kind: "text", ops: ["contains", "not_contains", "starts_with", "is_empty", "is_not_empty"] },
+  { value: "matcher", label: "Matcher", kind: "text", ops: ["contains", "not_contains", "starts_with", "is_empty", "is_not_empty"] },
+  { value: "extracted_result", label: "Extracted result", kind: "text", ops: ["contains", "not_contains", "is_empty", "is_not_empty"] },
   { value: "matched_at", label: "Matched at", kind: "text", ops: ["contains", "not_contains", "starts_with", "is_empty", "is_not_empty"] },
   { value: "type", label: "Type", kind: "enum", ops: ["any_of", "none_of"], options: TYPE_OPTS },
   { value: "cve", label: "CVE", kind: "text", ops: ["contains", "not_contains", "is_empty", "is_not_empty"] },

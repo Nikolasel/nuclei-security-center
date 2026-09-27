@@ -117,7 +117,14 @@ export function ScanFindingsView({ scanId }: { scanId: string }) {
                       <td className="px-3 py-2">
                         <SeverityBadge severity={f.severity} />
                       </td>
-                      <td className="px-3 py-2">{f.name || <span className="text-neutral-400">—</span>}</td>
+                      <td className="px-3 py-2">
+                        <div>{f.name || <span className="text-neutral-400">—</span>}</div>
+                        {(f.matcher_name || f.extractor_name || f.extracted_results?.length) ? (
+                          <div className="truncate font-mono text-[11px] text-neutral-500" title={[f.matcher_name, f.extractor_name, ...(f.extracted_results ?? [])].filter(Boolean).join(" · ")}>
+                            {[f.matcher_name, f.extractor_name, ...(f.extracted_results ?? [])].filter(Boolean).join(" · ")}
+                          </div>
+                        ) : null}
+                      </td>
                       <td className="px-3 py-2">
                         {f.cve?.length ? (
                           <span className="font-mono text-xs text-red-700 dark:text-red-400">{f.cve.join(", ")}</span>

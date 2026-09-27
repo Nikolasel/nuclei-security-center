@@ -130,8 +130,12 @@ export function OccurrenceDetailPage() {
               </>
             )}
           </Meta>
-          <Meta label="Matcher">{raw["matcher-name"] || "—"}</Meta>
-          <Meta label="Extractor">{raw["extractor-name"] || "—"}</Meta>
+          <Meta label="Matcher">
+            <span className="font-mono text-xs">{occurrence.matcher_name || raw["matcher-name"] || "—"}</span>
+          </Meta>
+          <Meta label="Extractor">
+            <span className="font-mono text-xs">{occurrence.extractor_name || raw["extractor-name"] || "—"}</span>
+          </Meta>
         </dl>
       </Section>
 
@@ -157,8 +161,10 @@ export function OccurrenceDetailPage() {
         </Section>
       )}
 
-      {raw["extracted-results"]?.length ? (
-        <Section title="Extracted results"><ExtractedResults items={raw["extracted-results"]} /></Section>
+      {(occurrence.extracted_results?.length || raw["extracted-results"]?.length) ? (
+        <Section title="Extracted results">
+          <ExtractedResults items={occurrence.extracted_results?.length ? occurrence.extracted_results : raw["extracted-results"]!} />
+        </Section>
       ) : null}
 
       {raw["curl-command"] && <Section title="Reproduce (curl)"><CodeBlock text={raw["curl-command"]} /></Section>}

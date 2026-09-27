@@ -392,6 +392,10 @@ func TestTemplateAwareLifecyclePostgres(t *testing.T) {
 		if len(raw.ExtractedResults) != 1 {
 			t.Fatalf("TLS lifecycle %d results = %#v", row.ID, raw.ExtractedResults)
 		}
+		if row.ExtractedResults == nil || len(row.ExtractedResults) != 1 || row.ExtractedResults[0] != raw.ExtractedResults[0] ||
+			detail.ExtractedResults[0] != raw.ExtractedResults[0] {
+			t.Fatalf("TLS lifecycle %d missing promoted identity columns: row=%#v detail=%#v", row.ID, row.ExtractedResults, detail.ExtractedResults)
+		}
 		tlsStates[raw.ExtractedResults[0]] = row.DetectionState
 	}
 	if tlsStates["tls12"] != "mitigated" || tlsStates["tls13"] != "active" {

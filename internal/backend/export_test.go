@@ -18,6 +18,7 @@ func sampleRows() []store.LifecycleRow {
 			TemplateID: "cve-2021-1234", Name: "Example RCE", Severity: "high",
 			EffectiveSeverity: "high", Host: "scanme.sh", MatchedAt: "https://scanme.sh/x",
 			Type: "http", CVE: []string{"CVE-2021-1234"}, Tags: []string{"cve", "rce"},
+			MatcherName: "status", ExtractorName: "body", ExtractedResults: []string{"tls13", "tls12"},
 			Disposition: "none", DetectionState: "active", EffectiveState: "active",
 			TimesMitigated: 0, FirstSeenAt: t0, LastSeenAt: t0,
 		},
@@ -69,6 +70,12 @@ func TestStreamFindingsCSVContent(t *testing.T) {
 	// tags joined with ";"
 	if recs[1][13] != "cve;rce" {
 		t.Errorf("tags = %q, want %q", recs[1][13], "cve;rce")
+	}
+	if recs[0][17] != "matcher_name" || recs[0][18] != "extractor_name" || recs[0][19] != "extracted_results" {
+		t.Errorf("identity header = %v", recs[0])
+	}
+	if recs[1][17] != "status" || recs[1][18] != "body" || recs[1][19] != "tls13;tls12" {
+		t.Errorf("identity cells = %v", recs[1])
 	}
 }
 
@@ -182,6 +189,10 @@ func TestStreamFindingsSARIFContent(t *testing.T) {
 	// Each result carries the lifecycle id (join key) in its properties.
 	if run.Results[0].Properties["nsc_lifecycle_id"] != float64(101) {
 		t.Errorf("result[0] nsc_lifecycle_id = %v, want 101", run.Results[0].Properties["nsc_lifecycle_id"])
+	}
+	if run.Results[0].Properties["matcher_name"] != "status" ||
+		run.Results[0].Properties["extractor_name"] != "body" {
+		t.Errorf("result[0] identity properties = %#v", run.Results[0].Properties)
 	}
 	// First result: high → error, with a location from matched_at.
 	if run.Results[0].Level != "error" {

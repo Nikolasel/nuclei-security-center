@@ -240,19 +240,39 @@ function TargetCell({ ids, names }: { ids: string[]; names: Map<string, string> 
   );
 }
 
+function resultIdentityLine(finding: {
+  matcher_name?: string;
+  extractor_name?: string;
+  extracted_results?: string[];
+}): string {
+  const bits: string[] = [];
+  if (finding.matcher_name) bits.push(finding.matcher_name);
+  if (finding.extractor_name) bits.push(finding.extractor_name);
+  if (finding.extracted_results?.length) bits.push(finding.extracted_results.join(", "));
+  return bits.join(" · ");
+}
+
 function FindingCell({ finding }: { finding: LifecycleFinding }) {
   const cves = finding.cve ?? [];
+  const identity = resultIdentityLine(finding);
   return (
-    <div className="flex min-w-0 max-w-full items-center gap-1.5">
-      <span className="min-w-0 truncate" title={finding.name || undefined}>
-        {finding.name || <EmptyMark />}
-      </span>
-      {finding.times_mitigated > 0 && (
-        <span className="shrink-0" title="Times gone then re-observed">
-          <Pill tone="warn">↻ {finding.times_mitigated}</Pill>
+    <div className="min-w-0 max-w-full">
+      <div className="flex min-w-0 max-w-full items-center gap-1.5">
+        <span className="min-w-0 truncate" title={finding.name || undefined}>
+          {finding.name || <EmptyMark />}
         </span>
-      )}
-      <CveChip cves={cves} />
+        {finding.times_mitigated > 0 && (
+          <span className="shrink-0" title="Times gone then re-observed">
+            <Pill tone="warn">↻ {finding.times_mitigated}</Pill>
+          </span>
+        )}
+        <CveChip cves={cves} />
+      </div>
+      {identity ? (
+        <div className="truncate font-mono text-[11px] text-neutral-500 dark:text-neutral-400" title={identity}>
+          {identity}
+        </div>
+      ) : null}
     </div>
   );
 }

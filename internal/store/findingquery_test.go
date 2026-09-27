@@ -54,6 +54,19 @@ func TestValidateFindingQueryAcceptsValuesAtLimits(t *testing.T) {
 	}}}}}); err != nil {
 		t.Fatalf("ValidateFindingQuery at value limits = %v, want nil", err)
 	}
+
+	if err := ValidateFindingQuery(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{
+		{Field: "matcher", Op: "contains", Values: []string{"tls13"}},
+		{Field: "extracted_result", Op: "contains", Values: []string{"tls12"}},
+	}}}}); err != nil {
+		t.Fatalf("ValidateFindingQuery result identity = %v, want nil", err)
+	}
+	err := ValidateFindingQuery(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{{
+		Field: "extracted_result", Op: "starts_with", Values: []string{"tls"},
+	}}}}})
+	if err == nil || !strings.Contains(err.Error(), "not valid") {
+		t.Fatalf("ValidateFindingQuery extracted_result starts_with = %v, want operator error", err)
+	}
 }
 
 func TestValidateFindingFilterBoundsOccurrenceFilters(t *testing.T) {

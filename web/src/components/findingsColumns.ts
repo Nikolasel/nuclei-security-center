@@ -12,8 +12,9 @@
 
 export const FINDINGS_COLUMNS_KEY = "nsc.findings.columns";
 
-/** Floor for the flexible Endpoint column. The table's min-width includes it
- *  so turning on every column scrolls the container instead of squeezing. */
+/** Drag floor for Endpoint. A protocol pill plus host and path needs more than
+ *  the 72–96px floors used by the other columns. When Endpoint is the last
+ *  visible column it stretches, and the table min-width counts this floor. */
 export const ENDPOINT_MIN_PX = 240;
 
 export type FindingsColumnId =
@@ -32,11 +33,12 @@ export interface FindingsColumn {
   id: FindingsColumnId;
   label: string;
   defaultVisible: boolean;
-  /** Fixed layout width in px. Absent on the one flexible column. */
+  /** Fixed layout width in px. The last visible column ignores it and stretches. */
   width?: number;
-  /** Inclusive drag and keyboard range. Absent on the flexible column. */
+  /** Inclusive drag and keyboard range. */
   minWidth?: number;
   maxWidth?: number;
+  /** Runtime mark on the last visible column: it fills leftover table width. */
   flexible?: boolean;
   /** `sort` query values that refer to this column (#311). Hiding the column
    *  clears that sort so the list order is not unexplained. */
@@ -44,12 +46,13 @@ export interface FindingsColumn {
 }
 
 // Floors sit in the 72–96px range: short labels near 72, content columns at 96.
-// maxWidth is what a stored 5000px preference clamps to.
+// Endpoint's floor is ENDPOINT_MIN_PX. maxWidth is what a stored 5000px preference clamps to.
+// No catalog column is flexible — visibleFindingsColumns marks the last visible one.
 export const FINDINGS_COLUMNS: readonly FindingsColumn[] = [
   { id: "severity", label: "Severity", defaultVisible: true, width: 112, minWidth: 80, maxWidth: 240, sortFields: ["severity", "effective_severity"] },
   { id: "finding", label: "Finding", defaultVisible: true, width: 320, minWidth: 96, maxWidth: 640, sortFields: ["name", "template_id"] },
   { id: "state", label: "State", defaultVisible: true, width: 140, minWidth: 72, maxWidth: 240, sortFields: ["state", "effective_state", "detection_state"] },
-  { id: "endpoint", label: "Endpoint", defaultVisible: true, flexible: true, sortFields: ["host", "type"] },
+  { id: "endpoint", label: "Endpoint", defaultVisible: true, width: 320, minWidth: ENDPOINT_MIN_PX, maxWidth: 640, sortFields: ["host", "type"] },
   { id: "last_seen", label: "Last seen", defaultVisible: true, width: 112, minWidth: 96, maxWidth: 240, sortFields: ["last_seen_at", "last_seen"] },
   { id: "target", label: "Target", defaultVisible: false, width: 168, minWidth: 80, maxWidth: 420, sortFields: ["target", "target_id"] },
   { id: "first_seen", label: "First seen", defaultVisible: false, width: 112, minWidth: 96, maxWidth: 240, sortFields: ["first_seen_at", "first_seen"] },
@@ -60,7 +63,7 @@ export const FINDINGS_COLUMNS: readonly FindingsColumn[] = [
 
 export interface FindingsColumnPref {
   visible: boolean;
-  /** Clamped px width. Absent on the flexible column. */
+  /** Clamped px width. Omitted from storage when it matches the catalog width. */
   width?: number;
 }
 
@@ -84,12 +87,11 @@ function storedVisible(entry: unknown, fallback: boolean): boolean {
 }
 
 function columnBounds(col: FindingsColumn): { min: number; max: number } | null {
-  if (col.flexible || col.width == null || col.minWidth == null || col.maxWidth == null) return null;
+  if (col.width == null || col.minWidth == null || col.maxWidth == null) return null;
   return { min: col.minWidth, max: col.maxWidth };
 }
 
-/** clampColumnWidth limits a drag or key step to the column's range.
- *  The flexible column has no stored width. */
+/** clampColumnWidth limits a drag or key step to the column's range. */
 export function clampColumnWidth(id: FindingsColumnId, width: number): number | null {
   const col = COLUMN_BY_ID.get(id);
   if (!col) return null;
@@ -141,7 +143,6 @@ export function columnPrefsToStore(
     const width = prefs[col.id].width;
     if (
       !options?.dropWidths &&
-      !col.flexible &&
       typeof width === "number" &&
       Number.isFinite(width) &&
       width !== col.width
@@ -191,15 +192,19 @@ export function columnIdForSort(sort: string | null): FindingsColumnId | null {
 }
 
 /** visibleFindingsColumns is the catalog order, with a hidden sort column
- *  forced on so the row order has a visible cause. */
+ *  forced on so the row order has a visible cause. The last visible column
+ *  stretches to fill the table; every column before it keeps a pixel width. */
 export function visibleFindingsColumns(prefs: FindingsColumnPrefs, sort: string | null): FindingsColumn[] {
   const sortColumn = columnIdForSort(sort);
-  return FINDINGS_COLUMNS.filter((c) => prefs[c.id].visible || c.id === sortColumn);
+  const visible = FINDINGS_COLUMNS.filter((c) => prefs[c.id].visible || c.id === sortColumn);
+  if (visible.length === 0) return visible;
+  const last = visible.length - 1;
+  return visible.map((col, index) => (index === last ? { ...col, flexible: true } : col));
 }
 
 export function findingsTableMinWidth(columns: readonly FindingsColumn[], prefs: FindingsColumnPrefs): number {
   return columns.reduce((sum, col) => {
-    if (col.flexible) return sum + ENDPOINT_MIN_PX;
+    if (col.flexible) return sum + (col.minWidth ?? 0);
     return sum + (prefs[col.id].width ?? col.width ?? 0);
   }, 0);
 }
@@ -212,32 +217,23 @@ export interface ColumnResizeTarget {
   max: number;
 }
 
-/** resizeHandleFor is the separator drawn on the right edge of `columns[hostIndex]`.
- *  A fixed column owns that edge and resizes itself. Endpoint has no pixel
- *  width, so its edge resizes the next fixed column and absorbs the slack.
- *  Those are different edges: the column after Endpoint still gets its own
- *  right-edge handle for the boundary that follows it. */
+/** resizeHandleFor is the separator on the right edge of `columns[hostIndex]`.
+ *  That boundary resizes the column on its left. The last visible column
+ *  stretches to the table edge, so it has no handle. */
 export function resizeHandleFor(
   columns: readonly FindingsColumn[],
   hostIndex: number,
   prefs: FindingsColumnPrefs,
 ): ColumnResizeTarget | null {
+  if (hostIndex < 0 || hostIndex >= columns.length - 1) return null;
   const host = columns[hostIndex];
-  if (!host) return null;
-  let target: FindingsColumn | undefined;
-  if (host.flexible) {
-    const next = columns[hostIndex + 1];
-    if (next && !next.flexible) target = next;
-  } else {
-    target = host;
-  }
-  if (!target?.width) return null;
-  const bounds = columnBounds(target);
+  if (!host?.width) return null;
+  const bounds = columnBounds(host);
   if (!bounds) return null;
   return {
-    id: target.id,
-    label: target.label,
-    width: prefs[target.id].width ?? target.width,
+    id: host.id,
+    label: host.label,
+    width: prefs[host.id].width ?? host.width,
     min: bounds.min,
     max: bounds.max,
   };

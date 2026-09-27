@@ -408,7 +408,6 @@ export function FindingsView() {
     [columnPrefs, sortParam],
   );
   const tableMinWidth = findingsTableMinWidth(columns, columnPrefs);
-  const endpointVisible = columns.some((col) => col.flexible);
 
   const replaceColumnPrefs = (next: FindingsColumnPrefs, options?: { dropWidths?: boolean }) => {
     columnPrefsRef.current = next;
@@ -733,7 +732,7 @@ export function FindingsView() {
             <div className="overflow-x-auto">
               <table
                 className="table-fixed text-sm"
-                style={{ minWidth: tableMinWidth, width: endpointVisible ? "100%" : tableMinWidth }}
+                style={{ minWidth: tableMinWidth, width: "100%" }}
               >
                 <colgroup>
                   {columns.map((col) => (

@@ -291,8 +291,8 @@ empty)*. Each condition is `{field, op, values}`:
 | --- | --- |
 | `severity`, `state`, `disposition`, `target`, `type` | `any_of`, `none_of` |
 | `name` (name/template) | `contains`, `starts_with` |
-| `host`, `matched_at` | `contains`, `not_contains`, `starts_with`, `is_empty`, `is_not_empty` |
-| `cve` | `contains`, `not_contains`, `is_empty`, `is_not_empty` |
+| `host`, `matched_at`, `matcher` | `contains`, `not_contains`, `starts_with`, `is_empty`, `is_not_empty` |
+| `cve`, `extracted_result` | `contains`, `not_contains`, `is_empty`, `is_not_empty` |
 | `tag` | `any_of`, `none_of`, `is_empty`, `is_not_empty` |
 
 Fields and operators are allowlisted (an unknown one is a `400`); every value is bound as a SQL
@@ -312,7 +312,11 @@ The legacy flat params (`severity=critical,high&host=…&matched_at=…&type=htt
 or comma-separated) are still accepted when no `filter` is given — compiled into a single
 AND-group — so old bookmarks and API callers keep working. `matched_at` is a substring match;
 `type` is an exact protocol match (`http`, `dns`, `tcp`, `whois`, and the other Nuclei result
-types), compared case-insensitively. Arbitrary nested parenthesized grouping (beyond OR-of-AND) remains a
+types), compared case-insensitively. `matcher` is a substring match on Nuclei's `matcher-name`.
+`extracted_result` is a substring match over any element of `extracted-results`. JSON list/detail
+rows also return `matcher_name`, `extractor_name`, and `extracted_results` (source order).
+Historical rows were backfilled from `findings.raw`; values that were never present stay empty.
+Arbitrary nested parenthesized grouping (beyond OR-of-AND) remains a
 possible future extension.
 
 ## Export
@@ -322,7 +326,9 @@ via `GET /api/findings/export?format=…`. The export takes the *same* filter pa
 `/api/findings`, so you export exactly what you're looking at (unpaginated). CSV is a flat
 table for spreadsheets; SARIF is a valid 2.1.0 document (deduped rules + per-finding results,
 severity→level) for code-scanning / CI ingestion. The projected formats carry the lifecycle
-overlay — detection state, disposition, `times_mitigated`, and all contributing `target_ids`.
+overlay — detection state, disposition, `times_mitigated`, all contributing `target_ids`, and the
+result-identity fields `matcher_name`, `extractor_name`, and `extracted_results`. CSV appends those
+three columns after `target_ids`; SARIF puts them on each result's `properties`.
 **Raw JSONL** instead emits the
 preserved Nuclei output of each finding's latest occurrence, one JSON object per line (Nuclei's
 native `out.jsonl` shape) — the full request/response, curl reproducer, and classification that

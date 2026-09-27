@@ -438,6 +438,9 @@ export interface Occurrence {
   type: string;
   cve: string[];
   tags: string[];
+  matcher_name: string;
+  extractor_name: string;
+  extracted_results: string[];
   created_at: string;
 }
 
@@ -515,6 +518,9 @@ export interface LifecycleFinding {
   first_seen_at: string;
   last_seen_at: string;
   latest_occurrence_id?: number;
+  matcher_name: string;
+  extractor_name: string;
+  extracted_results: string[];
 }
 
 // AppSettings is the global settings singleton (#95). Today it carries only the

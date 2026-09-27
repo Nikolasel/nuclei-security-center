@@ -142,12 +142,15 @@ func (s *Store) IngestFinding(ctx context.Context, scanID, targetID string, f ty
 // preparedOccurrence is the record-local projection of one occurrence, computed
 // before any database work so malformed records fail cleanly (FindingRecordError).
 type preparedOccurrence struct {
-	key           string
-	discriminator string
-	rawProjection []byte
-	rawLine       string
-	f             types.NucleiFinding
-	endpointKey   string
+	key              string
+	discriminator    string
+	matcherName      string
+	extractorName    string
+	extractedResults []string
+	rawProjection    []byte
+	rawLine          string
+	f                types.NucleiFinding
+	endpointKey      string
 }
 
 func prepareOccurrence(f types.NucleiFinding, raw []byte) (preparedOccurrence, error) {
@@ -162,13 +165,20 @@ func prepareOccurrence(f types.NucleiFinding, raw []byte) (preparedOccurrence, e
 	if err != nil {
 		return preparedOccurrence{}, NewFindingRecordError("derive finding result identity", err)
 	}
+	matcherName, extractorName, extractedResults, err := parseResultIdentity(rawProjection)
+	if err != nil {
+		return preparedOccurrence{}, NewFindingRecordError("derive finding result identity", err)
+	}
 	return preparedOccurrence{
-		key:           DedupKey(f.TemplateID, f.MatchedAt, discriminator),
-		discriminator: discriminator,
-		rawProjection: rawProjection,
-		rawLine:       findingRawLine(raw),
-		f:             findingTextProjection(f),
-		endpointKey:   postgresText(types.EndpointKey(f.MatchedAt, f.Type)),
+		key:              DedupKey(f.TemplateID, f.MatchedAt, discriminator),
+		discriminator:    discriminator,
+		matcherName:      postgresText(matcherName),
+		extractorName:    postgresText(extractorName),
+		extractedResults: postgresTexts(extractedResults),
+		rawProjection:    rawProjection,
+		rawLine:          findingRawLine(raw),
+		f:                findingTextProjection(f),
+		endpointKey:      postgresText(types.EndpointKey(f.MatchedAt, f.Type)),
 	}, nil
 }
 
@@ -182,11 +192,13 @@ func ingestFindingOccurrence(ctx context.Context, tx pgx.Tx, scanID, targetID st
 	if err := tx.QueryRow(ctx,
 		`INSERT INTO findings
 		   (scan_id, target_id, dedup_key, result_discriminator, template_id, name, severity,
-		    host, matched_at, type, cve, tags, raw, raw_line, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		    host, matched_at, type, cve, tags, raw, raw_line, created_at,
+		    matcher_name, extractor_name, extracted_results)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 		 RETURNING id`,
 		scanID, nullStr(targetID), prep.key, prep.discriminator, prep.f.TemplateID, prep.f.Info.Name, prep.f.Info.Severity,
 		prep.f.Host, prep.f.MatchedAt, prep.f.Type, orEmpty(prep.f.CVEs()), orEmpty(prep.f.Info.Tags), prep.rawProjection, prep.rawLine, occurredAt,
+		prep.matcherName, prep.extractorName, orEmpty(prep.extractedResults),
 	).Scan(&occID); err != nil {
 		return false, fmt.Errorf("insert occurrence: %w", err)
 	}
@@ -216,8 +228,8 @@ func ingestFindingOccurrence(ctx context.Context, tx pgx.Tx, scanID, targetID st
 		`INSERT INTO finding_lifecycle
 		   (dedup_key, result_discriminator, template_id, name, severity, host,
 		    matched_at, endpoint_key, type, cve, tags, first_seen_scan, first_seen_at, last_seen_scan,
-		    last_seen_at, latest_occurrence_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $15, $12, $15, $13)
+		    last_seen_at, latest_occurrence_id, matcher_name, extractor_name, extracted_results)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $15, $12, $15, $13, $17, $18, $19)
 		 ON CONFLICT (dedup_key) DO UPDATE SET
 		    first_seen_scan      = CASE WHEN %[2]s THEN excluded.first_seen_scan ELSE finding_lifecycle.first_seen_scan END,
 		    first_seen_at        = least(finding_lifecycle.first_seen_at, excluded.first_seen_at),
@@ -231,6 +243,9 @@ func ingestFindingOccurrence(ctx context.Context, tx pgx.Tx, scanID, targetID st
 		    type                 = CASE WHEN %[1]s THEN excluded.type ELSE finding_lifecycle.type END,
 		    cve                  = CASE WHEN %[1]s THEN excluded.cve ELSE finding_lifecycle.cve END,
 		    tags                 = CASE WHEN %[1]s THEN excluded.tags ELSE finding_lifecycle.tags END,
+		    matcher_name         = CASE WHEN %[1]s THEN excluded.matcher_name ELSE finding_lifecycle.matcher_name END,
+		    extractor_name       = CASE WHEN %[1]s THEN excluded.extractor_name ELSE finding_lifecycle.extractor_name END,
+		    extracted_results    = CASE WHEN %[1]s THEN excluded.extracted_results ELSE finding_lifecycle.extracted_results END,
 		    latest_occurrence_id = CASE WHEN %[1]s THEN excluded.latest_occurrence_id ELSE finding_lifecycle.latest_occurrence_id END,
 		    times_mitigated      = finding_lifecycle.times_mitigated + CASE
 		        WHEN %[1]s
@@ -244,7 +259,7 @@ func ingestFindingOccurrence(ctx context.Context, tx pgx.Tx, scanID, targetID st
 	if err := tx.QueryRow(ctx, upsertLifecycle,
 		prep.key, prep.discriminator, prep.f.TemplateID, prep.f.Info.Name, prep.f.Info.Severity, prep.f.Host, prep.f.MatchedAt,
 		prep.endpointKey, prep.f.Type, orEmpty(prep.f.CVEs()), orEmpty(prep.f.Info.Tags), scanID, occID, scanCreatedAt,
-		occurredAt, scanID,
+		occurredAt, scanID, prep.matcherName, prep.extractorName, orEmpty(prep.extractedResults),
 	).Scan(&lcID, &lcCreated); err != nil {
 		return false, fmt.Errorf("upsert lifecycle: %w", err)
 	}
@@ -396,6 +411,9 @@ type LifecycleRow struct {
 	FirstSeenAt            time.Time `json:"first_seen_at"`
 	LastSeenAt             time.Time `json:"last_seen_at"`
 	LatestOccurrenceID     *int64    `json:"latest_occurrence_id,omitempty"`
+	MatcherName            string    `json:"matcher_name"`
+	ExtractorName          string    `json:"extractor_name"`
+	ExtractedResults       []string  `json:"extracted_results"`
 }
 
 // LifecycleDetail is one deduplicated finding with its disposition/recast audit
@@ -425,14 +443,23 @@ const lcSelectCols = `l.id,
 	l.disposition, l.accept_expires_at, ` + lcDetectionExpr + ` AS detection_state,
 	` + lcEffectiveExpr + ` AS effective_state, l.times_mitigated,
 	(l.endpoint_key <> '') AS auto_mitigation_eligible,
-	l.first_seen_scan, l.last_seen_scan, l.first_seen_at, l.last_seen_at, l.latest_occurrence_id`
+	l.first_seen_scan, l.last_seen_scan, l.first_seen_at, l.last_seen_at, l.latest_occurrence_id,
+	l.matcher_name, l.extractor_name, l.extracted_results`
 
 func scanLifecycleRow(row pgx.Row, r *LifecycleRow) error {
-	return row.Scan(&r.ID, &r.TargetIDs, &r.TemplateID, &r.Name, &r.Severity, &r.RecastSeverity,
+	err := row.Scan(&r.ID, &r.TargetIDs, &r.TemplateID, &r.Name, &r.Severity, &r.RecastSeverity,
 		&r.EffectiveSeverity, &r.Host, &r.MatchedAt, &r.Type, &r.CVE, &r.Tags,
 		&r.Disposition, &r.AcceptExpiresAt, &r.DetectionState, &r.EffectiveState, &r.TimesMitigated,
 		&r.AutoMitigationEligible,
-		&r.FirstSeenScan, &r.LastSeenScan, &r.FirstSeenAt, &r.LastSeenAt, &r.LatestOccurrenceID)
+		&r.FirstSeenScan, &r.LastSeenScan, &r.FirstSeenAt, &r.LastSeenAt, &r.LatestOccurrenceID,
+		&r.MatcherName, &r.ExtractorName, &r.ExtractedResults)
+	if err != nil {
+		return err
+	}
+	if r.ExtractedResults == nil {
+		r.ExtractedResults = []string{}
+	}
+	return nil
 }
 
 // lcOrderBy is the shared sort: highest effective severity first, then most
@@ -635,6 +662,7 @@ func (s *Store) GetLifecycleFinding(ctx context.Context, id int64) (LifecycleDet
 		&d.Disposition, &d.AcceptExpiresAt, &d.DetectionState, &d.EffectiveState, &d.TimesMitigated,
 		&d.AutoMitigationEligible,
 		&d.FirstSeenScan, &d.LastSeenScan, &d.FirstSeenAt, &d.LastSeenAt, &d.LatestOccurrenceID,
+		&d.MatcherName, &d.ExtractorName, &d.ExtractedResults,
 		&dNote, &dBy, &d.DispositionAt, &rNote, &rBy, &d.RecastAt,
 		&d.OccurrenceCount, &rawLine)
 	if err != nil {
@@ -645,6 +673,9 @@ func (s *Store) GetLifecycleFinding(ctx context.Context, id int64) (LifecycleDet
 	}
 	d.DispositionNote, d.DispositionBy = deref(dNote), deref(dBy)
 	d.RecastNote, d.RecastBy = deref(rNote), deref(rBy)
+	if d.ExtractedResults == nil {
+		d.ExtractedResults = []string{}
+	}
 	if rawLine != nil {
 		d.Raw = json.RawMessage(*rawLine)
 	}

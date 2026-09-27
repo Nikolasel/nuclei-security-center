@@ -550,6 +550,7 @@ func findingsCSVHeader() []string {
 		"id", "template_id", "name", "severity", "effective_severity", "host", "matched_at",
 		"type", "detection_state", "effective_state", "disposition", "times_mitigated",
 		"cve", "tags", "first_seen_at", "last_seen_at", "target_ids",
+		"matcher_name", "extractor_name", "extracted_results",
 	}
 }
 
@@ -561,6 +562,7 @@ func lifecycleCSVCells(r store.LifecycleRow) []string {
 		strings.Join(r.CVE, ";"), strings.Join(r.Tags, ";"),
 		r.FirstSeenAt.UTC().Format(time.RFC3339), r.LastSeenAt.UTC().Format(time.RFC3339),
 		strings.Join(r.TargetIDs, ";"),
+		r.MatcherName, r.ExtractorName, strings.Join(r.ExtractedResults, ";"),
 	}
 }
 
@@ -614,6 +616,9 @@ func sarifResultForRow(r store.LifecycleRow) sarifResult {
 			"host":               r.Host,
 			"first_seen_at":      r.FirstSeenAt.UTC().Format(time.RFC3339),
 			"last_seen_at":       r.LastSeenAt.UTC().Format(time.RFC3339),
+			"matcher_name":       r.MatcherName,
+			"extractor_name":     r.ExtractorName,
+			"extracted_results":  r.ExtractedResults,
 		},
 	}
 	if len(r.CVE) > 0 {

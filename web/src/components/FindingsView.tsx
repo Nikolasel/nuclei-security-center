@@ -19,6 +19,8 @@ import {
   columnIdForSort,
   endpointParts,
   resizeHandleFor,
+  resultIdentityLine,
+  resultIdentityTitle,
   sortField,
   FINDINGS_COLUMNS,
   FINDINGS_COLUMNS_KEY,
@@ -240,19 +242,37 @@ function TargetCell({ ids, names }: { ids: string[]; names: Map<string, string> 
   );
 }
 
-function FindingCell({ finding }: { finding: LifecycleFinding }) {
+function FindingCell({ finding, showIdentity }: { finding: LifecycleFinding; showIdentity: boolean }) {
   const cves = finding.cve ?? [];
+  const identity = showIdentity ? resultIdentityLine(finding) : "";
   return (
-    <div className="flex min-w-0 max-w-full items-center gap-1.5">
-      <span className="min-w-0 truncate" title={finding.name || undefined}>
-        {finding.name || <EmptyMark />}
-      </span>
-      {finding.times_mitigated > 0 && (
-        <span className="shrink-0" title="Times gone then re-observed">
-          <Pill tone="warn">↻ {finding.times_mitigated}</Pill>
+    <div className="min-w-0 max-w-full">
+      <div className="flex min-w-0 max-w-full items-center gap-1.5">
+        <span className="min-w-0 truncate" title={finding.name || undefined}>
+          {finding.name || <EmptyMark />}
         </span>
-      )}
-      <CveChip cves={cves} />
+        {finding.times_mitigated > 0 && (
+          <span className="shrink-0" title="Times gone then re-observed">
+            <Pill tone="warn">↻ {finding.times_mitigated}</Pill>
+          </span>
+        )}
+        <CveChip cves={cves} />
+      </div>
+      {identity ? (
+        <div className="truncate font-mono text-[11px] text-neutral-500 dark:text-neutral-400" title={resultIdentityTitle(finding)}>
+          {identity}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ResultIdentityCell({ finding }: { finding: LifecycleFinding }) {
+  const identity = resultIdentityLine(finding);
+  if (!identity) return <EmptyMark />;
+  return (
+    <div className="truncate font-mono text-xs text-neutral-700 dark:text-neutral-200" title={resultIdentityTitle(finding)}>
+      {identity}
     </div>
   );
 }
@@ -285,16 +305,18 @@ function FindingCellSwitch({
   id,
   finding,
   targetNames,
+  showInlineIdentity,
 }: {
   id: FindingsColumnId;
   finding: LifecycleFinding;
   targetNames: Map<string, string>;
+  showInlineIdentity: boolean;
 }) {
   switch (id) {
     case "severity":
       return <SeverityBadge severity={finding.effective_severity} recast={!!finding.recast_severity} />;
     case "finding":
-      return <FindingCell finding={finding} />;
+      return <FindingCell finding={finding} showIdentity={showInlineIdentity} />;
     case "state":
       return (
         <FindingStateBadge
@@ -328,6 +350,8 @@ function FindingCellSwitch({
       ) : (
         <EmptyMark />
       );
+    case "result_identity":
+      return <ResultIdentityCell finding={finding} />;
     default:
       return null;
   }
@@ -407,6 +431,7 @@ export function FindingsView() {
     () => visibleFindingsColumns(columnPrefs, sortParam),
     [columnPrefs, sortParam],
   );
+  const showInlineIdentity = !columns.some((col) => col.id === "result_identity");
   const tableMinWidth = findingsTableMinWidth(columns, columnPrefs);
 
   const replaceColumnPrefs = (next: FindingsColumnPrefs, options?: { dropWidths?: boolean }) => {
@@ -770,7 +795,12 @@ export function FindingsView() {
                     >
                       {columns.map((col) => (
                         <td key={col.id} className="max-w-0 overflow-hidden px-3 py-2">
-                          <FindingCellSwitch id={col.id} finding={f} targetNames={targetNames} />
+                          <FindingCellSwitch
+                            id={col.id}
+                            finding={f}
+                            targetNames={targetNames}
+                            showInlineIdentity={showInlineIdentity}
+                          />
                         </td>
                       ))}
                       <td role="presentation" className="border-b border-neutral-100 p-0 group-last/finding:border-b-0 dark:border-neutral-800/60" />

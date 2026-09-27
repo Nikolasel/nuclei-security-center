@@ -218,6 +218,7 @@ export function FindingDetailPage() {
   const info = raw.info ?? {};
   const cls = info.classification ?? {};
   const name = info.name || f.name || f.template_id;
+  const extracted = f.extracted_results?.length ? f.extracted_results : raw["extracted-results"];
 
   return (
     <div className="space-y-5">
@@ -317,6 +318,20 @@ export function FindingDetailPage() {
         </dl>
       </Section>
 
+      <Section title="Result identity">
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
+          <Meta label="Matcher">
+            <span className="font-mono text-xs">{f.matcher_name || raw["matcher-name"] || "—"}</span>
+          </Meta>
+          <Meta label="Extractor">
+            <span className="font-mono text-xs">{f.extractor_name || raw["extractor-name"] || "—"}</span>
+          </Meta>
+          <Meta label="Extracted results">
+            {extracted?.length ? <ExtractedResults items={extracted} /> : <span className="text-neutral-400">—</span>}
+          </Meta>
+        </dl>
+      </Section>
+
       {(cls["cve-id"]?.length || cls["cwe-id"]?.length || cls["cvss-score"] != null || cls["cvss-metrics"]) && (
         <Section title="Classification">
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
@@ -370,12 +385,6 @@ export function FindingDetailPage() {
           </dl>
         </Section>
       )}
-
-      {raw["extracted-results"]?.length ? (
-        <Section title="Extracted results">
-          <ExtractedResults items={raw["extracted-results"]} />
-        </Section>
-      ) : null}
 
       {raw["curl-command"] && (
         <Section title="Reproduce (curl)">

@@ -57,6 +57,28 @@ func TestBuildFindingWhere(t *testing.T) {
 	}
 
 	args = nil
+	where, err = buildFindingWhere(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{
+		{Field: "matcher", Op: "contains", Values: []string{"tls13"}},
+		{Field: "extracted_result", Op: "contains", Values: []string{"tls12"}},
+	}}}}, &args)
+	if err != nil {
+		t.Fatalf("compile result identity: %v", err)
+	}
+	if !strings.Contains(where, "l.matcher_name ILIKE ANY($1)") {
+		t.Errorf("matcher filter missing:\n%s", where)
+	}
+	if !strings.Contains(where, "unnest(l.extracted_results)") {
+		t.Errorf("extracted_result filter missing:\n%s", where)
+	}
+
+	args = nil
+	if _, err = buildFindingWhere(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{{
+		Field: "matcher", Op: "any_of", Values: []string{"tls13"},
+	}}}}}, &args); err == nil {
+		t.Fatal("matcher any_of compiled; want operator rejected")
+	}
+
+	args = nil
 	where, err = buildFindingWhere(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{{
 		Field: "target", Op: "any_of", Values: []string{"target-a"},
 	}}}}}, &args)
@@ -190,6 +212,56 @@ func TestResultDiscriminator(t *testing.T) {
 			t.Fatalf("volatile fields changed identity: %q != %q", a, b)
 		}
 	})
+}
+
+func TestParseResultIdentityKeepsSourceOrder(t *testing.T) {
+	matcher, extractor, extracted, err := parseResultIdentity([]byte(
+		`{"matcher-name":"tls13","extractor-name":"ver","extracted-results":["tls13","tls12"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matcher != "tls13" || extractor != "ver" {
+		t.Fatalf("names = %q/%q", matcher, extractor)
+	}
+	if len(extracted) != 2 || extracted[0] != "tls13" || extracted[1] != "tls12" {
+		t.Fatalf("extracted = %#v, want source order", extracted)
+	}
+
+	_, _, empty, err := parseResultIdentity([]byte(`{"extracted-results":{"not":"array"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("malformed extracted-results = %#v, want empty", empty)
+	}
+}
+
+func TestPrepareOccurrencePromotesResultIdentity(t *testing.T) {
+	f := types.NucleiFinding{
+		TemplateID: "tls-version",
+		Host:       "h",
+		MatchedAt:  "h:443",
+		Type:       "ssl",
+		Info:       types.NucleiInfo{Name: "TLS version", Severity: "info"},
+	}
+	raw := []byte(`{"template-id":"tls-version","matcher-name":"tls13","extractor-name":"ver","extracted-results":["tls13","tls12"]}`)
+	prep, err := prepareOccurrence(f, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prep.matcherName != "tls13" || prep.extractorName != "ver" {
+		t.Fatalf("identity names = %q/%q", prep.matcherName, prep.extractorName)
+	}
+	if len(prep.extractedResults) != 2 || prep.extractedResults[0] != "tls13" || prep.extractedResults[1] != "tls12" {
+		t.Fatalf("extracted = %#v, want source order", prep.extractedResults)
+	}
+	disc, err := resultDiscriminator(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prep.discriminator != disc || disc == "" {
+		t.Fatalf("discriminator = %q, want hashed identity %q", prep.discriminator, disc)
+	}
 }
 
 func TestFindingJSONBProjectionEscapesNULWithoutChangingRaw(t *testing.T) {

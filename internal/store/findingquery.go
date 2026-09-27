@@ -65,16 +65,18 @@ type fieldSpec struct {
 // to a fixed SQL expression — an unknown field is rejected, so the field name can
 // never be attacker-controlled SQL.
 var findingFields = map[string]fieldSpec{
-	"name":        {kind: kindTextTwo, expr: "l.name", exprB: "l.template_id"},
-	"severity":    {kind: kindEnum, expr: effSevExpr, lowered: true},
-	"state":       {kind: kindEnum, expr: "(" + lcEffectiveExpr + ")"},
-	"disposition": {kind: kindEnum, expr: "l.disposition"},
-	"target":      {kind: kindTarget},
-	"host":        {kind: kindText, expr: "l.host"},
-	"matched_at":  {kind: kindText, expr: "l.matched_at"},
-	"type":        {kind: kindEnum, expr: "l.type", lowered: true},
-	"cve":         {kind: kindTextArray, expr: "l.cve"},
-	"tag":         {kind: kindTextArray, expr: "l.tags"},
+	"name":             {kind: kindTextTwo, expr: "l.name", exprB: "l.template_id"},
+	"severity":         {kind: kindEnum, expr: effSevExpr, lowered: true},
+	"state":            {kind: kindEnum, expr: "(" + lcEffectiveExpr + ")"},
+	"disposition":      {kind: kindEnum, expr: "l.disposition"},
+	"target":           {kind: kindTarget},
+	"host":             {kind: kindText, expr: "l.host"},
+	"matcher":          {kind: kindText, expr: "l.matcher_name"},
+	"extracted_result": {kind: kindTextArray, expr: "l.extracted_results"},
+	"matched_at":       {kind: kindText, expr: "l.matched_at"},
+	"type":             {kind: kindEnum, expr: "l.type", lowered: true},
+	"cve":              {kind: kindTextArray, expr: "l.cve"},
+	"tag":              {kind: kindTextArray, expr: "l.tags"},
 }
 
 // opsForKind lists the operators each field kind accepts (also drives the UI).

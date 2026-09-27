@@ -758,7 +758,7 @@ export function FindingsView() {
                         </th>
                       );
                     })}
-                    <th aria-hidden className="p-0" />
+                    <th role="presentation" className="p-0" />
                   </tr>
                 </thead>
                 <tbody>
@@ -773,7 +773,7 @@ export function FindingsView() {
                           <FindingCellSwitch id={col.id} finding={f} targetNames={targetNames} />
                         </td>
                       ))}
-                      <td className="border-b border-neutral-100 p-0 group-last/finding:border-b-0 dark:border-neutral-800/60" />
+                      <td role="presentation" className="border-b border-neutral-100 p-0 group-last/finding:border-b-0 dark:border-neutral-800/60" />
                     </tr>
                   ))}
                   {items.length === 0 && (

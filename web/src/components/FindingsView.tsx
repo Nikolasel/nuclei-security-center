@@ -22,6 +22,7 @@ import {
   resultIdentityLine,
   resultIdentityTitle,
   sortField,
+  defaultFindingsSortOrder,
   FINDINGS_COLUMNS,
   FINDINGS_COLUMNS_KEY,
   findingsTableMinWidth,
@@ -426,7 +427,9 @@ export function FindingsView() {
   }, []);
 
   const sortParam = searchParams.get("sort");
+  const orderParam = searchParams.get("order") === "asc" || searchParams.get("order") === "desc" ? searchParams.get("order") : null;
   const sortColumn = columnIdForSort(sortParam);
+  const activeSortField = sortField(sortParam);
   const columns = useMemo(
     () => visibleFindingsColumns(columnPrefs, sortParam),
     [columnPrefs, sortParam],
@@ -465,6 +468,36 @@ export function FindingsView() {
     setSearchParams(p, { replace: true });
   };
 
+  const toggleSort = (field: string) => {
+    const p = new URLSearchParams(searchParams);
+    const current = sortField(p.get("sort"));
+    const currentOrder = p.get("order") === "asc" || p.get("order") === "desc" ? p.get("order") : defaultFindingsSortOrder(current);
+    if (current === field) {
+      p.set("sort", field);
+      p.set("order", currentOrder === "asc" ? "desc" : "asc");
+    } else {
+      p.set("sort", field);
+      p.set("order", defaultFindingsSortOrder(field));
+    }
+    setSearchParams(p, { replace: true });
+  };
+
+  const headerSortField = (id: FindingsColumnId): string | null => {
+    const col = FINDINGS_COLUMNS.find((c) => c.id === id);
+    const field = col?.sortFields[0];
+    if (!field) return null;
+    switch (field) {
+      case "severity":
+      case "name":
+      case "last_seen_at":
+      case "first_seen_at":
+      case "matched_at":
+        return field;
+      default:
+        return null;
+    }
+  };
+
   const showColumn = (id: FindingsColumnId) => {
     const prev = columnPrefsRef.current;
     if (prev[id].visible) return;
@@ -499,11 +532,18 @@ export function FindingsView() {
   useEffect(() => {
     if (mounted.current) setOffset(0);
     else mounted.current = true;
-  }, [filter]);
+  }, [filter, sortParam, orderParam]);
 
   const query = useQuery({
-    queryKey: ["findings", filter, offset],
-    queryFn: () => api.listFindings({ filter, limit: PAGE_SIZE, offset }),
+    queryKey: ["findings", filter, offset, sortParam, orderParam],
+    queryFn: () =>
+      api.listFindings({
+        filter,
+        limit: PAGE_SIZE,
+        offset,
+        sort: sortParam || undefined,
+        order: orderParam === "asc" || orderParam === "desc" ? orderParam : undefined,
+      }),
     placeholderData: keepPreviousData,
   });
 
@@ -525,7 +565,11 @@ export function FindingsView() {
     setExporting(format);
     setExportNotice(null);
     try {
-      const result = await api.fetchFindingsExport(format, { filter });
+      const result = await api.fetchFindingsExport(format, {
+        filter,
+        sort: sortParam || undefined,
+        order: orderParam === "asc" || orderParam === "desc" ? orderParam : undefined,
+      });
       const objectURL = URL.createObjectURL(result.blob);
       const a = document.createElement("a");
       a.href = objectURL;
@@ -769,9 +813,25 @@ export function FindingsView() {
                   <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
                     {columns.map((col, index) => {
                       const resize = resizeHandleFor(columns, index, columnPrefs);
+                      const sortKey = headerSortField(col.id);
+                      const sorted = sortKey != null && activeSortField === sortKey;
+                      const ariaSort = sorted ? (orderParam === "asc" ? "ascending" : "descending") : "none";
                       return (
-                        <th key={col.id} scope="col" className="relative px-3 py-2 font-medium whitespace-nowrap">
-                          <span className="block truncate">{col.label}</span>
+                        <th key={col.id} scope="col" aria-sort={sortKey ? ariaSort : undefined} className="relative px-3 py-2 font-medium whitespace-nowrap">
+                          {sortKey ? (
+                            <button
+                              type="button"
+                              className="inline-flex max-w-full items-center gap-1 truncate hover:text-indigo-600"
+                              onClick={() => toggleSort(sortKey)}
+                            >
+                              <span className="truncate">{col.label}</span>
+                              <span aria-hidden="true" className={sorted ? "text-indigo-600" : "text-neutral-300"}>
+                                {sorted ? (orderParam === "asc" ? "↑" : "↓") : "↕"}
+                              </span>
+                            </button>
+                          ) : (
+                            <span className="block truncate">{col.label}</span>
+                          )}
                           {resize && (
                             <ColumnResizeHandle
                               target={resize}

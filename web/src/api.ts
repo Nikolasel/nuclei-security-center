@@ -567,6 +567,8 @@ export interface FindingsQuery {
   filter?: FindingQuery;
   limit?: number;
   offset?: number;
+  sort?: string;
+  order?: "asc" | "desc";
 }
 
 /** findingsParams serializes the filter into the query params shared by the list
@@ -575,6 +577,8 @@ export interface FindingsQuery {
 function findingsParams(q: FindingsQuery): URLSearchParams {
   const p = new URLSearchParams();
   if (q.filter && q.filter.groups.length > 0) p.set("filter", JSON.stringify(q.filter));
+  if (q.sort) p.set("sort", q.sort);
+  if (q.sort && q.order) p.set("order", q.order);
   return p;
 }
 

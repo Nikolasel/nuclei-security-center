@@ -750,19 +750,64 @@ func findingQueryFromRequest(q url.Values) (store.FindingQuery, error) {
 	if err := validateFindingFilterQueryParams(q); err != nil {
 		return store.FindingQuery{}, err
 	}
+	var fq store.FindingQuery
 	raw := q.Get("filter")
 	if raw = strings.TrimSpace(raw); raw != "" {
-		var fq store.FindingQuery
 		if err := json.Unmarshal([]byte(raw), &fq); err != nil {
 			return store.FindingQuery{}, fmt.Errorf("invalid filter: %w", err)
 		}
-		return fq, nil
+	} else {
+		fq = legacyFlatQuery(q)
 	}
-	return legacyFlatQuery(q), nil
+	sort, order, err := parseFindingSortParams(q)
+	if err != nil {
+		return store.FindingQuery{}, err
+	}
+	fq.Sort = sort
+	fq.Order = order
+	return fq, nil
+}
+
+func parseFindingSortParams(q url.Values) (string, string, error) {
+	if values, ok := q["sort"]; ok && len(values) > 1 {
+		return "", "", errors.New("only one sort parameter is allowed")
+	}
+	if values, ok := q["order"]; ok && len(values) > 1 {
+		return "", "", errors.New("only one order parameter is allowed")
+	}
+	field := strings.TrimSpace(q.Get("sort"))
+	order := strings.ToLower(strings.TrimSpace(q.Get("order")))
+	if field != "" {
+		switch {
+		case strings.HasPrefix(field, "-"):
+			field = strings.TrimSpace(field[1:])
+			if order == "" {
+				order = "desc"
+			}
+		case strings.HasPrefix(field, "+"):
+			field = strings.TrimSpace(field[1:])
+			if order == "" {
+				order = "asc"
+			}
+		}
+		if i := strings.LastIndex(field, ":"); i >= 0 {
+			dir := strings.ToLower(strings.TrimSpace(field[i+1:]))
+			field = strings.TrimSpace(field[:i])
+			if order == "" {
+				order = dir
+			}
+		}
+	}
+	field = store.CanonicalFindingSortField(field)
+	if err := store.ValidateFindingSort(field, order); err != nil {
+		return "", "", err
+	}
+	return field, order, nil
 }
 
 var findingFilterQueryParamKeys = []string{
 	"filter", "q", "severity", "state", "disposition", "target_id", "host", "matched_at", "type", "cve", "tag",
+	"sort", "order",
 }
 
 // validateFindingFilterQueryParams bounds the raw values before the legacy
@@ -772,6 +817,12 @@ var findingFilterQueryParamKeys = []string{
 func validateFindingFilterQueryParams(q url.Values) error {
 	if values, ok := q["filter"]; ok && len(values) > 1 {
 		return errors.New("only one filter parameter is allowed")
+	}
+	if values, ok := q["sort"]; ok && len(values) > 1 {
+		return errors.New("only one sort parameter is allowed")
+	}
+	if values, ok := q["order"]; ok && len(values) > 1 {
+		return errors.New("only one order parameter is allowed")
 	}
 	total := 0
 	for _, key := range findingFilterQueryParamKeys {

@@ -290,15 +290,21 @@ empty)*. Each condition is `{field, op, values}`:
 | Field | Operators |
 | --- | --- |
 | `severity`, `state`, `disposition`, `target`, `type` | `any_of`, `none_of` |
-| `name` (name/template) | `contains`, `starts_with` |
+| `name` (name/template) | `contains`, `not_contains`, `starts_with`, `is_empty`, `is_not_empty` |
 | `host`, `matched_at`, `matcher` | `contains`, `not_contains`, `starts_with`, `is_empty`, `is_not_empty` |
 | `cve`, `extracted_result` | `contains`, `not_contains`, `is_empty`, `is_not_empty` |
 | `tag` | `any_of`, `none_of`, `is_empty`, `is_not_empty` |
+| `first_seen_at`, `last_seen_at` | `before`, `after`, `between` (inclusive; RFC3339 or `YYYY-MM-DD`) |
 
 Fields and operators are allowlisted (an unknown one is a `400`); every value is bound as a SQL
-parameter, so a filter never concatenates user input into the query. `target none_of` also
+parameter, so a filter never concatenates user input into the query. A malformed date is a `400`.
+Date-only values are UTC: `after`/`between` start at midnight, and `before`/`between` include the
+whole named day. `target none_of` also
 includes ad-hoc-only findings because they have no occurrence belonging to an excluded target.
-Plus `limit`, `offset`.
+Plus `limit`, `offset`, and optional `sort` / `order`. `sort` is allowlisted
+(`first_seen_at`, `last_seen_at`, `severity`, `matched_at`, `name`, `times_mitigated`); `order` is
+`asc` or `desc`. Omitting `sort` keeps the historical order (effective severity, then last seen).
+The export endpoint takes the same `filter` / `sort` / `order` params so a download matches the UI.
 
 ```sh
 # (critical OR high) AND host contains scanme  — one AND-group

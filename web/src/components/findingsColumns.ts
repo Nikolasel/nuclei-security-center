@@ -186,7 +186,35 @@ export function sortField(sort: string | null): string {
   if (field.startsWith("+") || field.startsWith("-")) field = field.slice(1).trim();
   const colon = field.indexOf(":");
   if (colon >= 0) field = field.slice(0, colon).trim();
-  return field;
+  return canonicalFindingsSortField(field);
+}
+
+export function canonicalFindingsSortField(field: string): string {
+  switch (field) {
+    case "effective_severity":
+      return "severity";
+    case "first_seen":
+      return "first_seen_at";
+    case "last_seen":
+      return "last_seen_at";
+    default:
+      return field;
+  }
+}
+
+export function defaultFindingsSortOrder(field: string): "asc" | "desc" {
+  switch (field) {
+    case "severity":
+    case "effective_severity":
+    case "last_seen_at":
+    case "last_seen":
+    case "first_seen_at":
+    case "first_seen":
+    case "times_mitigated":
+      return "desc";
+    default:
+      return "asc";
+  }
 }
 
 export function columnIdForSort(sort: string | null): FindingsColumnId | null {

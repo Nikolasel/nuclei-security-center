@@ -358,94 +358,81 @@ export function FindingDetailPage() {
         {occurrences.isError && <ErrorText error={occurrences.error} />}
         {occurrences.data && (
           <>
-            {f.occurrence_count > occurrences.data.total && (
-              <p className="mb-3 text-xs text-amber-700 dark:text-amber-400">
-                This finding records {f.occurrence_count} occurrences, but only {occurrences.data.total}{" "}
-                retained {occurrences.data.total === 1 ? "row remains" : "rows remain"} after scan
-                history was deleted.
-              </p>
-            )}
-            {occurrences.data.total === 0 ? (
-              <p className="text-sm text-neutral-500">No retained occurrences.</p>
-            ) : (
-              <>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm">
-                    <thead className="text-xs uppercase tracking-wide text-neutral-500">
-                      <tr>
-                        <th className="py-1 pr-3 font-medium">Seen</th>
-                        <th className="py-1 pr-3 font-medium">Scan</th>
-                        <th className="py-1 pr-3 font-medium">Target</th>
-                        <th className="py-1 pr-3 font-medium">Host</th>
-                        <th className="py-1 pr-3 font-medium">Matched at</th>
-                        <th className="py-1 font-medium">Occurrence</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {occurrences.data.items.map((row) => (
-                        <tr key={row.id} className="border-t border-neutral-200 dark:border-neutral-800">
-                          <td className="py-2 pr-3 whitespace-nowrap">
-                            {new Date(row.created_at).toLocaleString()}
-                            {row.id === f.latest_occurrence_id && (
-                              <span className="ml-2 text-xs text-neutral-500">latest</span>
-                            )}
-                          </td>
-                          <td className="py-2 pr-3">
-                            <Link
-                              to={`/scans/${row.scan_id}`}
-                              className="font-mono text-xs text-indigo-600 hover:underline dark:text-indigo-400"
-                            >
-                              {row.scan_id}
-                            </Link>
-                          </td>
-                          <td className="py-2 pr-3">
-                            {row.target_id ? (
-                              <Link
-                                to={`/targets?target=${encodeURIComponent(row.target_id)}`}
-                                title={row.target_id}
-                                className="text-xs text-indigo-600 hover:underline dark:text-indigo-400"
-                              >
-                                {targetNames.get(row.target_id) ?? row.target_id}
-                              </Link>
-                            ) : (
-                              <span className="text-neutral-400">ad-hoc</span>
-                            )}
-                          </td>
-                          <td className="py-2 pr-3 break-all">{row.host || "—"}</td>
-                          <td className="py-2 pr-3">
-                            <span className="font-mono text-xs">{row.matched_at || "—"}</span>
-                          </td>
-                          <td className="py-2">
-                            <Link
-                              to={`/occurrences/${row.id}`}
-                              className="text-indigo-600 hover:underline dark:text-indigo-400"
-                            >
-                              Open
-                            </Link>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                {occurrences.data.total > OCCURRENCE_PAGE_SIZE && (
-                  <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
-                    <span className="text-neutral-500">
-                      {occOffset + 1}–{Math.min(occOffset + OCCURRENCE_PAGE_SIZE, occurrences.data.total)} of{" "}
-                      {occurrences.data.total} retained
-                    </span>
-                    <Button disabled={occOffset === 0} onClick={() => setOccOffset(Math.max(0, occOffset - OCCURRENCE_PAGE_SIZE))}>
-                      Previous
-                    </Button>
-                    <Button
-                      disabled={occOffset + OCCURRENCE_PAGE_SIZE >= occurrences.data.total}
-                      onClick={() => setOccOffset(occOffset + OCCURRENCE_PAGE_SIZE)}
-                    >
-                      Next
-                    </Button>
-                  </div>
-                )}
-              </>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="text-xs uppercase tracking-wide text-neutral-500">
+                  <tr>
+                    <th className="py-1 pr-3 font-medium">Seen</th>
+                    <th className="py-1 pr-3 font-medium">Scan</th>
+                    <th className="py-1 pr-3 font-medium">Target</th>
+                    <th className="py-1 pr-3 font-medium">Host</th>
+                    <th className="py-1 pr-3 font-medium">Matched at</th>
+                    <th className="py-1 font-medium">Occurrence</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {occurrences.data.items.map((row) => (
+                    <tr key={row.id} className="border-t border-neutral-200 dark:border-neutral-800">
+                      <td className="py-2 pr-3 whitespace-nowrap">
+                        {new Date(row.created_at).toLocaleString()}
+                        {row.id === f.latest_occurrence_id && (
+                          <span className="ml-2 text-xs text-neutral-500">latest</span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-3">
+                        <Link
+                          to={`/scans/${row.scan_id}`}
+                          className="font-mono text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+                        >
+                          {row.scan_id}
+                        </Link>
+                      </td>
+                      <td className="py-2 pr-3">
+                        {row.target_id ? (
+                          <Link
+                            to={`/targets?target=${encodeURIComponent(row.target_id)}`}
+                            title={row.target_id}
+                            className="text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+                          >
+                            {targetNames.get(row.target_id) ?? row.target_id}
+                          </Link>
+                        ) : (
+                          <span className="text-neutral-400">ad-hoc</span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-3 break-all">{row.host || "—"}</td>
+                      <td className="py-2 pr-3">
+                        <span className="font-mono text-xs">{row.matched_at || "—"}</span>
+                      </td>
+                      <td className="py-2">
+                        <Link
+                          to={`/occurrences/${row.id}`}
+                          className="text-indigo-600 hover:underline dark:text-indigo-400"
+                        >
+                          Open
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {occurrences.data.total > OCCURRENCE_PAGE_SIZE && (
+              <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
+                <span className="text-neutral-500">
+                  {occOffset + 1}–{Math.min(occOffset + OCCURRENCE_PAGE_SIZE, occurrences.data.total)} of{" "}
+                  {occurrences.data.total} retained
+                </span>
+                <Button disabled={occOffset === 0} onClick={() => setOccOffset(Math.max(0, occOffset - OCCURRENCE_PAGE_SIZE))}>
+                  Previous
+                </Button>
+                <Button
+                  disabled={occOffset + OCCURRENCE_PAGE_SIZE >= occurrences.data.total}
+                  onClick={() => setOccOffset(occOffset + OCCURRENCE_PAGE_SIZE)}
+                >
+                  Next
+                </Button>
+              </div>
             )}
           </>
         )}

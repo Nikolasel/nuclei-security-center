@@ -902,8 +902,9 @@ func (s *Server) handleGetFinding(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleListFindingOccurrences returns retained per-scan occurrences of one
-// lifecycle finding, paginated, most recent first. Unknown finding → 404; a
-// finding with no remaining occurrences is an empty page, not an error.
+// lifecycle finding, paginated, most recent first. Unknown finding → 404.
+// A finding that still exists has at least one occurrence: deleting every
+// scan that observed it also deletes the lifecycle row.
 func (s *Server) handleListFindingOccurrences(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {

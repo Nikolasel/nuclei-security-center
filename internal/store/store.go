@@ -1105,8 +1105,9 @@ func (s *Store) GetOccurrence(ctx context.Context, id int64) (OccurrenceDetail, 
 }
 
 // ListFindingOccurrences returns retained per-scan occurrences of one lifecycle
-// finding, most recent first. Unknown findings are ErrNotFound; a known finding
-// with no remaining rows (for example after scan retention) is an empty page.
+// finding, most recent first. Unknown findings are ErrNotFound. Deleting a scan
+// drops its occurrences in lockstep with occurrence_count; deleting every scan
+// that observed the finding also deletes the lifecycle row.
 func (s *Store) ListFindingOccurrences(ctx context.Context, findingID int64, limit, offset int) ([]FindingRow, int, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 50

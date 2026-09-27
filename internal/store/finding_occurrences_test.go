@@ -100,14 +100,23 @@ func TestListFindingOccurrencesPostgres(t *testing.T) {
 		t.Fatalf("second page = %+v total %d, want older only", page, pageTotal)
 	}
 
-	if _, err := st.pool.Exec(ctx, `DELETE FROM findings WHERE finding_id = $1`, findingID); err != nil {
-		t.Fatalf("delete occurrences: %v", err)
+	if _, err := st.pool.Exec(ctx, `UPDATE scans SET state = $1 WHERE id = ANY($2)`, types.ScanComplete, []string{older, newer}); err != nil {
+		t.Fatalf("complete scans: %v", err)
 	}
-	empty, emptyTotal, err := st.ListFindingOccurrences(ctx, findingID, 50, 0)
+	if _, _, err := st.DeleteScan(ctx, older); err != nil {
+		t.Fatalf("delete older scan: %v", err)
+	}
+	afterOne, afterOneTotal, err := st.ListFindingOccurrences(ctx, findingID, 50, 0)
 	if err != nil {
-		t.Fatalf("empty list: %v", err)
+		t.Fatalf("list after one delete: %v", err)
 	}
-	if emptyTotal != 0 || empty == nil || len(empty) != 0 {
-		t.Fatalf("empty = %+v total %d, want empty slice", empty, emptyTotal)
+	if afterOneTotal != 1 || len(afterOne) != 1 || afterOne[0].ScanID != newer {
+		t.Fatalf("after one delete = %+v total %d, want only newer %s", afterOne, afterOneTotal, newer)
+	}
+	if _, _, err := st.DeleteScan(ctx, newer); err != nil {
+		t.Fatalf("delete newer scan: %v", err)
+	}
+	if _, _, err := st.ListFindingOccurrences(ctx, findingID, 50, 0); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("after last delete err = %v, want ErrNotFound", err)
 	}
 }

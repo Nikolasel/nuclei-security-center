@@ -267,11 +267,11 @@ directly; it never substitutes the lifecycle's latest occurrence.
 
 `GET /api/findings/{id}/occurrences` lists the **retained** occurrences of one lifecycle finding
 (viewer, paginated `limit`/`offset`, most recent first). Unknown findings are `404`. A finding
-whose scans were deleted by retention still returns `200` with an empty `items` list when the
-lifecycle row remains; those deleted occurrences are gone (`ON DELETE CASCADE`) and are not
-implied by this list. Each row includes `scan_id`, `target_id`, `host`, `matched_at`, and
-`created_at`. The finding detail payload's `latest_occurrence_id` is the one-click jump to the
-newest retained occurrence.
+that still exists always has at least one row: deleting a scan drops its occurrences from this
+list (and from `occurrence_count`) together, and deleting every scan that observed the finding
+also deletes the lifecycle row. Each row includes `scan_id`, `target_id`, `host`, `matched_at`,
+and `created_at`. The finding detail payload's `latest_occurrence_id` is the one-click jump to
+the newest retained occurrence.
 
 ```sh
 # deduplicated lifecycle list (paginated + filtered)

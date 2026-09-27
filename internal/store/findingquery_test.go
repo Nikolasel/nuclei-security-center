@@ -317,3 +317,91 @@ func TestLifecycleOrderBy(t *testing.T) {
 		t.Fatal("unknown sort compiled")
 	}
 }
+
+func TestBuildFindingWhereTriageOverlayFields(t *testing.T) {
+	var args []any
+	where, err := buildFindingWhere(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{
+		{Field: "disposition", Op: "any_of", Values: []string{"accepted"}},
+		{Field: "accept_expires_at", Op: "between", Values: []string{"2026-09-27", "2026-10-04"}},
+		{Field: "recast_severity", Op: "any_of", Values: []string{"Low"}},
+		{Field: "observed_severity", Op: "any_of", Values: []string{"Critical"}},
+		{Field: "times_mitigated", Op: "gte", Values: []string{"1"}},
+		{Field: "occurrence_count", Op: "gt", Values: []string{"1"}},
+		{Field: "auto_mitigation_eligible", Op: "is", Values: []string{"false"}},
+	}}}}, &args)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	for _, want := range []string{
+		"l.accept_expires_at >= $",
+		"l.accept_expires_at < $",
+		"lower(l.recast_severity) = ANY($",
+		"lower(l.severity) = ANY($",
+		"l.times_mitigated >= $",
+		"SELECT COUNT(*) FROM findings occurrence WHERE occurrence.finding_id = l.id) > $",
+		"(l.endpoint_key <> '') = $",
+	} {
+		if !strings.Contains(where, want) {
+			t.Fatalf("where missing %q:\n%s", want, where)
+		}
+	}
+	if _, ok := args[1].(time.Time); !ok {
+		t.Fatalf("accept_expires_at lo = %#v, want time.Time", args[1])
+	}
+	if recast, ok := args[3].([]string); !ok || recast[0] != "low" {
+		t.Fatalf("recast_severity bound = %#v", args[3])
+	}
+	if observed, ok := args[4].([]string); !ok || observed[0] != "critical" {
+		t.Fatalf("observed_severity bound = %#v", args[4])
+	}
+	if n, ok := args[5].(int64); !ok || n != 1 {
+		t.Fatalf("times_mitigated bound = %#v", args[5])
+	}
+	if n, ok := args[6].(int64); !ok || n != 1 {
+		t.Fatalf("occurrence_count bound = %#v", args[6])
+	}
+	if b, ok := args[7].(bool); !ok || b {
+		t.Fatalf("auto_mitigation_eligible bound = %#v", args[7])
+	}
+
+	isRecast, err := buildFindingWhere(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{
+		{Field: "recast_severity", Op: "is_not_empty"},
+	}}}}, &[]any{})
+	if err != nil {
+		t.Fatalf("is recast: %v", err)
+	}
+	if !strings.Contains(isRecast, "(l.recast_severity IS NOT NULL AND l.recast_severity <> '')") {
+		t.Fatalf("is_not_empty recast SQL = %s", isRecast)
+	}
+	notRecast, err := buildFindingWhere(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{
+		{Field: "recast_severity", Op: "is_empty"},
+	}}}}, &[]any{})
+	if err != nil {
+		t.Fatalf("is not recast: %v", err)
+	}
+	if !strings.Contains(notRecast, "(l.recast_severity IS NULL OR l.recast_severity = '')") {
+		t.Fatalf("is_empty recast SQL = %s", notRecast)
+	}
+
+	rejected := []FindingCondition{
+		{Field: "times_mitigated", Op: "any_of", Values: []string{"1"}},
+		{Field: "times_mitigated", Op: "gte", Values: []string{"1.5"}},
+		{Field: "times_mitigated", Op: "gte", Values: []string{"one"}},
+		{Field: "times_mitigated", Op: "gte", Values: []string{"1", "2"}},
+		{Field: "occurrence_count", Op: "contains", Values: []string{"1"}},
+		{Field: "auto_mitigation_eligible", Op: "any_of", Values: []string{"false"}},
+		{Field: "auto_mitigation_eligible", Op: "is", Values: []string{"yes"}},
+		{Field: "auto_mitigation_eligible", Op: "is", Values: []string{"true", "false"}},
+		{Field: "recast_severity", Op: "contains", Values: []string{"low"}},
+		{Field: "observed_severity", Op: "gte", Values: []string{"1"}},
+		{Field: "accept_expires_at", Op: "eq", Values: []string{"1"}},
+		{Field: "severity", Op: "is_empty"},
+	}
+	for _, cond := range rejected {
+		var bound []any
+		_, err := buildFindingWhere(FindingQuery{Groups: []FindingGroup{{Conditions: []FindingCondition{cond}}}}, &bound)
+		if err == nil {
+			t.Fatalf("condition %+v compiled, want validation error", cond)
+		}
+	}
+}

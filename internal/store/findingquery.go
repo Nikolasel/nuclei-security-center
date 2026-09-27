@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -48,12 +49,15 @@ const (
 type fieldKind int
 
 const (
-	kindEnum      fieldKind = iota // scalar compared exactly (severity/state/disposition/type)
-	kindText                       // scalar substring (host, matched_at)
-	kindTextTwo                    // substring over two columns (name OR template)
-	kindTextArray                  // text[] membership/substring (cve, tag)
-	kindTarget                     // occurrence provenance target membership
-	kindTime                       // timestamptz range (first_seen_at / last_seen_at)
+	kindEnum         fieldKind = iota // scalar compared exactly (severity/state/disposition/type)
+	kindText                          // scalar substring (host, matched_at)
+	kindTextTwo                       // substring over two columns (name OR template)
+	kindTextArray                     // text[] membership/substring (cve, tag)
+	kindTarget                        // occurrence provenance target membership
+	kindTime                          // timestamptz range (first_seen_at / last_seen_at)
+	kindNumeric                       // integer comparison (times_mitigated, occurrence_count)
+	kindBool                          // boolean (auto_mitigation_eligible)
+	kindNullableEnum                  // enum that may be NULL/empty (recast_severity)
 )
 
 // fieldSpec maps a filter field name to the SQL it filters on. expr is the column
@@ -71,30 +75,39 @@ type fieldSpec struct {
 // to a fixed SQL expression — an unknown field is rejected, so the field name can
 // never be attacker-controlled SQL.
 var findingFields = map[string]fieldSpec{
-	"name":             {kind: kindTextTwo, expr: "l.name", exprB: "l.template_id"},
-	"severity":         {kind: kindEnum, expr: effSevExpr, lowered: true},
-	"state":            {kind: kindEnum, expr: "(" + lcEffectiveExpr + ")"},
-	"disposition":      {kind: kindEnum, expr: "l.disposition"},
-	"target":           {kind: kindTarget},
-	"host":             {kind: kindText, expr: "l.host"},
-	"matcher":          {kind: kindText, expr: "l.matcher_name"},
-	"extracted_result": {kind: kindTextArray, expr: "l.extracted_results"},
-	"matched_at":       {kind: kindText, expr: "l.matched_at"},
-	"type":             {kind: kindEnum, expr: "l.type", lowered: true},
-	"cve":              {kind: kindTextArray, expr: "l.cve"},
-	"tag":              {kind: kindTextArray, expr: "l.tags"},
-	"first_seen_at":    {kind: kindTime, expr: "l.first_seen_at"},
-	"last_seen_at":     {kind: kindTime, expr: "l.last_seen_at"},
+	"name":                     {kind: kindTextTwo, expr: "l.name", exprB: "l.template_id"},
+	"severity":                 {kind: kindEnum, expr: effSevExpr, lowered: true},
+	"state":                    {kind: kindEnum, expr: "(" + lcEffectiveExpr + ")"},
+	"disposition":              {kind: kindEnum, expr: "l.disposition"},
+	"target":                   {kind: kindTarget},
+	"host":                     {kind: kindText, expr: "l.host"},
+	"matcher":                  {kind: kindText, expr: "l.matcher_name"},
+	"extracted_result":         {kind: kindTextArray, expr: "l.extracted_results"},
+	"matched_at":               {kind: kindText, expr: "l.matched_at"},
+	"type":                     {kind: kindEnum, expr: "l.type", lowered: true},
+	"cve":                      {kind: kindTextArray, expr: "l.cve"},
+	"tag":                      {kind: kindTextArray, expr: "l.tags"},
+	"first_seen_at":            {kind: kindTime, expr: "l.first_seen_at"},
+	"last_seen_at":             {kind: kindTime, expr: "l.last_seen_at"},
+	"recast_severity":          {kind: kindNullableEnum, expr: "l.recast_severity", lowered: true},
+	"observed_severity":        {kind: kindEnum, expr: "l.severity", lowered: true},
+	"accept_expires_at":        {kind: kindTime, expr: "l.accept_expires_at"},
+	"times_mitigated":          {kind: kindNumeric, expr: "l.times_mitigated"},
+	"occurrence_count":         {kind: kindNumeric, expr: "(SELECT COUNT(*) FROM findings occurrence WHERE occurrence.finding_id = l.id)"},
+	"auto_mitigation_eligible": {kind: kindBool, expr: "(l.endpoint_key <> '')"},
 }
 
 // opsForKind lists the operators each field kind accepts (also drives the UI).
 var opsForKind = map[fieldKind]map[string]bool{
-	kindEnum:      {"any_of": true, "none_of": true},
-	kindText:      {"contains": true, "not_contains": true, "starts_with": true, "is_empty": true, "is_not_empty": true},
-	kindTextTwo:   {"contains": true, "not_contains": true, "starts_with": true, "is_empty": true, "is_not_empty": true},
-	kindTextArray: {"any_of": true, "none_of": true, "contains": true, "not_contains": true, "is_empty": true, "is_not_empty": true},
-	kindTarget:    {"any_of": true, "none_of": true},
-	kindTime:      {"before": true, "after": true, "between": true},
+	kindEnum:         {"any_of": true, "none_of": true},
+	kindText:         {"contains": true, "not_contains": true, "starts_with": true, "is_empty": true, "is_not_empty": true},
+	kindTextTwo:      {"contains": true, "not_contains": true, "starts_with": true, "is_empty": true, "is_not_empty": true},
+	kindTextArray:    {"any_of": true, "none_of": true, "contains": true, "not_contains": true, "is_empty": true, "is_not_empty": true},
+	kindTarget:       {"any_of": true, "none_of": true},
+	kindTime:         {"before": true, "after": true, "between": true},
+	kindNumeric:      {"eq": true, "neq": true, "gt": true, "gte": true, "lt": true, "lte": true},
+	kindBool:         {"is": true, "is_not": true},
+	kindNullableEnum: {"any_of": true, "none_of": true, "is_empty": true, "is_not_empty": true},
 }
 
 // findingSortColumns is the ORDER BY allowlist. Keys are the public `sort`
@@ -240,7 +253,7 @@ func compileCondition(c FindingCondition, push func(any) int) (string, error) {
 	}
 
 	switch spec.kind {
-	case kindEnum:
+	case kindEnum, kindNullableEnum:
 		col := spec.expr
 		if spec.lowered {
 			col = "lower(" + col + ")"
@@ -288,6 +301,12 @@ func compileCondition(c FindingCondition, push func(any) int) (string, error) {
 
 	case kindTime:
 		return compileTimeCondition(spec.expr, c.Op, vals, push)
+
+	case kindNumeric:
+		return compileNumericCondition(spec.expr, c.Op, vals, push)
+
+	case kindBool:
+		return compileBoolCondition(spec.expr, c.Op, vals, push)
 	}
 	return "", fmt.Errorf("operator %q not valid for field %q", c.Op, c.Field)
 }
@@ -375,6 +394,73 @@ func beforeCutoff(s string) (time.Time, bool, error) {
 		return t.AddDate(0, 0, 1), true, nil
 	}
 	return t, false, nil
+}
+
+func compileNumericCondition(col, op string, vals []string, push func(any) int) (string, error) {
+	if len(vals) != 1 {
+		return "", fmt.Errorf("operator %q needs exactly one value", op)
+	}
+	n, err := parseFilterInt(vals[0])
+	if err != nil {
+		return "", err
+	}
+	ph := push(n)
+	switch op {
+	case "eq":
+		return fmt.Sprintf("%s = $%d", col, ph), nil
+	case "neq":
+		return fmt.Sprintf("%s IS DISTINCT FROM $%d", col, ph), nil
+	case "gt":
+		return fmt.Sprintf("%s > $%d", col, ph), nil
+	case "gte":
+		return fmt.Sprintf("%s >= $%d", col, ph), nil
+	case "lt":
+		return fmt.Sprintf("%s < $%d", col, ph), nil
+	case "lte":
+		return fmt.Sprintf("%s <= $%d", col, ph), nil
+	}
+	return "", fmt.Errorf("operator %q not valid for numeric field", op)
+}
+
+func parseFilterInt(s string) (int64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("invalid integer %q", s)
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid integer %q", s)
+	}
+	return n, nil
+}
+
+func compileBoolCondition(col, op string, vals []string, push func(any) int) (string, error) {
+	if len(vals) != 1 {
+		return "", fmt.Errorf("operator %q needs exactly one value", op)
+	}
+	b, err := parseFilterBool(vals[0])
+	if err != nil {
+		return "", err
+	}
+	ph := push(b)
+	switch op {
+	case "is":
+		return fmt.Sprintf("%s = $%d", col, ph), nil
+	case "is_not":
+		return fmt.Sprintf("%s IS DISTINCT FROM $%d", col, ph), nil
+	}
+	return "", fmt.Errorf("operator %q not valid for boolean field", op)
+}
+
+func parseFilterBool(s string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "true":
+		return true, nil
+	case "false":
+		return false, nil
+	default:
+		return false, fmt.Errorf("invalid boolean %q (want true or false)", s)
+	}
 }
 
 func validateFilterValues(values []string) error {

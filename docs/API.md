@@ -294,10 +294,17 @@ empty)*. Each condition is `{field, op, values}`:
 | `host`, `matched_at`, `matcher` | `contains`, `not_contains`, `starts_with`, `is_empty`, `is_not_empty` |
 | `cve`, `extracted_result` | `contains`, `not_contains`, `is_empty`, `is_not_empty` |
 | `tag` | `any_of`, `none_of`, `is_empty`, `is_not_empty` |
-| `first_seen_at`, `last_seen_at` | `before`, `after`, `between` (inclusive; RFC3339 or `YYYY-MM-DD`) |
+| `first_seen_at`, `last_seen_at`, `accept_expires_at` | `before`, `after`, `between` (inclusive; RFC3339 or `YYYY-MM-DD`) |
+| `recast_severity` | `any_of`, `none_of`, `is_empty`, `is_not_empty` (`is_not_empty` = recast; `is_empty` = not recast) |
+| `observed_severity` | `any_of`, `none_of` (Nuclei severity, ignoring a recast; `severity` stays effective) |
+| `times_mitigated`, `occurrence_count` | `eq`, `neq`, `gt`, `gte`, `lt`, `lte` (integer) |
+| `auto_mitigation_eligible` | `is`, `is_not` (`true` / `false`) |
 
 Fields and operators are allowlisted (an unknown one is a `400`); every value is bound as a SQL
-parameter, so a filter never concatenates user input into the query. A malformed date is a `400`.
+parameter, so a filter never concatenates user input into the query. A malformed date, integer, or
+boolean is a `400`. `severity` still matches effective severity (`coalesce(recast, observed)`).
+Use `observed_severity` and `recast_severity` to ask about the overlay itself. `occurrence_count`
+is a correlated count of immutable occurrences (the same provenance shape as `target`).
 Date-only values are UTC: `after`/`between` start at midnight, and `before`/`between` include the
 whole named day. `target none_of` also
 includes ad-hoc-only findings because they have no occurrence belonging to an excluded target.

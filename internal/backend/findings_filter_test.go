@@ -195,3 +195,39 @@ func TestFindingSortParamsSharedByListAndExport(t *testing.T) {
 		t.Fatal("duplicate sort accepted")
 	}
 }
+
+func TestTriageOverlayFiltersSharedByListAndExport(t *testing.T) {
+	structured, err := findingQueryFromRequest(url.Values{"filter": {`{"groups":[{"conditions":[
+		{"field":"disposition","op":"any_of","values":["accepted"]},
+		{"field":"accept_expires_at","op":"before","values":["2026-10-04"]},
+		{"field":"recast_severity","op":"is_not_empty"},
+		{"field":"observed_severity","op":"any_of","values":["critical"]},
+		{"field":"times_mitigated","op":"gte","values":["1"]},
+		{"field":"occurrence_count","op":"gt","values":["1"]},
+		{"field":"auto_mitigation_eligible","op":"is","values":["false"]}
+	]}]}`}})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := store.ValidateFindingQuery(structured); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+
+	rejected := []string{
+		`{"groups":[{"conditions":[{"field":"times_mitigated","op":"any_of","values":["1"]}]}]}`,
+		`{"groups":[{"conditions":[{"field":"occurrence_count","op":"contains","values":["1"]}]}]}`,
+		`{"groups":[{"conditions":[{"field":"auto_mitigation_eligible","op":"eq","values":["false"]}]}]}`,
+		`{"groups":[{"conditions":[{"field":"recast_severity","op":"contains","values":["low"]}]}]}`,
+		`{"groups":[{"conditions":[{"field":"observed_severity","op":"gte","values":["1"]}]}]}`,
+		`{"groups":[{"conditions":[{"field":"accept_expires_at","op":"eq","values":["1"]}]}]}`,
+	}
+	for _, raw := range rejected {
+		q, err := findingQueryFromRequest(url.Values{"filter": {raw}})
+		if err != nil {
+			t.Fatalf("unsupported operator should parse before validation: %v", err)
+		}
+		if err := store.ValidateFindingQuery(q); err == nil || !strings.Contains(err.Error(), "not valid") {
+			t.Fatalf("unsupported operator error = %v for %s", err, raw)
+		}
+	}
+}

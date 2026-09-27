@@ -9,7 +9,7 @@ import {
 import { MultiSelect, TokenInput, type Option } from "./filters";
 import { Button, Input, Select } from "./ui";
 
-type ValueKind = "enum" | "tags" | "text" | "time";
+type ValueKind = "enum" | "tags" | "text" | "time" | "number" | "boolean";
 
 interface FieldDef {
   value: string;
@@ -53,6 +53,17 @@ const FIELDS: FieldDef[] = [
   { value: "last_seen_at", label: "Last seen", kind: "time", ops: ["after", "before", "between"] },
   { value: "cve", label: "CVE", kind: "text", ops: ["contains", "not_contains", "is_empty", "is_not_empty"] },
   { value: "tag", label: "Tag", kind: "tags", ops: ["any_of", "none_of", "is_empty", "is_not_empty"] },
+  { value: "recast_severity", label: "Recast severity", kind: "enum", ops: ["any_of", "none_of", "is_empty", "is_not_empty"], options: SEVERITY_OPTS },
+  { value: "observed_severity", label: "Observed severity", kind: "enum", ops: ["any_of", "none_of"], options: SEVERITY_OPTS },
+  { value: "accept_expires_at", label: "Accept expires", kind: "time", ops: ["after", "before", "between"] },
+  { value: "times_mitigated", label: "Times mitigated", kind: "number", ops: ["gte", "gt", "eq", "neq", "lt", "lte"] },
+  { value: "occurrence_count", label: "Occurrence count", kind: "number", ops: ["gt", "gte", "eq", "neq", "lt", "lte"] },
+  { value: "auto_mitigation_eligible", label: "Auto-mitigation", kind: "boolean", ops: ["is", "is_not"] },
+];
+
+const BOOL_OPTS: Option[] = [
+  { value: "true", label: "yes" },
+  { value: "false", label: "no" },
 ];
 
 const OP_LABEL: Record<string, string> = {
@@ -66,6 +77,14 @@ const OP_LABEL: Record<string, string> = {
   after: "after",
   before: "before",
   between: "between",
+  eq: "equals",
+  neq: "does not equal",
+  gt: "greater than",
+  gte: "at least",
+  lt: "less than",
+  lte: "at most",
+  is: "is",
+  is_not: "is not",
 };
 
 const fieldDef = (f: string) => FIELDS.find((x) => x.value === f) ?? FIELDS[0];
@@ -93,6 +112,10 @@ function dateInputValue(v: string | undefined): string {
   if (!v) return "";
   return /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : "";
 }
+
+function utcDateOnly(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
 let rowSeq = 0;
 
 export interface Row {
@@ -105,6 +128,16 @@ export interface Row {
 
 export function makeRow(partial?: Partial<Row>): Row {
   return { id: ++rowSeq, connector: "and", field: "severity", op: "any_of", values: [], ...partial };
+}
+
+/** expiringAcceptancesRows is the "accepted, expiring within 7 days" quick filter. */
+export function expiringAcceptancesRows(now = new Date()): Row[] {
+  const start = utcDateOnly(now);
+  const end = utcDateOnly(new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000));
+  return [
+    makeRow({ field: "disposition", op: "any_of", values: ["accepted"] }),
+    makeRow({ field: "accept_expires_at", op: "between", values: [start, end] }),
+  ];
 }
 
 /** rowsToQuery compiles the ordered rows into the OR-of-AND grammar: an "or"
@@ -138,8 +171,8 @@ export function queryToRows(q: FindingQuery): Row[] {
 function valueText(r: Row, targetOptions: Option[]): string {
   const def = fieldDef(r.field);
   if (!opNeedsValue(r.op)) return "";
-  if (def.kind === "enum") {
-    const opts = def.value === "target" ? targetOptions : (def.options ?? []);
+  if (def.kind === "enum" || def.kind === "boolean") {
+    const opts = def.value === "target" ? targetOptions : def.kind === "boolean" ? BOOL_OPTS : (def.options ?? []);
     return r.values.map((v) => opts.find((o) => o.value === v)?.label ?? v).join(", ");
   }
   return r.values.join(", ");
@@ -230,7 +263,7 @@ export function ConditionBuilder({
                 )}
               </div>
 
-              <Select value={r.field} onChange={(e) => setRow(r.id, { field: e.target.value })} className="w-44">
+              <Select value={r.field} onChange={(e) => setRow(r.id, { field: e.target.value })} className="w-48">
                 {FIELDS.map((f) => (
                   <option key={f.value} value={f.value}>
                     {f.label}
@@ -258,6 +291,29 @@ export function ConditionBuilder({
                   />
                 ) : def.kind === "tags" ? (
                   <TokenInput values={r.values} onChange={(vals) => setRow(r.id, { values: vals })} placeholder="add value…" />
+                ) : def.kind === "boolean" ? (
+                  <Select
+                    value={r.values[0] ?? ""}
+                    onChange={(e) => setRow(r.id, { values: e.target.value ? [e.target.value] : [] })}
+                    className="w-full"
+                    aria-label="Boolean value"
+                  >
+                    <option value="">Select…</option>
+                    {BOOL_OPTS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </Select>
+                ) : def.kind === "number" ? (
+                  <Input
+                    type="number"
+                    step={1}
+                    value={r.values[0] ?? ""}
+                    onChange={(e) => setRow(r.id, { values: e.target.value.trim() ? [e.target.value.trim()] : [] })}
+                    placeholder="number…"
+                    className="w-full"
+                  />
                 ) : def.kind === "time" ? (
                   <div className="flex flex-nowrap items-center gap-2">
                     <label className="flex shrink-0 items-center gap-1.5">

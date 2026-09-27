@@ -7,6 +7,7 @@ import { api, type ExportFormat, type LifecycleFinding } from "../api";
 import {
   ConditionBuilder,
   countActiveConditions,
+  expiringAcceptancesRows,
   makeRow,
   queryToRows,
   rowsToCrumbs,
@@ -302,6 +303,22 @@ function TimeCell({ iso }: { iso: string }) {
   );
 }
 
+function AcceptExpiryNote({ iso }: { iso?: string }) {
+  if (!iso) {
+    return <span className="truncate text-[11px] text-neutral-500">no expiry</span>;
+  }
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) {
+    return <span className="truncate text-[11px] text-neutral-500">expires —</span>;
+  }
+  const lapsed = at.getTime() <= Date.now();
+  return (
+    <span className="truncate text-[11px] text-neutral-500" title={timeTitle(iso)}>
+      {lapsed ? "expired" : "expires"} {at.toLocaleDateString()}
+    </span>
+  );
+}
+
 function FindingCellSwitch({
   id,
   finding,
@@ -320,10 +337,13 @@ function FindingCellSwitch({
       return <FindingCell finding={finding} showIdentity={showInlineIdentity} />;
     case "state":
       return (
-        <FindingStateBadge
-          state={finding.effective_state}
-          description={finding.auto_mitigation_eligible ? undefined : AUTO_MITIGATION_NOTE}
-        />
+        <div className="flex min-w-0 flex-col gap-0.5">
+          <FindingStateBadge
+            state={finding.effective_state}
+            description={finding.auto_mitigation_eligible ? undefined : AUTO_MITIGATION_NOTE}
+          />
+          {finding.disposition === "accepted" ? <AcceptExpiryNote iso={finding.accept_expires_at} /> : null}
+        </div>
       );
     case "endpoint":
       return <EndpointCell finding={finding} />;
@@ -623,6 +643,17 @@ export function FindingsView() {
             <span className="rounded bg-indigo-600 px-1.5 text-xs font-semibold text-white">{activeCount}</span>
           )}
         </button>
+        <Button
+          variant="ghost"
+          className="text-sm text-neutral-600 dark:text-neutral-400"
+          title="Accepted findings whose accept-risk expiry falls in the next 7 days (UTC)"
+          onClick={() => {
+            setRows(expiringAcceptancesRows());
+            setFilterOpen(true);
+          }}
+        >
+          Expiring acceptances
+        </Button>
 
         {/* Compact read-only summary of the active filter (visible when collapsed). */}
         {!filterOpen &&

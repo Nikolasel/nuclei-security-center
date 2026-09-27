@@ -122,6 +122,28 @@ the system of record: an archive upload failure is logged but does not discard s
 findings. Downloads are proxied through the authenticated backend; NSC does not expose presigned
 URLs.
 
+## Scan email notifications
+
+Unset `SMTP_HOST` leaves mail off. A completed scan with no New / Changed / Fixed delta sends
+nothing. Failed scans notify; operator-cancelled scans do not. Send failures are logged and never
+change the scan's terminal state. Recipients authenticate through the normal session; mails link to
+`APP_BASE_URL` scan and finding pages (no presigned URLs). `SMTP_PASSWORD_FILE` is re-read on each
+send so a secret agent can rotate credentials.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SMTP_HOST` | unset (mail disabled) | SMTP server hostname. Unset disables notifications without failing startup. |
+| `SMTP_PORT` | `587` | SMTP port. |
+| `SMTP_USERNAME` | unset | SMTP AUTH username. Leave empty for unauthenticated relays. |
+| `SMTP_PASSWORD` | unset | SMTP AUTH password. Ignored when `SMTP_PASSWORD_FILE` is set. |
+| `SMTP_PASSWORD_FILE` | unset | File containing only the SMTP password. Re-read before each send. |
+| `SMTP_FROM` | unset | Envelope From. Required with `SMTP_HOST` or mail stays disabled. |
+| `SMTP_TO` | unset | Comma-separated recipients. Required with `SMTP_HOST` or mail stays disabled. |
+| `SMTP_STARTTLS` | `true` | Require STARTTLS on the submission port. Set `false` only for a trusted plaintext relay. |
+| `SMTP_TLS` | `false` | Implicit TLS (typically port 465). When `true`, STARTTLS is not used. |
+
+See [Operations](Operations.md#scan-email-notifications) for what a digest contains.
+
 ## Scanner
 
 | Variable | Default | Purpose |

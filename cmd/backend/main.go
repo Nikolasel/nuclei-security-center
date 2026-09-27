@@ -108,6 +108,9 @@ func main() {
 	health.Start(ctx)
 
 	orch := backend.NewOrchestrator(st, archive, health, log)
+	if notifier := buildScanNotifier(st, log); notifier != nil {
+		orch.SetNotifier(notifier)
+	}
 
 	auth, err := buildAuthenticator(ctx, st, log, loginSettings)
 	if err != nil {
@@ -385,6 +388,29 @@ func buildObjectStore(ctx context.Context, log *slog.Logger) (backend.ObjectStor
 	}
 	log.Info("object storage enabled", "endpoint", endpoint, "bucket", cfg.Bucket)
 	return store, nil
+}
+
+// buildScanNotifier wires optional SMTP digest/failure mail. Unset SMTP_HOST
+// disables the feature with no startup failure. A host without SMTP_FROM/SMTP_TO
+// is also disabled (logged) rather than crashing the backend.
+func buildScanNotifier(st *store.Store, log *slog.Logger) *backend.ScanNotifier {
+	cfg, err := backend.SMTPConfigFromEnv()
+	if err != nil {
+		log.Warn("SMTP configuration ignored", "err", err)
+		return nil
+	}
+	sender, err := backend.NewSMTPSender(cfg)
+	if err != nil {
+		log.Warn("SMTP disabled", "err", err)
+		return nil
+	}
+	if sender == nil {
+		log.Warn("SMTP_HOST not set — scan notification mail is DISABLED")
+		return nil
+	}
+	baseURL := envOr("APP_BASE_URL", "http://localhost:8080")
+	log.Info("scan notification mail enabled", "host", cfg.Host, "port", cfg.Port, "from", cfg.From)
+	return backend.NewScanNotifier(st, sender, baseURL, cfg.From, cfg.To, log)
 }
 
 // startSessionSweeper periodically deletes expired sessions and auth flows.

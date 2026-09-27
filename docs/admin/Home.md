@@ -23,6 +23,6 @@ GitHub UI.
 - [Configuration](Configuration.md) — environment variables
 - [Authentication](Authentication.md) — OIDC/BFF, sessions, service accounts, mTLS
 - [First-run bootstrap](First-run-bootstrap.md)
-- [Operations](Operations.md) — targets, templates, policies, schedules, scanner fleet
+- [Operations](Operations.md) — targets, templates, policies, schedules, scanner fleet, scan email
 - [Findings and data](Findings-and-data.md) — lifecycle, exports, audit, backups, upgrades
 - [Troubleshooting](Troubleshooting.md)

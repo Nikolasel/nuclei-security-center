@@ -366,11 +366,18 @@ func (s *Store) MarkRunning(ctx context.Context, scanID, nodeScanID string) (boo
 // responded), in which case the column is left NULL, not an empty string.
 func (s *Store) MarkFailed(ctx context.Context, scanID, reason, nucleiVersion, templatesCommit string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE scans SET state = $1, error = $2, finished_at = now(),
-		        nuclei_version = coalesce($4, nuclei_version), templates_commit = coalesce($5, templates_commit)
-		  WHERE id = $3 AND state NOT IN ($6, $7, $8)`,
+		`WITH failed AS (
+		    UPDATE scans SET state = $1, error = $2, finished_at = now(),
+		           nuclei_version = coalesce($4, nuclei_version), templates_commit = coalesce($5, templates_commit)
+		     WHERE id = $3 AND state NOT IN ($6, $7, $8)
+		 RETURNING id, error
+		 )
+		 INSERT INTO scan_notification_outbox (scan_id, kind, payload)
+		 SELECT id, $9, jsonb_build_object('reason', coalesce(error, ''))
+		   FROM failed
+		 ON CONFLICT (scan_id, kind) DO NOTHING`,
 		types.ScanFailed, reason, scanID, nullStr(nucleiVersion), nullStr(templatesCommit),
-		types.ScanCancelled, types.ScanComplete, types.ScanFailed,
+		types.ScanCancelled, types.ScanComplete, types.ScanFailed, NotifyKindFailed,
 	)
 	return err
 }
@@ -437,12 +444,13 @@ func (s *Store) FailOrphanedScans(ctx context.Context, reason string) (int64, er
 // The exact occurrence itself is always positive coverage evidence. Absence
 // without pair-level evidence fails closed.
 //
-// The scan transition and coverage update are one statement, so readers cannot
-// observe a complete scan without its lifecycle evidence. Like MarkFailed this
-// won't overwrite an already-cancelled scan, so a cancel that races an ingest
-// finishing stays cancelled. A scan with skipped finding records is incomplete:
-// its exact occurrences still provide positive evidence, but its absence cannot
-// advance mitigation evidence.
+// The scan transition, coverage update, and digest outbox insert are one
+// statement, so readers cannot observe a complete scan without its lifecycle
+// evidence, and a restart cannot derive a second digest after last_covering_scan
+// has already advanced. Like MarkFailed this won't overwrite an already-cancelled
+// scan, so a cancel that races an ingest finishing stays cancelled. A scan with
+// skipped finding records is incomplete: its exact occurrences still provide
+// positive evidence, but its absence cannot advance mitigation evidence.
 func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templatesCommit string) error {
 	query := fmt.Sprintf(`WITH completed_scan AS (
 		    UPDATE scans
@@ -476,33 +484,106 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 		     WHERE observed.finding_id IS NOT NULL
 		 ),
 		 locked_candidates AS MATERIALIZED (
-		    SELECT lifecycle.id
+		    SELECT lifecycle.id, lifecycle.last_covering_scan AS prev_covering
 		      FROM finding_lifecycle lifecycle
 		      JOIN candidate_lifecycle candidate ON candidate.id = lifecycle.id
 		     ORDER BY lifecycle.id
 		       FOR UPDATE
+		 ),
+		 covering_update AS (
+		    UPDATE finding_lifecycle lifecycle
+		       SET last_covering_scan = completed_scan.id
+		      FROM completed_scan, locked_candidates candidate
+		     WHERE lifecycle.id = candidate.id
+		       AND EXISTS (
+		           SELECT 1
+		             FROM findings associated
+		             JOIN scans associated_scan ON associated_scan.id = associated.scan_id
+		            WHERE associated.finding_id = lifecycle.id
+		              AND associated_scan.target_id IS NOT DISTINCT FROM completed_scan.target_id
+		       )
+		       AND (
+		           lifecycle.last_covering_scan IS NULL
+		           OR EXISTS (
+		               SELECT 1
+		                 FROM scans previous
+		                WHERE previous.id = lifecycle.last_covering_scan
+		                  AND (previous.created_at, previous.id) <
+		                      (completed_scan.created_at, completed_scan.id)
+		           )
+		       )
+		    RETURNING lifecycle.id
+		 ),
+		 digest_rows AS (
+		    SELECT l.id,
+		           CASE
+		             WHEN l.first_seen_scan = cs.id THEN 'new'
+		             WHEN l.last_seen_scan = cs.id AND l.times_mitigated >= 1 THEN 'changed'
+		             WHEN l.last_seen_scan IS DISTINCT FROM cs.id
+		              AND c.prev_covering IS NOT NULL
+		              AND l.last_seen_scan IS NOT DISTINCT FROM c.prev_covering
+		             THEN 'fixed'
+		             ELSE NULL
+		           END AS status,
+		           CASE lower(coalesce(l.recast_severity, l.severity))
+		             WHEN 'critical' THEN 'critical'
+		             WHEN 'high' THEN 'high'
+		             WHEN 'medium' THEN 'medium'
+		             WHEN 'low' THEN 'low'
+		             ELSE 'info'
+		           END AS severity,
+		           l.template_id, l.name, l.host, l.matched_at
+		      FROM covering_update u
+		      JOIN finding_lifecycle l ON l.id = u.id
+		      JOIN locked_candidates c ON c.id = l.id
+		      CROSS JOIN completed_scan cs
+		     WHERE (`+lcEffectiveExpr+`) NOT IN ('accepted', 'false_positive')
+		 ),
+		 mailed AS (
+		    SELECT * FROM digest_rows WHERE status IS NOT NULL
+		 ),
+		 digest_payload AS (
+		    SELECT jsonb_build_object(
+		             'new', jsonb_build_object(
+		                 'critical', count(*) FILTER (WHERE status = 'new' AND severity = 'critical'),
+		                 'high', count(*) FILTER (WHERE status = 'new' AND severity = 'high'),
+		                 'medium', count(*) FILTER (WHERE status = 'new' AND severity = 'medium'),
+		                 'low', count(*) FILTER (WHERE status = 'new' AND severity = 'low'),
+		                 'info', count(*) FILTER (WHERE status = 'new' AND severity = 'info')
+		             ),
+		             'changed', jsonb_build_object(
+		                 'critical', count(*) FILTER (WHERE status = 'changed' AND severity = 'critical'),
+		                 'high', count(*) FILTER (WHERE status = 'changed' AND severity = 'high'),
+		                 'medium', count(*) FILTER (WHERE status = 'changed' AND severity = 'medium'),
+		                 'low', count(*) FILTER (WHERE status = 'changed' AND severity = 'low'),
+		                 'info', count(*) FILTER (WHERE status = 'changed' AND severity = 'info')
+		             ),
+		             'fixed', jsonb_build_object(
+		                 'critical', count(*) FILTER (WHERE status = 'fixed' AND severity = 'critical'),
+		                 'high', count(*) FILTER (WHERE status = 'fixed' AND severity = 'high'),
+		                 'medium', count(*) FILTER (WHERE status = 'fixed' AND severity = 'medium'),
+		                 'low', count(*) FILTER (WHERE status = 'fixed' AND severity = 'low'),
+		                 'info', count(*) FILTER (WHERE status = 'fixed' AND severity = 'info')
+		             ),
+		             'findings', coalesce(jsonb_agg(
+		                 jsonb_build_object(
+		                     'id', id,
+		                     'status', status,
+		                     'severity', severity,
+		                     'template_id', template_id,
+		                     'name', name,
+		                     'host', host,
+		                     'matched_at', matched_at
+		                 ) ORDER BY status, severity, id
+		             ), '[]'::jsonb)
+		           ) AS payload
+		      FROM mailed
 		 )
-		 UPDATE finding_lifecycle lifecycle
-		    SET last_covering_scan = completed_scan.id
-		   FROM completed_scan, locked_candidates candidate
-		  WHERE lifecycle.id = candidate.id
-		    AND EXISTS (
-		        SELECT 1
-		          FROM findings associated
-		          JOIN scans associated_scan ON associated_scan.id = associated.scan_id
-		         WHERE associated.finding_id = lifecycle.id
-		           AND associated_scan.target_id IS NOT DISTINCT FROM completed_scan.target_id
-		    )
-		    AND (
-		        lifecycle.last_covering_scan IS NULL
-		        OR EXISTS (
-		            SELECT 1
-		              FROM scans previous
-		             WHERE previous.id = lifecycle.last_covering_scan
-		               AND (previous.created_at, previous.id) <
-		                   (completed_scan.created_at, completed_scan.id)
-		        )
-		    )`, coverageOriginClaimedSQL)
+		 INSERT INTO scan_notification_outbox (scan_id, kind, payload)
+		 SELECT cs.id, '%s', coalesce(dp.payload, '{}'::jsonb)
+		   FROM completed_scan cs
+		   CROSS JOIN digest_payload dp
+		 ON CONFLICT (scan_id, kind) DO NOTHING`, coverageOriginClaimedSQL, NotifyKindDigest)
 	_, err := s.pool.Exec(ctx, query,
 		types.ScanComplete, nucleiVersion, templatesCommit, scanID, types.ScanCancelled,
 	)

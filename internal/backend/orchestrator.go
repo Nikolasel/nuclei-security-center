@@ -26,6 +26,7 @@ type Orchestrator struct {
 	archiver    ObjectStore          // nil when object storage is not configured
 	health      *HealthMonitor       // nil disables health-aware dispatch
 	distributor *TemplateDistributor // pre-dispatch catalog top-up (#85)
+	notifier    *ScanNotifier        // nil when SMTP is not configured
 	log         *slog.Logger
 	admission   *scanAdmission
 
@@ -63,6 +64,11 @@ func NewOrchestrator(st *store.Store, archiver ObjectStore, health *HealthMonito
 // SetTemplateDistributor enables pre-dispatch catalog top-up. It is wired once
 // during backend startup before the HTTP server begins accepting scans.
 func (o *Orchestrator) SetTemplateDistributor(d *TemplateDistributor) { o.distributor = d }
+
+// SetNotifier enables best-effort scan digest / failure mail. It is wired once
+// during backend startup when SMTP_HOST is set; nil disables sending (the
+// outbox row is still recorded at MarkComplete/MarkFailed).
+func (o *Orchestrator) SetNotifier(n *ScanNotifier) { o.notifier = n }
 
 // Health exposes the node health monitor (nil when health polling is disabled).
 func (o *Orchestrator) Health() *HealthMonitor { return o.health }
@@ -495,6 +501,8 @@ func (o *Orchestrator) run(scanID, targetID string, spec types.ScanSpec, node st
 	})
 	if err != nil {
 		log.Error("mark complete", "err", err)
+	} else {
+		o.notifyScan(ctx, scanID, store.NotifyKindDigest)
 	}
 	log.Info("scan complete", "findings", status.FindingCount)
 	o.cleanupNodeScan(ctx, client, nodeScanID)
@@ -793,6 +801,19 @@ func (o *Orchestrator) failScan(ctx context.Context, scanID, reason, nucleiVersi
 	})
 	if err != nil {
 		o.log.Error("mark failed", "scan_id", scanID, "err", err)
+	} else {
+		o.notifyScan(ctx, scanID, store.NotifyKindFailed)
+	}
+}
+
+func (o *Orchestrator) notifyScan(ctx context.Context, scanID, kind string) {
+	if o.notifier == nil {
+		return
+	}
+	nctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if err := o.notifier.Notify(nctx, scanID, kind); err != nil {
+		o.log.Error("scan notification", "scan_id", scanID, "kind", kind, "err", err)
 	}
 }
 

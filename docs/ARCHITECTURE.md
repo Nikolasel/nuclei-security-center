@@ -114,6 +114,17 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   ingest, including records proven malformed and records over the per-record JSONL size limit;
   database, transaction, schema, and unexpected constraint failures remain scan-fatal.
 
+- **scan_notification_outbox** — at-most-once mail payloads keyed by `(scan_id, kind)`
+  (`digest` or `failed`). Inserted in the same statement as `MarkComplete` / `MarkFailed` so a
+  backend restart cannot derive a second digest after `last_covering_scan` has advanced. The
+  completing process claims the row immediately before SMTP; a send failure is logged and never
+  retried (best-effort, same as raw-output archival). Empty deltas still get a row so a later
+  complete cannot invent mail. Operator-cancelled scans never insert a `failed` row. SMTP is
+  optional (`SMTP_HOST` unset disables sending without failing startup). The digest lists only
+  New / Changed (resurfaced) / Fixed, by effective severity; `active` findings and live
+  accepted / false-positive dispositions are omitted. Status is not stored on
+  `finding_lifecycle`.
+
 - **findings** (occurrences) — the immutable per-scan observation log: `id, scan_id,
   target_id, finding_id, dedup_key, result_discriminator, template_id, name, severity,
   host, matched_at, matcher_name, extractor_name, extracted_results, raw_line, raw`.

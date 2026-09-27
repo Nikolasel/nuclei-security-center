@@ -88,3 +88,26 @@ that do not exist; they never overwrite admin edits or delete nodes.
 - Dispatch fails fast when the selected node is known unhealthy.
 - Bundle distribution targets only stale, idle nodes; a busy node may return `409` until its scan
   releases the active template tree.
+
+## Scan email notifications
+
+When `SMTP_HOST` is set, the backend mails **one digest per completed scan that changed the
+lifecycle**, and a separate alert when a scan **fails**. A run that changed nothing is silent.
+
+The digest uses the same evidence rules as the findings list:
+
+| Status | Meaning |
+|---|---|
+| New | First seen on this scan. |
+| Changed | Resurfaced: previously mitigated, observed again (`times_mitigated` bumped). |
+| Fixed | Absent from this covering scan, and the previous covering scan had observed it. Announced once. |
+
+Counts are by **effective severity** (a recast wins). Live `accepted` / `false_positive` findings
+are omitted; `active` findings never appear. Unproven request-trace coverage cannot produce Fixed
+lines. Metadata drift (template sync rewriting name/severity) and analyst triage edits are not
+mailed. Links point at `APP_BASE_URL` `/scans/{id}` and `/findings/{id}`; recipients sign in
+normally.
+
+Mail is a data exit (hostnames, paths, template names). Keep `SMTP_TO` on a small operator list.
+Sending is not an audit `event_id`; success and failure are ordinary structured logs. PostgreSQL
+holds an at-most-once outbox row so a backend restart does not resend.

@@ -98,13 +98,14 @@ function NodeModal({ existing, onClose }: { existing?: ScannerNode; onClose: () 
     <Modal open onOpenChange={(v) => !v && onClose()} title={editing ? "Edit scanner node" : "New scanner node"}>
       <div className="space-y-4">
         <Field label="Name">
-          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="corp" />
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="corp" className="w-full" />
         </Field>
         <Field label="Endpoint (base URL the backend calls)">
           <Input
             value={endpoint}
             onChange={(e) => setEndpoint(e.target.value)}
             placeholder="http://scanner-corp:8081"
+            className="w-full"
           />
         </Field>
         <Field label={editing ? "Token (leave blank to keep current)" : "Token (bearer secret)"}>
@@ -114,6 +115,7 @@ function NodeModal({ existing, onClose }: { existing?: ScannerNode; onClose: () 
             onChange={(e) => setToken(e.target.value)}
             placeholder={editing ? "unchanged" : "shared scanner token"}
             autoComplete="new-password"
+            className="w-full"
           />
         </Field>
         <Field label="CIDRs (one per line — empty = catch-all)">
@@ -136,7 +138,7 @@ function NodeModal({ existing, onClose }: { existing?: ScannerNode; onClose: () 
             max={maxConcurrentScansCeiling}
             value={maxConcurrentScans}
             onChange={(e) => setMaxConcurrentScans(e.target.value)}
-            className="max-w-[12rem]"
+            className="w-full max-w-[12rem]"
           />
         </Field>
         {!maxConcurrentScansValid && (
@@ -146,7 +148,7 @@ function NodeModal({ existing, onClose }: { existing?: ScannerNode; onClose: () 
           </p>
         )}
         <Field label="Tags (comma separated)">
-          <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="corp, internal" />
+          <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="corp, internal" className="w-full" />
         </Field>
 
         <div className="border-t border-neutral-200 pt-3 dark:border-neutral-800">

@@ -259,26 +259,34 @@ export function ConditionBuilder({
                 ) : def.kind === "tags" ? (
                   <TokenInput values={r.values} onChange={(vals) => setRow(r.id, { values: vals })} placeholder="add value…" />
                 ) : def.kind === "time" ? (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Input
-                      type="date"
-                      value={dateInputValue(r.values[0])}
-                      onChange={(e) =>
-                        setRow(r.id, { values: r.op === "between" ? [e.target.value, r.values[1] ?? ""] : e.target.value ? [e.target.value] : [] })
-                      }
-                      aria-label={r.op === "between" ? "From date" : "Date"}
-                      className="w-40"
-                    />
+                  <div className="flex flex-nowrap items-center gap-2">
+                    <label className="flex shrink-0 items-center gap-1.5">
+                      {r.op === "between" ? (
+                        <span className="text-xs text-neutral-500">From</span>
+                      ) : null}
+                      <Input
+                        type="date"
+                        value={dateInputValue(r.values[0])}
+                        onChange={(e) =>
+                          setRow(r.id, { values: r.op === "between" ? [e.target.value, r.values[1] ?? ""] : e.target.value ? [e.target.value] : [] })
+                        }
+                        aria-label={r.op === "between" ? "From date" : "Date"}
+                        className="w-40 shrink-0"
+                      />
+                    </label>
                     {r.op === "between" && (
                       <>
-                        <span className="text-xs text-neutral-400">and</span>
-                        <Input
-                          type="date"
-                          value={dateInputValue(r.values[1])}
-                          onChange={(e) => setRow(r.id, { values: [r.values[0] ?? "", e.target.value] })}
-                          aria-label="To date"
-                          className="w-40"
-                        />
+                        <span className="shrink-0 text-xs text-neutral-400">and</span>
+                        <label className="flex shrink-0 items-center gap-1.5">
+                          <span className="text-xs text-neutral-500">To</span>
+                          <Input
+                            type="date"
+                            value={dateInputValue(r.values[1])}
+                            onChange={(e) => setRow(r.id, { values: [r.values[0] ?? "", e.target.value] })}
+                            aria-label="To date"
+                            className="w-40 shrink-0"
+                          />
+                        </label>
                       </>
                     )}
                   </div>

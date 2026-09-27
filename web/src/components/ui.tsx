@@ -237,11 +237,13 @@ export function Field({
   );
 }
 
+// Width is caller-owned. A baked `w-full` would win over numeric widths (`w-40`)
+// because `cn` concatenates and Tailwind emits `w-full` later in the sheet.
 export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       className={cn(
-        "h-9 w-full rounded-md border border-neutral-300 bg-white px-3 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-neutral-700 dark:bg-neutral-800",
+        "h-9 rounded-md border border-neutral-300 bg-white px-3 text-sm outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 dark:border-neutral-700 dark:bg-neutral-800",
         className,
       )}
       {...props}

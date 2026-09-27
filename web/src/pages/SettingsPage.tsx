@@ -95,7 +95,7 @@ export function SettingsPage() {
               disabled={!enabled}
               placeholder="e.g. 90"
               onChange={(e) => setDays(e.target.value)}
-              className="max-w-[12rem]"
+              className="w-full max-w-[12rem]"
             />
           </Field>
           {enabled && !daysValid && (

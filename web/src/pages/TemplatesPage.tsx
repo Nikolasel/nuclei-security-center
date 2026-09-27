@@ -413,7 +413,7 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
       <Card className="p-4">
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Search">
-            <Input value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} placeholder="ID, name, description" />
+            <Input className="w-full" value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} placeholder="ID, name, description" />
           </Field>
           <Field label="Source">
             <Select className="w-full" value={source} onChange={(event) => { setSource(event.target.value as TemplateSource | ""); resetPage(); }}>
@@ -429,7 +429,7 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
             </Select>
           </Field>
           <Field label="Tags (comma separated)">
-            <Input value={tags} onChange={(event) => { setTags(event.target.value); resetPage(); }} placeholder="cve, rce" />
+            <Input className="w-full" value={tags} onChange={(event) => { setTags(event.target.value); resetPage(); }} placeholder="cve, rce" />
           </Field>
         </div>
       </Card>
@@ -462,7 +462,7 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
                   {add.isPending ? "Adding…" : "Add selected"}
                 </Button>
                 <Field label="Or create a set">
-                  <Input className="w-52" value={setName} onChange={(event) => setSetName(event.target.value)} placeholder="internet-exposure" />
+                  <Input className="w-52 shrink-0" value={setName} onChange={(event) => setSetName(event.target.value)} placeholder="internet-exposure" />
                 </Field>
                 <Button variant="primary" disabled={!setName.trim() || create.isPending} onClick={() => create.mutate()}>
                   {create.isPending ? "Creating…" : "Create from selection"}

@@ -47,6 +47,53 @@ function malformedSkipped(count: number): string {
   return `${count} malformed ${noun} skipped`;
 }
 
+/** A silent no-op refresh: nothing changed and nothing was skipped. */
+function isSilentNoChange(run: SyncRunSummaryInput): boolean {
+  return run.status === "success" && isNoChange(run) && run.skipped === 0;
+}
+
+function sameRefs(a: SyncRunSummaryInput, b: SyncRunSummaryInput): boolean {
+  return trimRef(a.ref_before) === trimRef(b.ref_before) && trimRef(a.ref_after) === trimRef(b.ref_after);
+}
+
+export type SyncRunGroup<T> = { run: T; count: number; rest: T[] };
+
+/**
+ * Collapses consecutive identical no-op refreshes so a long series of periodic
+ * checks reads as one history row. Input is expected newest-first (the API
+ * order); each group keeps its newest run in `run` and the older members in
+ * `rest`. A catalog change, failure, running row, malformed-skip row, or a
+ * moved upstream ref starts a new group.
+ */
+export function collapseSyncRuns<T extends SyncRunSummaryInput>(runs: T[]): SyncRunGroup<T>[] {
+  const groups: SyncRunGroup<T>[] = [];
+  for (const run of runs) {
+    const prev = groups[groups.length - 1];
+    if (prev && isSilentNoChange(prev.run) && isSilentNoChange(run) && sameRefs(prev.run, run)) {
+      prev.count += 1;
+      prev.rest.push(run);
+      continue;
+    }
+    groups.push({ run, count: 1, rest: [] });
+  }
+  return groups;
+}
+
+/** Result cell for one history row — a single run, or a collapsed group of them. */
+export function formatSyncRunRow(
+  run: SyncRunSummaryInput,
+  count: number,
+  lastChecked: string,
+): SyncRunSummaryView {
+  const view = formatSyncRunResult(run);
+  if (count <= 1) return view;
+  const suffix = `×${count}, last checked ${lastChecked}`;
+  return {
+    text: `${view.text} · ${suffix}`,
+    title: view.title ? `${view.title} · ${suffix}` : suffix,
+  };
+}
+
 /**
  * Result cell for a template sync run. Successful no-op refreshes collapse to a
  * single sentence; runs that changed the catalog keep the +/~/-/skipped counts.

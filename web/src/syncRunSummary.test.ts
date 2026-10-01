@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { formatRefRange, formatSyncRunResult, shortDigest } from "./syncRunSummary";
+import {
+  collapseSyncRuns,
+  formatRefRange,
+  formatSyncRunResult,
+  formatSyncRunRow,
+  shortDigest,
+  type SyncRunSummaryInput,
+} from "./syncRunSummary";
 
 describe("shortDigest", () => {
   it("truncates to 12 characters", () => {
@@ -146,5 +153,94 @@ describe("formatSyncRunResult", () => {
     });
     expect(view.text).toBe("No changes");
     expect(view.title).toBe("");
+  });
+});
+
+type Run = SyncRunSummaryInput & { id: string };
+
+function run(id: string, over: Partial<Run> = {}): Run {
+  return {
+    id,
+    status: "success",
+    added: 0,
+    updated: 0,
+    removed: 0,
+    skipped: 0,
+    ref_before: "aaaaaaaaaaaaaaaa",
+    ref_after: "aaaaaaaaaaaaaaaa",
+    ...over,
+  };
+}
+
+describe("collapseSyncRuns", () => {
+  it("collapses a consecutive no-op series and keeps the newest run", () => {
+    const groups = collapseSyncRuns([run("newest"), run("middle"), run("oldest")]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].count).toBe(3);
+    expect(groups[0].run.id).toBe("newest");
+    expect(groups[0].rest.map((r) => r.id)).toEqual(["middle", "oldest"]);
+  });
+
+  it("leaves an isolated no-op with an empty rest", () => {
+    const groups = collapseSyncRuns([run("solo")]);
+    expect(groups[0].count).toBe(1);
+    expect(groups[0].rest).toEqual([]);
+  });
+
+  it("splits on a run that changed the catalog", () => {
+    const changed = run("change", { added: 1, ref_after: "bbbbbbbbbbbbbbbb" });
+    const groups = collapseSyncRuns([run("new"), changed, run("old")]);
+    expect(groups.map((g) => [g.run.id, g.count])).toEqual([
+      ["new", 1],
+      ["change", 1],
+      ["old", 1],
+    ]);
+  });
+
+  it("splits when the upstream ref moved without catalog changes", () => {
+    const groups = collapseSyncRuns([
+      run("new", { ref_before: "bbbbbbbbbbbbbbbb", ref_after: "bbbbbbbbbbbbbbbb" }),
+      run("old", { ref_before: "aaaaaaaaaaaaaaaa", ref_after: "bbbbbbbbbbbbbbbb" }),
+    ]);
+    expect(groups.map((g) => g.run.id)).toEqual(["new", "old"]);
+  });
+
+  it("keeps runs that skipped malformed files as their own rows", () => {
+    const groups = collapseSyncRuns([run("a"), run("b", { skipped: 2 }), run("c")]);
+    expect(groups.map((g) => [g.run.id, g.count])).toEqual([
+      ["a", 1],
+      ["b", 1],
+      ["c", 1],
+    ]);
+  });
+
+  it("leaves failed and running rows uncollapsed", () => {
+    const groups = collapseSyncRuns([
+      run("running", { status: "running" }),
+      run("failed", { status: "failed" }),
+      run("ok"),
+    ]);
+    expect(groups.map((g) => [g.run.id, g.count])).toEqual([
+      ["running", 1],
+      ["failed", 1],
+      ["ok", 1],
+    ]);
+  });
+});
+
+describe("formatSyncRunRow", () => {
+  it("matches formatSyncRunResult for a single run", () => {
+    const single = run("solo");
+    expect(formatSyncRunRow(single, 1, "anything")).toEqual(formatSyncRunResult(single));
+  });
+
+  it("appends the run count and last-checked time for a collapsed group", () => {
+    const view = formatSyncRunRow(run("grouped"), 36, "10/1/2026, 6:37 PM");
+    expect(view.text).toBe(
+      "No changes · aaaaaaaaaaaa → aaaaaaaaaaaa · ×36, last checked 10/1/2026, 6:37 PM",
+    );
+    expect(view.title).toBe(
+      "aaaaaaaaaaaaaaaa → aaaaaaaaaaaaaaaa · ×36, last checked 10/1/2026, 6:37 PM",
+    );
   });
 });

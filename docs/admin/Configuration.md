@@ -3,6 +3,12 @@
 All configuration is environment-based. Required values fail fast. Go-duration values use forms
 such as `30s`, `15m`, and `6h`.
 
+An administrator can inspect the **effective** values the running backend process is using
+(set vs unset, parsed booleans/durations, redacted DSNs) on **Settings → Environment
+configuration**. That page is read-only: changing a variable still requires a redeploy or
+restart. The tables below are the same allowlist the API uses; scanner-node variables are
+documented separately because the backend never sees them.
+
 ## Backend
 
 | Variable | Default | Purpose |

@@ -1,8 +1,30 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { api } from "../api";
+import { api, type EnvVariable } from "../api";
 import { hasRole, useMe } from "../auth";
 import { Button, Card, ErrorText, Field, Input, Spinner } from "../components/ui";
+
+function groupEnvVariables(vars: EnvVariable[]): { group: string; items: EnvVariable[] }[] {
+  const order: string[] = [];
+  const map = new Map<string, EnvVariable[]>();
+  for (const v of vars) {
+    const list = map.get(v.group);
+    if (!list) {
+      order.push(v.group);
+      map.set(v.group, [v]);
+    } else {
+      list.push(v);
+    }
+  }
+  return order.map((group) => ({ group, items: map.get(group) ?? [] }));
+}
+
+function effectiveDisplay(v: EnvVariable): string {
+  if (v.effective != null && v.effective !== "") return v.effective;
+  if (v.sensitive) return v.set ? "hidden" : "—";
+  if (v.effective === "") return "(empty)";
+  return "—";
+}
 
 export function SettingsPage() {
   const me = useMe();
@@ -12,6 +34,12 @@ export function SettingsPage() {
   const settings = useQuery({
     queryKey: ["settings"],
     queryFn: () => api.getSettings(),
+    enabled: isAdmin,
+  });
+
+  const environment = useQuery({
+    queryKey: ["settings", "environment"],
+    queryFn: () => api.getEnvironment(),
     enabled: isAdmin,
   });
 
@@ -55,7 +83,7 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="max-w-2xl space-y-5">
+    <div className="max-w-4xl space-y-5">
       <div>
         <h1 className="text-xl font-semibold">Settings</h1>
         <p className="mt-1 text-sm text-neutral-500">Global configuration for this Nuclei Security Center.</p>
@@ -134,6 +162,56 @@ export function SettingsPage() {
               </span>
             )}
           </div>
+        </Card>
+      )}
+
+      {environment.isLoading ? (
+        <Spinner />
+      ) : environment.isError ? (
+        <ErrorText error={environment.error} />
+      ) : (
+        <Card className="space-y-4 p-5">
+          <div>
+            <h2 className="text-sm font-semibold">Environment configuration</h2>
+            <p className="mt-1 text-sm text-neutral-500">
+              Read-only view of this backend process&apos;s allowlisted environment. Secrets are never
+              shown. Changing a value requires a redeploy or restart — this page cannot edit env.
+            </p>
+          </div>
+          {groupEnvVariables(environment.data?.variables ?? []).map(({ group, items }) => (
+            <div key={group}>
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-neutral-500">{group}</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
+                      <th className="px-2 py-1.5 font-medium">Variable</th>
+                      <th className="px-2 py-1.5 font-medium">Status</th>
+                      <th className="px-2 py-1.5 font-medium">Effective</th>
+                      <th className="px-2 py-1.5 font-medium">Default</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((v) => (
+                      <tr
+                        key={v.name}
+                        className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60"
+                      >
+                        <td className="px-2 py-1.5 font-mono text-xs">{v.name}</td>
+                        <td className="px-2 py-1.5 text-neutral-500">{v.set ? "set" : "unset"}</td>
+                        <td className="max-w-xs truncate px-2 py-1.5 font-mono text-xs text-neutral-700 dark:text-neutral-300" title={effectiveDisplay(v)}>
+                          {effectiveDisplay(v)}
+                        </td>
+                        <td className="max-w-xs truncate px-2 py-1.5 font-mono text-xs text-neutral-500" title={v.default || "—"}>
+                          {v.default || "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
         </Card>
       )}
     </div>

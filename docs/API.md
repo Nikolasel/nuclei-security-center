@@ -937,6 +937,32 @@ stays bounded.
 | `DELETE /api/sessions/{id}` | admin | revoke one session by its hashed id |
 | `DELETE /api/sessions?subject=<subject>` | admin | revoke all sessions for a subject (`sub`, not email; 404 if none — treat as already-clean) |
 
+## Settings
+
+`GET /api/settings` and `PUT /api/settings` are the DB-backed scan-retention policy
+(admin). `GET /api/settings/environment` is a separate **read-only** view of the
+running backend's allowlisted environment variables (also admin; operator and viewer
+receive `403`). It is not folded into the mutable settings payload so a retention
+save cannot be confused with deploy-time config.
+
+Each row is `{name, group, set, effective, default, sensitive}`. `set` is whether
+the process has the variable in its environment (`LookupEnv`); `effective` is what
+the backend actually consumes (defaults applied, durations/booleans parsed). Secrets
+never appear in `effective` (`SCANNER_TOKEN`, `OIDC_CLIENT_SECRET`, S3 static keys).
+`DATABASE_URL` returns a DSN with userinfo stripped; `DATABASE_PASSWORD_FILE` and
+other file-backed variables return the path, never file contents; `SCAN_ZONES`
+returns a seed-node count only. Unrelated platform env is not dumped.
+
+```sh
+curl -sb jar.txt localhost:8080/api/settings/environment | jq
+```
+
+| Method & path | Role | Purpose |
+|---|---|---|
+| `GET /api/settings` | admin | read the scan-retention policy |
+| `PUT /api/settings` | admin | update the scan-retention policy (audited `config_changed`) |
+| `GET /api/settings/environment` | admin | read-only effective backend environment (allowlisted) |
+
 ## Audit log
 
 Every mutating API call (create / update / delete / scan-dispatch / triage) emits one structured

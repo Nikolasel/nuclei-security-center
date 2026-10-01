@@ -3,13 +3,14 @@ package backend
 import (
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Environment-configuration registry (#336). The Settings UI and Configuration.md
@@ -295,31 +296,47 @@ func scanZoneCount(raw string) int {
 	return len(zones)
 }
 
-// redactDSN strips userinfo (URL username/password) and libpq user/password
-// keys so a DSN can be shown without credentials.
+const redactedUnparseableDSN = "(unparseable, hidden)"
+
+// redactDSN rebuilds a credential-free DSN from a parsed pgx config so quoting,
+// spaces around '=', and malformed URLs cannot leak a password. Parse failures
+// return a fixed placeholder — never the raw value.
 func redactDSN(raw string) string {
-	if u, err := url.Parse(raw); err == nil && u.Scheme != "" && u.Host != "" {
-		u.User = nil
-		q := u.Query()
-		q.Del("password")
-		q.Del("user")
-		u.RawQuery = q.Encode()
-		return u.String()
+	cfg, err := pgconn.ParseConfig(raw)
+	if err != nil {
+		return redactedUnparseableDSN
 	}
-	fields := strings.Fields(raw)
-	kept := make([]string, 0, len(fields))
-	for _, f := range fields {
-		key, _, ok := strings.Cut(f, "=")
-		if !ok {
-			kept = append(kept, f)
-			continue
-		}
-		switch strings.ToLower(key) {
-		case "password", "user", "passfile":
+	parts := make([]string, 0, 4+len(cfg.RuntimeParams))
+	if cfg.Host != "" {
+		parts = append(parts, "host="+cfg.Host)
+	}
+	if cfg.Port != 0 {
+		parts = append(parts, fmt.Sprintf("port=%d", cfg.Port))
+	}
+	if cfg.Database != "" {
+		parts = append(parts, "dbname="+cfg.Database)
+	}
+	if cfg.ConnectTimeout > 0 {
+		parts = append(parts, fmt.Sprintf("connect_timeout=%d", int(cfg.ConnectTimeout.Seconds())))
+	}
+	if cfg.SSLNegotiation != "" {
+		parts = append(parts, "sslnegotiation="+cfg.SSLNegotiation)
+	}
+	keys := make([]string, 0, len(cfg.RuntimeParams))
+	for k := range cfg.RuntimeParams {
+		switch strings.ToLower(k) {
+		case "password", "user", "passfile", "sslpassword":
 			continue
 		default:
-			kept = append(kept, f)
+			keys = append(keys, k)
 		}
 	}
-	return strings.Join(kept, " ")
+	slices.Sort(keys)
+	for _, k := range keys {
+		parts = append(parts, k+"="+cfg.RuntimeParams[k])
+	}
+	if len(parts) == 0 {
+		return redactedUnparseableDSN
+	}
+	return strings.Join(parts, " ")
 }

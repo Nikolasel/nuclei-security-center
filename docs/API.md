@@ -949,7 +949,7 @@ Each row is `{name, group, set, effective, default, sensitive}`. `set` is whethe
 the process has the variable in its environment (`LookupEnv`); `effective` is what
 the backend actually consumes (defaults applied, durations/booleans parsed). Secrets
 never appear in `effective` (`SCANNER_TOKEN`, `OIDC_CLIENT_SECRET`, S3 static keys).
-`DATABASE_URL` returns a DSN with userinfo stripped; `DATABASE_PASSWORD_FILE` and
+`DATABASE_URL` returns a parsed DSN rebuilt without credentials (unparseable values are hidden, never echoed); `DATABASE_PASSWORD_FILE` and
 other file-backed variables return the path, never file contents; `SCAN_ZONES`
 returns a seed-node count only. Unrelated platform env is not dumped.
 

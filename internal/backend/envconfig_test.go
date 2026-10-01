@@ -204,16 +204,64 @@ func TestBackendEnvRegistryMatchesConfigurationDocs(t *testing.T) {
 }
 
 func TestRedactDSN(t *testing.T) {
-	got := redactDSN("postgres://alice:s3cret@db.example:5432/nsc?sslmode=require")
-	if strings.Contains(got, "s3cret") || strings.Contains(got, "alice") {
-		t.Fatalf("userinfo leaked: %q", got)
+	cases := []struct {
+		name         string
+		raw          string
+		leaks        []string
+		wantContains []string
+		wantHidden   bool
+	}{
+		{
+			name:         "url userinfo",
+			raw:          "postgres://alice:s3cret@db.example:5432/nsc?sslmode=require",
+			leaks:        []string{"s3cret", "alice"},
+			wantContains: []string{"db.example", "nsc"},
+		},
+		{
+			name:         "keyword value",
+			raw:          "host=db.example user=alice password=s3cret dbname=nsc",
+			leaks:        []string{"s3cret", "alice", "user=", "password="},
+			wantContains: []string{"db.example", "nsc"},
+		},
+		{
+			name:  "quoted password with space",
+			raw:   "host=db user=a password='my secret' dbname=x",
+			leaks: []string{"secret", "password="},
+		},
+		{
+			name:  "spaces around equals",
+			raw:   "host=db password = abc",
+			leaks: []string{"abc", "password="},
+		},
+		{
+			name:       "invalid percent-escape userinfo",
+			raw:        "postgres://nsc:pa%ss@h/db",
+			leaks:      []string{"pa%ss", "nsc"},
+			wantHidden: true,
+		},
+		{
+			name:  "sslpassword",
+			raw:   "host=db sslpassword=sslpw dbname=x",
+			leaks: []string{"sslpw", "sslpassword="},
+		},
 	}
-	if !strings.Contains(got, "db.example") || !strings.Contains(got, "nsc") {
-		t.Fatalf("host/db stripped: %q", got)
-	}
-	kv := redactDSN("host=db.example user=alice password=s3cret dbname=nsc")
-	if strings.Contains(kv, "s3cret") || strings.Contains(kv, "alice") || strings.Contains(kv, "user=") || strings.Contains(kv, "password=") {
-		t.Fatalf("key-value userinfo leaked: %q", kv)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := redactDSN(tc.raw)
+			if tc.wantHidden && got != redactedUnparseableDSN {
+				t.Fatalf("got %q, want %q", got, redactedUnparseableDSN)
+			}
+			for _, leak := range tc.leaks {
+				if strings.Contains(got, leak) {
+					t.Fatalf("leaked %q in %q", leak, got)
+				}
+			}
+			for _, want := range tc.wantContains {
+				if !strings.Contains(got, want) {
+					t.Fatalf("missing %q in %q", want, got)
+				}
+			}
+		})
 	}
 }
 

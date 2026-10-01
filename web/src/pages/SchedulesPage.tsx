@@ -42,14 +42,19 @@ function fmtInZone(iso: string | undefined, timeZone: string): string {
   }
 }
 
+/** Fold spaces and underscores so "new york" matches America/New_York. */
+function normalizeTzSearch(s: string): string {
+  return s.trim().toLowerCase().replace(/[\s_]+/g, " ");
+}
+
 function TimezoneField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const zones = useMemo(() => ianaTimezones(), []);
   const [query, setQuery] = useState("");
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const matches = q ? zones.filter((z) => z.toLowerCase().includes(q)) : zones;
-    if (value && !matches.includes(value)) return [value, ...matches];
-    return matches;
+  const { filtered, matchCount } = useMemo(() => {
+    const q = normalizeTzSearch(query);
+    const matches = q ? zones.filter((z) => normalizeTzSearch(z).includes(q)) : zones;
+    const filtered = value && !matches.includes(value) ? [value, ...matches] : matches;
+    return { filtered, matchCount: matches.length };
   }, [query, value, zones]);
 
   return (
@@ -73,7 +78,9 @@ function TimezoneField({ value, onChange }: { value: string; onChange: (v: strin
           </option>
         ))}
       </Select>
-      {filtered.length === 0 && <p className="text-xs text-neutral-500">No matching IANA timezone.</p>}
+      {query !== "" && matchCount === 0 && (
+        <p className="text-xs text-neutral-500">No matching IANA timezone.</p>
+      )}
     </div>
   );
 }

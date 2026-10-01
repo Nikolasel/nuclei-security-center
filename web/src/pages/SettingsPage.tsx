@@ -94,20 +94,23 @@ function EnvVarInfo({ name, description }: { name: string; description: string }
   const [open, setOpen] = useState(false);
   if (!description) return null;
   return (
-    <Tooltip.Root
-      open={open}
-      delayDuration={0}
-      onOpenChange={(next) => {
-        if (!next) setOpen(false);
-      }}
-    >
+    <Tooltip.Root open={open} delayDuration={0} onOpenChange={setOpen}>
       <Tooltip.Trigger asChild>
         <button
           type="button"
           aria-label={`About ${name}`}
           aria-expanded={open}
           className="shrink-0 rounded p-0.5 text-neutral-400 hover:text-neutral-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-indigo-500 dark:hover:text-neutral-200"
-          onClick={() => setOpen((v) => !v)}
+          onPointerDown={(e) => {
+            // Mouse/keyboard: Radix opens on hover/focus via onOpenChange.
+            // Touch/pen have no hover; toggle here and preventDefault so the
+            // following click/focus does not also fire onOpenChange(true) and
+            // immediately fight the toggle.
+            if (e.pointerType === "touch" || e.pointerType === "pen") {
+              e.preventDefault();
+              setOpen((v) => !v);
+            }
+          }}
         >
           <CircleHelp className="h-3.5 w-3.5" aria-hidden />
         </button>

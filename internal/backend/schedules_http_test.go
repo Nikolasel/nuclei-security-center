@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -258,5 +259,20 @@ func TestHandleUpdateScheduleDecodeTriState(t *testing.T) {
 	}
 	if got := decode(`{"name":"x","scan_policy_id":"p","target_id":"t","cron":"0 3 * * *","enabled":null}`); got != nil {
 		t.Fatalf("null enabled = %v, want nil (preserve)", *got)
+	}
+}
+
+func TestHandleCreateScheduleRejectsUnknownTimezone(t *testing.T) {
+	srv := &Server{log: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))}
+	body := `{"name":"x","scan_policy_id":"p","target_id":"t","cron":"0 3 * * *","timezone":"Not/AZone"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	srv.handleCreateSchedule(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 body %q", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "unknown timezone") {
+		t.Errorf("body = %q, want unknown timezone", rr.Body.String())
 	}
 }

@@ -240,7 +240,8 @@ export interface Schedule {
   name: string;
   scan_policy_id: string;
   target_id: string;
-  cron: string;
+	cron: string;
+  timezone: string;
   enabled: boolean;
   next_run_at?: string;
   last_run_at?: string;

@@ -447,29 +447,33 @@ the other system's API) applied to a different consumer.
 
 ## Schedules
 
-A schedule pairs a **scan policy** and approved **target** with a **cron** cadence and runs them
-unattended. The policy supplies the template set and execution knobs; the schedule supplies the
-target and cadence. A backend ticker wakes each minute and dispatches due schedules —
-through the same path as an ad-hoc scan, so scheduled scans are tracked in the finding lifecycle
-exactly like manual ones (a scheduled scan carries `source: "schedule"`). Postgres is the source
-of truth: enable/disable and the next-run time persist across restarts, and a run missed while
-the backend was down fires once on the next tick, then reschedules forward.
+A schedule pairs a **scan policy** and approved **target** with a **cron** cadence and an **IANA
+timezone** and runs them unattended. The policy supplies the template set and execution knobs; the
+schedule supplies the target, cadence, and zone (default `UTC` when omitted — the previous
+container-local behavior). Cron clock fields are evaluated in that zone via the timezone database
+(DST included); `next_run_at` is stored as a UTC instant. A backend ticker wakes each minute and
+dispatches due schedules — through the same path as an ad-hoc scan, so scheduled scans are tracked
+in the finding lifecycle exactly like manual ones (a scheduled scan carries `source: "schedule"`).
+Postgres is the source of truth: enable/disable and the next-run time persist across restarts, and a
+run missed while the backend was down fires once on the next tick, then reschedules forward.
 
 ```sh
-# create a schedule: run a policy against a target at 03:00 nightly (5-field cron; also
-# accepts @hourly/@daily/… and "@every 30m").
+# create a schedule: run a policy against a target at 03:00 nightly in the given
+# IANA zone (5-field cron; also accepts @hourly/@daily/… and "@every 30m").
+# Omit timezone to default to UTC. Unknown zones are 400.
 curl -sb jar.txt -X POST localhost:8080/api/schedules -H 'content-type: application/json' -H 'Origin: http://localhost:8080' -d '{
   "name": "nightly-prod",
   "scan_policy_id": "<scan_policy_id>",
   "target_id": "<target_id>",
   "cron": "0 3 * * *",
+  "timezone": "America/New_York",
   "enabled": true
 }'
-# list schedules (each shows next_run_at / last_run_at / last_scan_id)
+# list schedules (each shows timezone / next_run_at / last_run_at / last_scan_id)
 curl -sb jar.txt localhost:8080/api/schedules | jq
 # pause a schedule (edit) — enabled:false clears its next run
 curl -sb jar.txt -X PUT localhost:8080/api/schedules/<id> -H 'content-type: application/json' -H 'Origin: http://localhost:8080' \
-  -d '{"name":"nightly-prod","scan_policy_id":"<scan_policy_id>","target_id":"<target_id>","cron":"0 3 * * *","enabled":false}'
+  -d '{"name":"nightly-prod","scan_policy_id":"<scan_policy_id>","target_id":"<target_id>","cron":"0 3 * * *","timezone":"America/New_York","enabled":false}'
 # dispatch once now, off-schedule (leaves the cron cadence untouched)
 curl -sb jar.txt -X POST -H 'Origin: http://localhost:8080' localhost:8080/api/schedules/<id>/run     # => {"scan_id":"..."}
 curl -sb jar.txt -X DELETE -H 'Origin: http://localhost:8080' localhost:8080/api/schedules/<id>       # remove

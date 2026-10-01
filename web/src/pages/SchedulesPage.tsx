@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { api, type Schedule } from "../api";
 import { hasRole, useMe } from "../auth";
 import { Button, Card, ErrorText, Field, Input, Modal, Select, Spinner } from "../components/ui";
@@ -13,11 +13,69 @@ const CRON_PRESETS: { label: string; cron: string }[] = [
   { label: "Every 15 min", cron: "*/15 * * * *" },
 ];
 
-function fmt(iso?: string): string {
+function ianaTimezones(): string[] {
+  const supported =
+    typeof Intl !== "undefined" && "supportedValuesOf" in Intl
+      ? Intl.supportedValuesOf("timeZone")
+      : [];
+  return Array.from(new Set(["UTC", ...supported])).sort((a, b) => a.localeCompare(b));
+}
+
+function browserTimezone(): string {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz) return tz;
+  } catch {
+    // ignore missing Intl
+  }
+  return "UTC";
+}
+
+function fmtInZone(iso: string | undefined, timeZone: string): string {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString();
+  try {
+    return d.toLocaleString(undefined, { timeZone, timeZoneName: "short" });
+  } catch {
+    return d.toLocaleString();
+  }
+}
+
+function TimezoneField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const zones = useMemo(() => ianaTimezones(), []);
+  const [query, setQuery] = useState("");
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const matches = q ? zones.filter((z) => z.toLowerCase().includes(q)) : zones;
+    if (value && !matches.includes(value)) return [value, ...matches];
+    return matches;
+  }, [query, value, zones]);
+
+  return (
+    <div className="space-y-1">
+      <Input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder="Search IANA timezones…"
+        className="w-full"
+        aria-label="Search IANA timezones"
+      />
+      <Select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full font-mono"
+        aria-label="Timezone"
+      >
+        {filtered.map((z) => (
+          <option key={z} value={z}>
+            {z}
+          </option>
+        ))}
+      </Select>
+      {filtered.length === 0 && <p className="text-xs text-neutral-500">No matching IANA timezone.</p>}
+    </div>
+  );
 }
 
 function ScheduleModal({
@@ -41,6 +99,7 @@ function ScheduleModal({
   const [scanPolicyId, setScanPolicyId] = useState(existing?.scan_policy_id ?? "");
   const [targetId, setTargetId] = useState(existing?.target_id ?? "");
   const [cron, setCron] = useState(existing?.cron ?? "0 3 * * *");
+  const [timezone, setTimezone] = useState(existing?.timezone || browserTimezone());
   const [enabled, setEnabled] = useState(duplicate ? false : (existing?.enabled ?? true));
 
   const policies = scanPolicies.data ?? [];
@@ -52,6 +111,7 @@ function ScheduleModal({
         scan_policy_id: scanPolicyId,
         target_id: targetId,
         cron: cron.trim(),
+        timezone: timezone.trim() || "UTC",
         enabled,
       };
       return existing && !duplicate ? api.updateSchedule(existing.id, body) : api.createSchedule(body);
@@ -62,7 +122,7 @@ function ScheduleModal({
     },
   });
 
-  const canSave = name.trim() && scanPolicyId && targetId && cron.trim();
+  const canSave = name.trim() && scanPolicyId && targetId && cron.trim() && timezone.trim();
 
   return (
     <Modal
@@ -119,6 +179,14 @@ function ScheduleModal({
             </button>
           ))}
         </div>
+        <div className="block space-y-1">
+          <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300">Timezone</span>
+          <TimezoneField value={timezone} onChange={setTimezone} />
+          <p className="text-xs text-neutral-500">
+            Cron clock fields fire in this IANA zone (DST from the timezone database). New schedules
+            default to the browser timezone; omit on the API for UTC.
+          </p>
+        </div>
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
           Enabled (the ticker dispatches this schedule)
@@ -158,6 +226,7 @@ export function SchedulesPage() {
         scan_policy_id: s.scan_policy_id,
         target_id: s.target_id,
         cron: s.cron,
+        timezone: s.timezone,
         enabled: !s.enabled,
       }),
     onSuccess: invalidate,
@@ -202,6 +271,7 @@ export function SchedulesPage() {
                   <th className="px-3 py-2 font-medium">Scan policy</th>
                   <th className="px-3 py-2 font-medium">Target</th>
                   <th className="px-3 py-2 font-medium">Cron</th>
+                  <th className="px-3 py-2 font-medium">Timezone</th>
                   <th className="px-3 py-2 font-medium">Status</th>
                   <th className="px-3 py-2 font-medium">Next run</th>
                   <th className="px-3 py-2 font-medium">Last run</th>
@@ -215,6 +285,7 @@ export function SchedulesPage() {
                     <td className="px-3 py-2 text-neutral-600 dark:text-neutral-400">{policyName(s.scan_policy_id)}</td>
                     <td className="px-3 py-2 text-neutral-600 dark:text-neutral-400">{targetName(s.target_id)}</td>
                     <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">{s.cron}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">{s.timezone || "UTC"}</td>
                     <td className="px-3 py-2">
                       {s.enabled ? (
                         <span className="inline-block rounded bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-300">
@@ -226,8 +297,10 @@ export function SchedulesPage() {
                         </span>
                       )}
                     </td>
-                    <td className="px-3 py-2 text-xs text-neutral-500">{s.enabled ? fmt(s.next_run_at) : "—"}</td>
-                    <td className="px-3 py-2 text-xs text-neutral-500">{fmt(s.last_run_at)}</td>
+                    <td className="px-3 py-2 text-xs text-neutral-500">
+                      {s.enabled ? fmtInZone(s.next_run_at, s.timezone || "UTC") : "—"}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-neutral-500">{fmtInZone(s.last_run_at, s.timezone || "UTC")}</td>
                     {(canWrite || canDelete) && (
                       <td className="px-3 py-2 text-right whitespace-nowrap">
                         {canWrite && (
@@ -280,7 +353,7 @@ export function SchedulesPage() {
                 ))}
                 {(q.data ?? []).length === 0 && (
                   <tr>
-                    <td colSpan={7 + (canWrite || canDelete ? 1 : 0)} className="px-3 py-8 text-center text-neutral-400">
+                    <td colSpan={8 + (canWrite || canDelete ? 1 : 0)} className="px-3 py-8 text-center text-neutral-400">
                       No schedules yet.
                     </td>
                   </tr>

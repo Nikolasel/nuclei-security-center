@@ -156,12 +156,13 @@ occurrence remains positive evidence for itself.
 
 **Scheduling:** `schedules` pairs a
 `scan_policy_id` (required, FK `ON DELETE CASCADE`) and `target_id` (required, FK
-`ON DELETE CASCADE`) with a `cron` expression — the policy supplies templates/knobs and the
-schedule supplies the approved target plus cadence. A backend
+`ON DELETE CASCADE`) with a `cron` expression and IANA `timezone` (`UTC` default) — the policy
+supplies templates/knobs and the schedule supplies the approved target, cadence, and zone.
+A backend
 `Scheduler` ticker (`internal/backend/scheduler.go`, wakes each minute) selects rows where
 `enabled AND next_run_at <= now()`, dispatches each via `orch.Submit` (resolving the policy with
 the same `resolvePolicySpec`) with `ScanLink{Source:"schedule", ScheduleID:…}`, and advances
-`next_run_at`. **Postgres is the source of truth** (survives restart / persists enable-disable);
+`next_run_at` by compiling the cron in the schedule's `time.Location`. **Postgres is the source of truth** (survives restart / persists enable-disable);
 `github.com/robfig/cron/v3` is used *only* to parse cron and compute the next fire time — no cron
 logic in SQL or long-lived in-memory schedulers. Endpoints: `GET/POST /api/schedules`,
 `GET/PUT/DELETE /api/schedules/{id}` (viewer/operator/operator/admin),

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { api, type Schedule } from "../api";
 import { hasRole, useMe } from "../auth";
 import { Button, Card, ErrorText, Field, Input, Modal, Select, Spinner } from "../components/ui";
@@ -49,37 +49,136 @@ function normalizeTzSearch(s: string): string {
 
 function TimezoneField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const zones = useMemo(() => ianaTimezones(), []);
-  const [query, setQuery] = useState("");
-  const { filtered, matchCount } = useMemo(() => {
+  const listId = useId();
+  const [query, setQuery] = useState(value);
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+
+  const matches = useMemo(() => {
     const q = normalizeTzSearch(query);
-    const matches = q ? zones.filter((z) => normalizeTzSearch(z).includes(q)) : zones;
-    const filtered = value && !matches.includes(value) ? [value, ...matches] : matches;
-    return { filtered, matchCount: matches.length };
-  }, [query, value, zones]);
+    return q ? zones.filter((z) => normalizeTzSearch(z).includes(q)) : zones;
+  }, [query, zones]);
+
+  function pick(z: string) {
+    onChange(z);
+    setQuery(z);
+    setOpen(false);
+  }
+
+  /** Unique match, exact match, or revert to the last committed zone. */
+  function commitTyped() {
+    const q = normalizeTzSearch(query);
+    if (!q) {
+      setQuery(value);
+      return;
+    }
+    const exact = zones.find((z) => normalizeTzSearch(z) === q);
+    if (exact) {
+      pick(exact);
+      return;
+    }
+    if (matches.length === 1) {
+      pick(matches[0]);
+      return;
+    }
+    setQuery(value);
+  }
+
+  function applyQuery(next: string) {
+    setQuery(next);
+    setOpen(true);
+    const q = normalizeTzSearch(next);
+    const nextMatches = q ? zones.filter((z) => normalizeTzSearch(z).includes(q)) : zones;
+    setActive(0);
+    // Typing a unique (or exact) match updates the selected zone immediately so
+    // the control itself reflects the choice, not only a hidden option list.
+    if (!q) return;
+    const exact = nextMatches.find((z) => normalizeTzSearch(z) === q);
+    if (exact) {
+      onChange(exact);
+      return;
+    }
+    if (nextMatches.length === 1) {
+      onChange(nextMatches[0]);
+    }
+  }
+
+  const activeId = matches[active] ? `${listId}-${matches[active]}` : undefined;
 
   return (
     <div className="space-y-1">
       <Input
         value={query}
-        onChange={(e) => setQuery(e.target.value)}
+        onChange={(e) => applyQuery(e.target.value)}
+        onFocus={(e) => {
+          setOpen(true);
+          e.currentTarget.select();
+        }}
+        onBlur={() => {
+          commitTyped();
+          setOpen(false);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setOpen(true);
+            setActive((i) => (matches.length === 0 ? 0 : Math.min(i + 1, matches.length - 1)));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setOpen(true);
+            setActive((i) => Math.max(i - 1, 0));
+          } else if (e.key === "Enter" && open && matches[active]) {
+            e.preventDefault();
+            pick(matches[active]);
+          } else if (e.key === "Escape" && open) {
+            e.preventDefault();
+            e.stopPropagation();
+            setQuery(value);
+            setOpen(false);
+          }
+        }}
         placeholder="Search IANA timezones…"
-        className="w-full"
-        aria-label="Search IANA timezones"
-      />
-      <Select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
         className="w-full font-mono"
+        role="combobox"
         aria-label="Timezone"
-      >
-        {filtered.map((z) => (
-          <option key={z} value={z}>
-            {z}
-          </option>
-        ))}
-      </Select>
-      {query !== "" && matchCount === 0 && (
-        <p className="text-xs text-neutral-500">No matching IANA timezone.</p>
+        aria-autocomplete="list"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-activedescendant={open ? activeId : undefined}
+      />
+      {open && (
+        <ul
+          id={listId}
+          role="listbox"
+          aria-label="IANA timezones"
+          className="max-h-48 overflow-y-auto rounded-md border border-neutral-300 bg-white text-sm dark:border-neutral-700 dark:bg-neutral-800"
+        >
+          {matches.length === 0 ? (
+            <li className="px-3 py-2 text-xs text-neutral-500" role="presentation">
+              No matching IANA timezone.
+            </li>
+          ) : (
+            matches.map((z, i) => (
+              <li
+                key={z}
+                id={`${listId}-${z}`}
+                role="option"
+                aria-selected={z === value}
+                className={
+                  "cursor-pointer px-3 py-1.5 font-mono " +
+                  (i === active
+                    ? "bg-indigo-600 text-white"
+                    : "hover:bg-neutral-100 dark:hover:bg-neutral-700")
+                }
+                onMouseDown={(e) => e.preventDefault()}
+                onMouseEnter={() => setActive(i)}
+                onClick={() => pick(z)}
+              >
+                {z}
+              </li>
+            ))
+          )}
+        </ul>
       )}
     </div>
   );

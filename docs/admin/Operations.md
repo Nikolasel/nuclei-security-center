@@ -103,7 +103,7 @@ The digest uses the same evidence rules as the findings list:
 | Status | Meaning |
 |---|---|
 | New | First seen on this scan. |
-| Changed | Resurfaced: previously mitigated, observed again (`times_mitigated` bumped). |
+| Changed | Resurfaced: this covering scan observed it, and the previous covering scan did not. Announced once. |
 | Fixed | Absent from this covering scan, and the previous covering scan had observed it. Announced once. |
 
 Counts are by **effective severity** (a recast wins): critical / high / medium / low / info,

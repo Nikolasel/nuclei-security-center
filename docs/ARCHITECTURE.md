@@ -135,8 +135,10 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   complete cannot invent mail. Operator-cancelled scans never insert a `failed` row. SMTP is
   optional (`SMTP_HOST` unset disables sending without failing startup). The digest lists only
   New / Changed (resurfaced) / Fixed, by effective severity (`critical`/`high`/`medium`/`low`/
-  `info`, plus an `unknown` bucket for Nuclei's `unknown` and any other value); `active`
-  findings and live accepted / false-positive dispositions are omitted. A policy
+  `info`, plus an `unknown` bucket for Nuclei's `unknown` and any other value). Changed is the
+  covering-scan transition (absent last covering scan, present now), not the stored
+  `times_mitigated` counter, so a resurfaced finding that stays open is mailed once.
+  `active` findings and live accepted / false-positive dispositions are omitted. A policy
   `notify_min_severity` floor (snapshotted on the scan) drops lower named severities from
   those counts and the list; `unknown` is never dropped. A muted policy still records the
   outbox row and skips SMTP as `notify_disabled`. Status is not stored on

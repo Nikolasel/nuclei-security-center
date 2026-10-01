@@ -110,6 +110,14 @@ func TestScanDigestBucketsPostgres(t *testing.T) {
 		t.Fatalf("resurface digest = %+v, want 1 changed critical", p)
 	}
 
+	// Still present after resurface: times_mitigated stays >= 1, but Changed
+	// is the transition, so a later covering observation must stay silent.
+	stillOpen := nextScan([]string{"tpl-a"}, []types.NucleiFinding{finding("critical")}, endpoint)
+	p = mustClaimDigest(t, ctx, st, stillOpen)
+	if p.HasDelta() {
+		t.Fatalf("resurfaced finding still present must not rematch as changed, got %+v", p)
+	}
+
 	// Unproven coverage cannot produce Fixed.
 	sixth := nextScan([]string{"tpl-a"}, nil, nil)
 	p = mustClaimDigest(t, ctx, st, sixth)

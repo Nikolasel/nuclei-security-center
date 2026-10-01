@@ -545,7 +545,14 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 		    SELECT l.id,
 		           CASE
 		             WHEN l.first_seen_scan = cs.id THEN 'new'
-		             WHEN l.last_seen_scan = cs.id AND l.times_mitigated >= 1 THEN 'changed'
+		             WHEN l.last_seen_scan = cs.id
+		              AND c.prev_covering IS NOT NULL
+		              AND NOT EXISTS (
+		                  SELECT 1 FROM findings observed
+		                   WHERE observed.finding_id = l.id
+		                     AND observed.scan_id = c.prev_covering
+		              )
+		             THEN 'changed'
 		             WHEN l.last_seen_scan IS DISTINCT FROM cs.id
 		              AND c.prev_covering IS NOT NULL
 		              AND EXISTS (

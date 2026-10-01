@@ -4,6 +4,9 @@
 -- Existing rows keep UTC, matching the previous process-local (container UTC)
 -- behavior, except a valid robfig TZ= / CRON_TZ= prefix is copied into timezone
 -- and stripped from cron so those schedules keep firing in the prefixed zone.
+-- TZ=/CRON_TZ=Local and an empty zone (TZ= / CRON_TZ=) already evaluated as
+-- process-local UTC; strip those prefixes too and leave timezone at UTC so
+-- parseCron does not disable the row.
 
 ALTER TABLE schedules
     ADD COLUMN timezone text NOT NULL DEFAULT 'UTC';
@@ -25,3 +28,8 @@ WHERE s.id = p.id
   AND p.zone <> 'Local'
   AND p.rest <> ''
   AND EXISTS (SELECT 1 FROM pg_timezone_names n WHERE n.name = p.zone);
+
+UPDATE schedules
+SET cron = regexp_replace(cron, '^(TZ|CRON_TZ)=(Local)?\s+', '')
+WHERE cron ~ '^(TZ|CRON_TZ)=(Local)?\s+\S'
+  AND regexp_replace(cron, '^(TZ|CRON_TZ)=(Local)?\s+', '') <> '';

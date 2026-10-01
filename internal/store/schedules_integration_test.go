@@ -189,13 +189,21 @@ func TestScheduleTimezoneMigratesCronTZPrefixPostgres(t *testing.T) {
 	tzID := types.NewID()
 	plainID := types.NewID()
 	badID := types.NewID()
+	cronLocalID := types.NewID()
+	tzLocalID := types.NewID()
+	tzEmptyID := types.NewID()
+	cronEmptyID := types.NewID()
 	if _, err := st.pool.Exec(ctx, `
 		INSERT INTO schedules (id, name, cron, scan_policy_id, target_id) VALUES
-			($1, 'cron-tz-prefixed', 'CRON_TZ=America/New_York 0 3 * * *', $5, $6),
-			($2, 'tz-prefixed', 'TZ=Europe/Paris 0 5 * * *', $5, $6),
-			($3, 'plain', '0 4 * * *', $5, $6),
-			($4, 'bad-prefix', 'CRON_TZ=Not/AZone 0 6 * * *', $5, $6)`,
-		cronTZID, tzID, plainID, badID, policyID, targetID); err != nil {
+			($1, 'cron-tz-prefixed', 'CRON_TZ=America/New_York 0 3 * * *', $9, $10),
+			($2, 'tz-prefixed', 'TZ=Europe/Paris 0 5 * * *', $9, $10),
+			($3, 'plain', '0 4 * * *', $9, $10),
+			($4, 'bad-prefix', 'CRON_TZ=Not/AZone 0 6 * * *', $9, $10),
+			($5, 'cron-tz-local', 'CRON_TZ=Local 0 7 * * *', $9, $10),
+			($6, 'tz-local', 'TZ=Local 0 8 * * *', $9, $10),
+			($7, 'tz-empty', 'TZ= 0 9 * * *', $9, $10),
+			($8, 'cron-tz-empty', 'CRON_TZ= 0 10 * * *', $9, $10)`,
+		cronTZID, tzID, plainID, badID, cronLocalID, tzLocalID, tzEmptyID, cronEmptyID, policyID, targetID); err != nil {
 		t.Fatalf("insert schedules: %v", err)
 	}
 
@@ -221,4 +229,8 @@ func TestScheduleTimezoneMigratesCronTZPrefixPostgres(t *testing.T) {
 	assertRow(tzID, "0 5 * * *", "Europe/Paris")
 	assertRow(plainID, "0 4 * * *", "UTC")
 	assertRow(badID, "CRON_TZ=Not/AZone 0 6 * * *", "UTC")
+	assertRow(cronLocalID, "0 7 * * *", "UTC")
+	assertRow(tzLocalID, "0 8 * * *", "UTC")
+	assertRow(tzEmptyID, "0 9 * * *", "UTC")
+	assertRow(cronEmptyID, "0 10 * * *", "UTC")
 }

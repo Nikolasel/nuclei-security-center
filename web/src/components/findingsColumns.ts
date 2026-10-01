@@ -1,6 +1,6 @@
 // Findings list columns. Visibility and widths are a per-browser preference
 // (`nsc.findings.columns`), like `nsc.theme` and `nsc.nav.collapsed`.
-// Filters stay in the URL.
+// Filter + sort persist separately in `nsc.findings.filters`.
 //
 // The stored value is an object keyed by column id. Each entry is
 // `{ visible, width? }`. On read, unknown ids are dropped, missing ids take

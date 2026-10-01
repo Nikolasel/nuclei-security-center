@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
@@ -7,6 +7,10 @@ import tailwindcss from "@tailwindcss/vite";
 // it; real OIDC login is exercised through the docker compose stack.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  test: {
+    environment: "node",
+    include: ["src/**/*.test.ts"],
+  },
   build: {
     outDir: "dist",
     // false so a build never deletes the committed dist/.gitkeep (needed for

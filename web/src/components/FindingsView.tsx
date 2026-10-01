@@ -8,12 +8,19 @@ import {
   ConditionBuilder,
   countActiveConditions,
   expiringAcceptancesRows,
-  makeRow,
   queryToRows,
   rowsToCrumbs,
   rowsToQuery,
   type Row,
 } from "./ConditionBuilder";
+import {
+  FINDINGS_FILTERS_KEY,
+  clearStoredFindingsFilters,
+  defaultFindingsRows,
+  readStoredFindingsFilters,
+  resolveFindingsFilterPrefs,
+  writeStoredFindingsFilters,
+} from "./findingsFilters";
 import { type Option } from "./filters";
 import {
   clampColumnWidth,
@@ -50,7 +57,18 @@ const PAGE_SIZE = 50;
 // detected states (New / Active / Resurfaced) — hiding the resolved ones
 // (Mitigated / Previously mitigated) and the handled overlays (Accepted / False
 // positive). Resurfaced is the "was mitigated, detected again" case, so it stays.
-const defaultRows = (): Row[] => [makeRow({ field: "state", op: "any_of", values: ["new", "active", "resurfaced"] })];
+const defaultRows = (): Row[] => defaultFindingsRows();
+
+function prefsFromLocation(searchParams: URLSearchParams) {
+  return resolveFindingsFilterPrefs(
+    {
+      filter: searchParams.get("filter"),
+      sort: searchParams.get("sort"),
+      order: searchParams.get("order"),
+    },
+    readStoredFindingsFilters(),
+  );
+}
 
 function relTime(iso: string): string {
   const d = new Date(iso).getTime();
@@ -384,25 +402,18 @@ function FindingCellSwitch({
 export function FindingsView() {
   const navigate = useNavigate();
 
-  // Filter + page live in the URL (browser state): navigating into a finding and
-  // back, a refresh, or a shared link all restore them. The parent owns the
-  // condition rows (so they survive the builder collapsing); the compiled query
-  // is debounced (text inputs change per keystroke) before it drives the list +
-  // export. With no `filter` param, the default "open findings" filter applies.
+  // Filter + sort: explicit URL params win (deep links, Back/Forward). Otherwise
+  // the last applied prefs in localStorage; otherwise the default "open findings"
+  // filter. Offset is URL-only and starts at 0 on a bare `/findings` load. The
+  // parent owns the condition rows (so they survive the builder collapsing); the
+  // compiled query is debounced (text inputs change per keystroke) before it
+  // drives the list + export.
   const [searchParams, setSearchParams] = useSearchParams();
-  const [rows, setRows] = useState<Row[]>(() => {
-    const raw = searchParams.get("filter");
-    if (raw) {
-      try {
-        return queryToRows(JSON.parse(raw));
-      } catch {
-        // fall through to the default on a malformed param
-      }
-    }
-    return defaultRows();
-  });
+  const [rows, setRows] = useState<Row[]>(() => queryToRows(prefsFromLocation(searchParams).filter));
   const compiled = useMemo(() => rowsToQuery(rows), [rows]);
   const [filter, setFilter] = useState(compiled);
+  const [sort, setSort] = useState(() => prefsFromLocation(searchParams).sort ?? "");
+  const [order, setOrder] = useState<"asc" | "desc" | null>(() => prefsFromLocation(searchParams).order);
   const [filterOpen, setFilterOpen] = useState(false);
   const [offset, setOffset] = useState(() => Math.max(0, Number(searchParams.get("offset")) || 0));
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
@@ -418,37 +429,49 @@ export function FindingsView() {
     return () => clearTimeout(t);
   }, [compiled]);
 
-  // Mirror the applied filter + page into the URL (replace, so it doesn't spam
-  // history). Navigating to a finding pushes a new entry, so Back restores this
-  // one with its query intact. `sort` / `order` are preserved for #311 so this
-  // rewrite does not drop a sort the column picker is responsible for.
-  const searchParamsRef = useRef(searchParams);
-  searchParamsRef.current = searchParams;
+  // Mirror the applied filter + page + sort into the URL (replace, so it
+  // doesn't spam history) and into localStorage (debounced with `filter`).
+  // Navigating to a finding pushes a new entry, so Back restores this one
+  // with its query intact. Default prefs clear the stored key.
   useEffect(() => {
     const p = new URLSearchParams();
     p.set("filter", JSON.stringify(filter));
     if (offset > 0) p.set("offset", String(offset));
-    const sort = searchParamsRef.current.get("sort");
-    const order = searchParamsRef.current.get("order");
     if (sort) p.set("sort", sort);
     if (sort && order) p.set("order", order);
     setSearchParams(p, { replace: true });
-  }, [filter, offset, setSearchParams]);
+    writeStoredFindingsFilters({
+      filter,
+      sort: sort || null,
+      order: sort ? order : null,
+    });
+  }, [filter, offset, sort, order, setSearchParams]);
 
   // Another tab editing the same preference updates this table.
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
-      if (e.key !== FINDINGS_COLUMNS_KEY && e.key !== null) return;
-      const next = mergeFindingsColumns(readStoredFindingsColumns());
-      columnPrefsRef.current = next;
-      setColumnPrefs(next);
+      if (e.key === FINDINGS_COLUMNS_KEY || e.key === null) {
+        const next = mergeFindingsColumns(readStoredFindingsColumns());
+        columnPrefsRef.current = next;
+        setColumnPrefs(next);
+      }
+      if (e.key === FINDINGS_FILTERS_KEY || e.key === null) {
+        const next = resolveFindingsFilterPrefs(
+          { filter: null, sort: null, order: null },
+          readStoredFindingsFilters(),
+        );
+        setRows(queryToRows(next.filter));
+        setFilter(next.filter);
+        setSort(next.sort ?? "");
+        setOrder(next.order);
+      }
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
-  const sortParam = searchParams.get("sort");
-  const orderParam = searchParams.get("order") === "asc" || searchParams.get("order") === "desc" ? searchParams.get("order") : null;
+  const sortParam = sort || null;
+  const orderParam = order === "asc" || order === "desc" ? order : null;
   const sortColumn = columnIdForSort(sortParam);
   const activeSortField = sortField(sortParam);
   const columns = useMemo(
@@ -483,24 +506,30 @@ export function FindingsView() {
   };
 
   const clearSort = () => {
-    const p = new URLSearchParams(searchParams);
-    p.delete("sort");
-    p.delete("order");
-    setSearchParams(p, { replace: true });
+    setSort("");
+    setOrder(null);
   };
 
   const toggleSort = (field: string) => {
-    const p = new URLSearchParams(searchParams);
-    const current = sortField(p.get("sort"));
-    const currentOrder = p.get("order") === "asc" || p.get("order") === "desc" ? p.get("order") : defaultFindingsSortOrder(current);
+    const current = sortField(sortParam);
+    const currentOrder = orderParam ?? defaultFindingsSortOrder(current);
     if (current === field) {
-      p.set("sort", field);
-      p.set("order", currentOrder === "asc" ? "desc" : "asc");
+      setSort(field);
+      setOrder(currentOrder === "asc" ? "desc" : "asc");
     } else {
-      p.set("sort", field);
-      p.set("order", defaultFindingsSortOrder(field));
+      setSort(field);
+      setOrder(defaultFindingsSortOrder(field));
     }
-    setSearchParams(p, { replace: true });
+  };
+
+  const resetFiltersToDefault = () => {
+    const nextRows = defaultRows();
+    setRows(nextRows);
+    setFilter(rowsToQuery(nextRows));
+    setSort("");
+    setOrder(null);
+    setOffset(0);
+    clearStoredFindingsFilters();
   };
 
   const headerSortField = (id: FindingsColumnId): string | null => {
@@ -654,6 +683,14 @@ export function FindingsView() {
           }}
         >
           Expiring acceptances
+        </Button>
+        <Button
+          variant="ghost"
+          className="text-sm text-neutral-600 dark:text-neutral-400"
+          title="Restore the default open-findings filter and sort, and forget the stored preference"
+          onClick={resetFiltersToDefault}
+        >
+          Reset to default
         </Button>
 
         {/* Compact read-only summary of the active filter (visible when collapsed). */}

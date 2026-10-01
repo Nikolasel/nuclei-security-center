@@ -126,7 +126,7 @@ GitHub Actions runs:
 - real-PostgreSQL store and backend integration tests, including baseline/alpha equivalence,
   lifecycle behavior, scope enforcement, and scan-bundle round trips; CI disables Go's test-result
   cache so every run exercises the fresh PostgreSQL service;
-- `npm ci` and the production SPA build;
+- `npm ci`, `npm test`, and the production SPA build;
 - on `v*` tags, tests followed by multi-architecture backend/scanner image publication to GHCR.
   Pull coordinates and tag rules (prereleases: version + `sha-*` only; a non-prerelease also
   publishes `major.minor` and `latest`) are in the

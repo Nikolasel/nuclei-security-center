@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, type Schedule } from "../api";
 import { hasRole, useMe } from "../auth";
 import { Button, Card, ErrorText, Field, Input, Modal, Select, Spinner } from "../components/ui";
@@ -53,6 +53,8 @@ function TimezoneField({ value, onChange }: { value: string; onChange: (v: strin
   const [query, setQuery] = useState(value);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  // Zone at focus: blur/Escape restore this unless the current query is unique or exact.
+  const focusedZone = useRef(value);
 
   const matches = useMemo(() => {
     const q = normalizeTzSearch(query);
@@ -61,49 +63,57 @@ function TimezoneField({ value, onChange }: { value: string; onChange: (v: strin
 
   function pick(z: string) {
     onChange(z);
+    focusedZone.current = z;
     setQuery(z);
     setOpen(false);
   }
 
-  /** Unique match, exact match, or revert to the last committed zone. */
+  /** Unique/exact match of the current query, else the zone from when the field was focused. */
   function commitTyped() {
     const q = normalizeTzSearch(query);
-    if (!q) {
-      setQuery(value);
-      return;
+    if (q) {
+      const exact = zones.find((z) => normalizeTzSearch(z) === q);
+      if (exact) {
+        pick(exact);
+        return;
+      }
+      if (matches.length === 1) {
+        pick(matches[0]);
+        return;
+      }
     }
-    const exact = zones.find((z) => normalizeTzSearch(z) === q);
-    if (exact) {
-      pick(exact);
-      return;
-    }
-    if (matches.length === 1) {
-      pick(matches[0]);
-      return;
-    }
-    setQuery(value);
+    setQuery(focusedZone.current);
+    onChange(focusedZone.current);
   }
 
   function applyQuery(next: string) {
     setQuery(next);
     setOpen(true);
-    const q = normalizeTzSearch(next);
-    const nextMatches = q ? zones.filter((z) => normalizeTzSearch(z).includes(q)) : zones;
     setActive(0);
-    // Typing a unique (or exact) match updates the selected zone immediately so
-    // the control itself reflects the choice, not only a hidden option list.
-    if (!q) return;
-    const exact = nextMatches.find((z) => normalizeTzSearch(z) === q);
-    if (exact) {
-      onChange(exact);
-      return;
-    }
-    if (nextMatches.length === 1) {
-      onChange(nextMatches[0]);
-    }
   }
 
+  useEffect(() => {
+    if (!open) return;
+    // Radix Dialog listens for Escape on document in the capture phase and
+    // dismisses unless defaultPrevented. The input handler is too late (bubble).
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      setQuery(focusedZone.current);
+      onChange(focusedZone.current);
+      setOpen(false);
+    }
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [open, onChange]);
+
   const activeId = matches[active] ? `${listId}-${matches[active]}` : undefined;
+  const activeOption = useRef<HTMLLIElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    activeOption.current?.scrollIntoView({ block: "nearest" });
+  }, [open, active]);
 
   return (
     <div className="space-y-1">
@@ -111,6 +121,7 @@ function TimezoneField({ value, onChange }: { value: string; onChange: (v: strin
         value={query}
         onChange={(e) => applyQuery(e.target.value)}
         onFocus={(e) => {
+          focusedZone.current = value;
           setOpen(true);
           e.currentTarget.select();
         }}
@@ -130,11 +141,6 @@ function TimezoneField({ value, onChange }: { value: string; onChange: (v: strin
           } else if (e.key === "Enter" && open && matches[active]) {
             e.preventDefault();
             pick(matches[active]);
-          } else if (e.key === "Escape" && open) {
-            e.preventDefault();
-            e.stopPropagation();
-            setQuery(value);
-            setOpen(false);
           }
         }}
         placeholder="Search IANA timezones…"
@@ -152,6 +158,7 @@ function TimezoneField({ value, onChange }: { value: string; onChange: (v: strin
           role="listbox"
           aria-label="IANA timezones"
           className="max-h-48 overflow-y-auto rounded-md border border-neutral-300 bg-white text-sm dark:border-neutral-700 dark:bg-neutral-800"
+          onMouseDown={(e) => e.preventDefault()}
         >
           {matches.length === 0 ? (
             <li className="px-3 py-2 text-xs text-neutral-500" role="presentation">
@@ -162,6 +169,7 @@ function TimezoneField({ value, onChange }: { value: string; onChange: (v: strin
               <li
                 key={z}
                 id={`${listId}-${z}`}
+                ref={i === active ? activeOption : undefined}
                 role="option"
                 aria-selected={z === value}
                 className={
@@ -170,7 +178,6 @@ function TimezoneField({ value, onChange }: { value: string; onChange: (v: strin
                     ? "bg-indigo-600 text-white"
                     : "hover:bg-neutral-100 dark:hover:bg-neutral-700")
                 }
-                onMouseDown={(e) => e.preventDefault()}
                 onMouseEnter={() => setActive(i)}
                 onClick={() => pick(z)}
               >

@@ -37,14 +37,42 @@ describe("formatSyncRunResult", () => {
       added: 0,
       updated: 0,
       removed: 0,
-      skipped: 1234,
+      skipped: 0,
+      ref_before: "a1b2c3d4e5f67890aaaa",
+      ref_after: "e4f5a6b7c8d9e0f1bbbb",
+    });
+    expect(view.text).toBe("No changes · a1b2c3d4e5f6 → e4f5a6b7c8d9");
+    expect(view.title).toBe("a1b2c3d4e5f67890aaaa → e4f5a6b7c8d9e0f1bbbb");
+  });
+
+  it("mentions malformed files only when a no-change run skipped some", () => {
+    const view = formatSyncRunResult({
+      status: "success",
+      added: 0,
+      updated: 0,
+      removed: 0,
+      skipped: 7,
       ref_before: "a1b2c3d4e5f67890aaaa",
       ref_after: "e4f5a6b7c8d9e0f1bbbb",
     });
     expect(view.text).toBe(
-      "No changes · a1b2c3d4e5f6 → e4f5a6b7c8d9 · all 1234 templates skipped",
+      "No changes · a1b2c3d4e5f6 → e4f5a6b7c8d9 · 7 malformed files skipped",
     );
-    expect(view.title).toBe("a1b2c3d4e5f67890aaaa → e4f5a6b7c8d9e0f1bbbb");
+  });
+
+  it("uses singular wording for one malformed file", () => {
+    const view = formatSyncRunResult({
+      status: "success",
+      added: 0,
+      updated: 0,
+      removed: 0,
+      skipped: 1,
+      ref_before: "aaaaaaaaaaaaaaaa",
+      ref_after: "bbbbbbbbbbbbbbbb",
+    });
+    expect(view.text).toBe(
+      "No changes · aaaaaaaaaaaa → bbbbbbbbbbbb · 1 malformed file skipped",
+    );
   });
 
   it("keeps the per-action breakdown when the catalog changed", () => {
@@ -104,7 +132,7 @@ describe("formatSyncRunResult", () => {
       skipped: 50,
       ref_after: "cccccccccccccccc",
     });
-    expect(view.text).toBe("No changes · cccccccccccc · all 50 templates skipped");
+    expect(view.text).toBe("No changes · cccccccccccc · 50 malformed files skipped");
     expect(view.title).toBe("cccccccccccccccc");
   });
 
@@ -114,9 +142,9 @@ describe("formatSyncRunResult", () => {
       added: 0,
       updated: 0,
       removed: 0,
-      skipped: 7,
+      skipped: 0,
     });
-    expect(view.text).toBe("No changes · all 7 templates skipped");
+    expect(view.text).toBe("No changes");
     expect(view.title).toBe("");
   });
 });

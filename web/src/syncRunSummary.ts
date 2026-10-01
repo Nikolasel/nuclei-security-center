@@ -42,6 +42,11 @@ function isNoChange(run: SyncRunSummaryInput): boolean {
   return run.added === 0 && run.updated === 0 && run.removed === 0;
 }
 
+function malformedSkipped(count: number): string {
+  const noun = count === 1 ? "file" : "files";
+  return `${count} malformed ${noun} skipped`;
+}
+
 /**
  * Result cell for a template sync run. Successful no-op refreshes collapse to a
  * single sentence; runs that changed the catalog keep the +/~/-/skipped counts.
@@ -59,7 +64,7 @@ export function formatSyncRunResult(run: SyncRunSummaryInput): SyncRunSummaryVie
     const refs = formatRefRange(run.ref_before, run.ref_after);
     const parts = ["No changes"];
     if (refs.text !== "—") parts.push(refs.text);
-    parts.push(`all ${run.skipped} templates skipped`);
+    if (run.skipped > 0) parts.push(malformedSkipped(run.skipped));
     return { text: parts.join(" · "), title: refs.title };
   }
   return { text: actionBreakdown(run), title: "" };

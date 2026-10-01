@@ -70,6 +70,8 @@ are insert-only by node name; PostgreSQL and subsequent API/UI edits are authori
 | `AUTH_LOGIN_MAX_CLIENTS` | `4096` | Maximum in-memory peer limiters; the stalest entry is evicted at capacity. |
 | `AUTH_TRUSTED_PROXY_CIDRS` | unset | Comma-separated trusted proxy CIDRs (maximum 64). Only matching direct peers may supply sanitized X-Forwarded-For client addresses. |
 
+Accepted ranges fail closed at startup: `AUTH_MAX_LIVE_FLOWS` 1–100000, `AUTH_LOGIN_RATE` 0.000001–1000, `AUTH_LOGIN_BURST` 1–1000, and `AUTH_LOGIN_MAX_CLIENTS` 1–65536. `SESSION_TTL` also drives [session-revocation and privilege-revocation latency](Authentication.md#session-revocation-and-privilege-revocation-latency).
+
 When `COOKIE_SECURE=true`, the session cookie is host-locked: it uses the `__Host-` prefix, `Path=/`,
 `Secure`, and no `Domain` attribute. This prevents a sibling subdomain from setting a competing
 session cookie for the backend. Session identifiers created on the current schema are stored only as

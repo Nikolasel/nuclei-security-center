@@ -58,7 +58,7 @@ func (n *ScanNotifier) Notify(ctx context.Context, scanID, kind string) error {
 	scan, scanErr := n.store.GetScan(ctx, scanID)
 	if scanErr != nil {
 		n.log.Warn("scan notification: load scan", "scan_id", scanID, "err", scanErr)
-		n.log.Info("scan notification skipped", "scan_id", scanID, "kind", kind, "reason", "notify_disabled")
+		n.log.Info("scan notification skipped", "scan_id", scanID, "kind", kind, "reason", "scan_load_failed")
 		return nil
 	}
 	if !scan.NotifyEnabled {

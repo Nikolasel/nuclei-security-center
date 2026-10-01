@@ -44,6 +44,7 @@ type fakeNotifyStore struct {
 	payloads map[string][]byte
 	claimed  map[string]bool
 	scan     store.ScanRow
+	scanErr  error
 }
 
 func (f *fakeNotifyStore) ClaimScanNotification(_ context.Context, scanID, kind string) ([]byte, bool, error) {
@@ -63,6 +64,9 @@ func (f *fakeNotifyStore) ClaimScanNotification(_ context.Context, scanID, kind 
 }
 
 func (f *fakeNotifyStore) GetScan(_ context.Context, id string) (store.ScanRow, error) {
+	if f.scanErr != nil {
+		return store.ScanRow{}, f.scanErr
+	}
 	if f.scan.ID == "" {
 		return store.ScanRow{ID: id, NotifyEnabled: true}, nil
 	}
@@ -299,6 +303,29 @@ func TestScanNotifierFailedFallsBackToSMTPTo(t *testing.T) {
 	}
 	if len(sender.msgs) != 1 || !slices.Equal(sender.msgs[0].To, []string{"ops@example"}) {
 		t.Fatalf("failed mail recipients = %v, want SMTP_TO", sender.msgs)
+	}
+}
+
+func TestScanNotifierScanLoadFailedDoesNotSend(t *testing.T) {
+	raw, _ := json.Marshal(store.ScanFailedPayload{Reason: "orphaned"})
+	st := &fakeNotifyStore{
+		payloads: map[string][]byte{"s1/" + store.NotifyKindFailed: raw},
+		scanErr:  errors.New("scan missing"),
+	}
+	sender := &recordingSender{}
+	var logs strings.Builder
+	n := NewScanNotifier(st, sender, "http://nsc.example", "nsc@example", []string{"ops@example"}, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err := n.Notify(context.Background(), "s1", store.NotifyKindFailed); err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+	if got := sender.subjects(); len(got) != 0 {
+		t.Fatalf("sent after scan load failure: %v", got)
+	}
+	if !strings.Contains(logs.String(), "reason=scan_load_failed") {
+		t.Fatalf("log = %q, want reason=scan_load_failed", logs.String())
+	}
+	if strings.Contains(logs.String(), "reason=notify_disabled") {
+		t.Fatalf("load failure must not log notify_disabled: %s", logs.String())
 	}
 }
 

@@ -303,6 +303,14 @@ type ScanLink struct {
 	ScanPolicyID  string
 	Source        string
 	ScheduleID    string
+	// Notify* are mail settings resolved from the scan policy at dispatch
+	// (#335). They are snapshotted onto the scan so MarkComplete, MarkFailed,
+	// and SMTP still see them after the policy is edited or deleted. Nil/false
+	// means no mail; empty recipients inherit SMTP_TO; empty floor is all
+	// severities.
+	NotifyEnabled     *bool
+	NotifyRecipients  []string
+	NotifyMinSeverity string
 }
 
 // CreateScan inserts a new scan in the queued state and returns its id.
@@ -316,11 +324,17 @@ func (s *Store) CreateScan(ctx context.Context, spec types.ScanSpec, link ScanLi
 	if source == "" {
 		source = "adhoc"
 	}
+	notifyEnabled := false
+	if link.NotifyEnabled != nil {
+		notifyEnabled = *link.NotifyEnabled
+	}
 	_, err = s.pool.Exec(ctx,
-		`INSERT INTO scans (id, state, spec, target_id, template_set_id, scan_policy_id, source, schedule_id, templates_commit, coverage_origin)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		`INSERT INTO scans (id, state, spec, target_id, template_set_id, scan_policy_id, source, schedule_id, templates_commit, coverage_origin,
+		                    notify_enabled, notify_recipients, notify_min_severity)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 		id, types.ScanQueued, specJSON, nullStr(link.TargetID), nullStr(link.TemplateSetID),
 		nullStr(link.ScanPolicyID), source, nullStr(link.ScheduleID), nullStr(spec.Templates.TemplatesCommit), CoverageOriginNode,
+		notifyEnabled, nullStrSlice(link.NotifyRecipients), nullStr(link.NotifyMinSeverity),
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert scan: %w", err)
@@ -366,11 +380,18 @@ func (s *Store) MarkRunning(ctx context.Context, scanID, nodeScanID string) (boo
 // responded), in which case the column is left NULL, not an empty string.
 func (s *Store) MarkFailed(ctx context.Context, scanID, reason, nucleiVersion, templatesCommit string) error {
 	_, err := s.pool.Exec(ctx,
-		`UPDATE scans SET state = $1, error = $2, finished_at = now(),
-		        nuclei_version = coalesce($4, nuclei_version), templates_commit = coalesce($5, templates_commit)
-		  WHERE id = $3 AND state NOT IN ($6, $7, $8)`,
+		`WITH failed AS (
+		    UPDATE scans SET state = $1, error = $2, finished_at = now(),
+		           nuclei_version = coalesce($4, nuclei_version), templates_commit = coalesce($5, templates_commit)
+		     WHERE id = $3 AND state NOT IN ($6, $7, $8)
+		 RETURNING id, error
+		 )
+		 INSERT INTO scan_notification_outbox (scan_id, kind, payload)
+		 SELECT id, $9, jsonb_build_object('reason', coalesce(error, ''))
+		   FROM failed
+		 ON CONFLICT (scan_id, kind) DO NOTHING`,
 		types.ScanFailed, reason, scanID, nullStr(nucleiVersion), nullStr(templatesCommit),
-		types.ScanCancelled, types.ScanComplete, types.ScanFailed,
+		types.ScanCancelled, types.ScanComplete, types.ScanFailed, NotifyKindFailed,
 	)
 	return err
 }
@@ -414,18 +435,31 @@ func (s *Store) SetScanSkippedFindingCount(ctx context.Context, scanID string, c
 // scan still queued/running when the backend starts up was orphaned by the
 // previous process exiting (crash, deploy, OOM) mid-run — nothing will ever
 // finish driving it otherwise, and it would sit in the UI as "running"
-// forever. Called once at startup, after migrations. Returns the count
-// reconciled.
+// forever. Called once at startup, after migrations. Inserts a `failed`
+// outbox row per orphan (same payload as MarkFailed) so a restart can mail
+// those failures. Returns the count reconciled.
 func (s *Store) FailOrphanedScans(ctx context.Context, reason string) (int64, error) {
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE scans SET state = $1, error = $2, finished_at = now()
-		 WHERE state IN ($3, $4)`,
-		types.ScanFailed, reason, types.ScanQueued, types.ScanRunning,
-	)
+	var n int64
+	err := s.pool.QueryRow(ctx,
+		`WITH failed AS (
+		    UPDATE scans SET state = $1, error = $2, finished_at = now()
+		     WHERE state IN ($3, $4)
+		 RETURNING id, error
+		 ),
+		 ins AS (
+		 INSERT INTO scan_notification_outbox (scan_id, kind, payload)
+		 SELECT id, $5, jsonb_build_object('reason', coalesce(error, ''))
+		   FROM failed
+		 ON CONFLICT (scan_id, kind) DO NOTHING
+		 RETURNING scan_id
+		 )
+		 SELECT count(*) FROM failed LEFT JOIN ins ON FALSE`,
+		types.ScanFailed, reason, types.ScanQueued, types.ScanRunning, NotifyKindFailed,
+	).Scan(&n)
 	if err != nil {
 		return 0, err
 	}
-	return tag.RowsAffected(), nil
+	return n, nil
 }
 
 // MarkComplete records successful completion and the versions that ran. It also
@@ -437,18 +471,19 @@ func (s *Store) FailOrphanedScans(ctx context.Context, reason string) (int64, er
 // The exact occurrence itself is always positive coverage evidence. Absence
 // without pair-level evidence fails closed.
 //
-// The scan transition and coverage update are one statement, so readers cannot
-// observe a complete scan without its lifecycle evidence. Like MarkFailed this
-// won't overwrite an already-cancelled scan, so a cancel that races an ingest
-// finishing stays cancelled. A scan with skipped finding records is incomplete:
-// its exact occurrences still provide positive evidence, but its absence cannot
-// advance mitigation evidence.
+// The scan transition, coverage update, and digest outbox insert are one
+// statement, so readers cannot observe a complete scan without its lifecycle
+// evidence, and a restart cannot derive a second digest after last_covering_scan
+// has already advanced. Like MarkFailed this won't overwrite an already-cancelled
+// scan, so a cancel that races an ingest finishing stays cancelled. A scan with
+// skipped finding records is incomplete: its exact occurrences still provide
+// positive evidence, but its absence cannot advance mitigation evidence.
 func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templatesCommit string) error {
 	query := fmt.Sprintf(`WITH completed_scan AS (
 		    UPDATE scans
 		       SET state = $1, nuclei_version = $2, templates_commit = $3, finished_at = now()
 		     WHERE id = $4 AND state <> $5
-		     RETURNING id, target_id, covered_endpoints, coverage_origin, skipped_finding_count, created_at
+		    RETURNING id, target_id, covered_endpoints, coverage_origin, skipped_finding_count, created_at, notify_min_severity
 		 ),
 		 coverage_pairs AS MATERIALIZED (
 		    SELECT pair->>'template_id' AS template_id,
@@ -476,33 +511,141 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 		     WHERE observed.finding_id IS NOT NULL
 		 ),
 		 locked_candidates AS MATERIALIZED (
-		    SELECT lifecycle.id
+		    SELECT lifecycle.id, lifecycle.last_covering_scan AS prev_covering
 		      FROM finding_lifecycle lifecycle
 		      JOIN candidate_lifecycle candidate ON candidate.id = lifecycle.id
 		     ORDER BY lifecycle.id
 		       FOR UPDATE
+		 ),
+		 covering_update AS (
+		    UPDATE finding_lifecycle lifecycle
+		       SET last_covering_scan = completed_scan.id
+		      FROM completed_scan, locked_candidates candidate
+		     WHERE lifecycle.id = candidate.id
+		       AND EXISTS (
+		           SELECT 1
+		             FROM findings associated
+		             JOIN scans associated_scan ON associated_scan.id = associated.scan_id
+		            WHERE associated.finding_id = lifecycle.id
+		              AND associated_scan.target_id IS NOT DISTINCT FROM completed_scan.target_id
+		       )
+		       AND (
+		           lifecycle.last_covering_scan IS NULL
+		           OR EXISTS (
+		               SELECT 1
+		                 FROM scans previous
+		                WHERE previous.id = lifecycle.last_covering_scan
+		                  AND (previous.created_at, previous.id) <
+		                      (completed_scan.created_at, completed_scan.id)
+		           )
+		       )
+		    RETURNING lifecycle.id
+		 ),
+		 digest_rows AS (
+		    SELECT l.id,
+		           CASE
+		             WHEN l.first_seen_scan = cs.id THEN 'new'
+		             WHEN l.last_seen_scan = cs.id
+		              AND c.prev_covering IS NOT NULL
+		              AND NOT EXISTS (
+		                  SELECT 1 FROM findings observed
+		                   WHERE observed.finding_id = l.id
+		                     AND observed.scan_id = c.prev_covering
+		              )
+		             THEN 'changed'
+		             WHEN l.last_seen_scan IS DISTINCT FROM cs.id
+		              AND c.prev_covering IS NOT NULL
+		              AND EXISTS (
+		                  SELECT 1 FROM findings observed
+		                   WHERE observed.finding_id = l.id
+		                     AND observed.scan_id = c.prev_covering
+		              )
+		             THEN 'fixed'
+		             ELSE NULL
+		           END AS status,
+		           CASE lower(coalesce(l.recast_severity, l.severity))
+		             WHEN 'critical' THEN 'critical'
+		             WHEN 'high' THEN 'high'
+		             WHEN 'medium' THEN 'medium'
+		             WHEN 'low' THEN 'low'
+		             WHEN 'info' THEN 'info'
+		             ELSE 'unknown'
+		           END AS severity,
+		           l.template_id, l.name, l.host, l.matched_at
+		      FROM covering_update u
+		      JOIN finding_lifecycle l ON l.id = u.id
+		      JOIN locked_candidates c ON c.id = l.id
+		      CROSS JOIN completed_scan cs
+		     WHERE (`+lcEffectiveExpr+`) NOT IN ('accepted', 'false_positive')
+		       AND (
+		            COALESCE(cs.notify_min_severity, '') = ''
+		            OR CASE lower(coalesce(l.recast_severity, l.severity))
+		                 WHEN 'info' THEN 0
+		                 WHEN 'low' THEN 1
+		                 WHEN 'medium' THEN 2
+		                 WHEN 'high' THEN 3
+		                 WHEN 'critical' THEN 4
+		                 ELSE 4
+		               END
+		               >=
+		               CASE cs.notify_min_severity
+		                 WHEN 'info' THEN 0
+		                 WHEN 'low' THEN 1
+		                 WHEN 'medium' THEN 2
+		                 WHEN 'high' THEN 3
+		                 WHEN 'critical' THEN 4
+		                 ELSE 0
+		               END
+		       )
+		 ),
+		 mailed AS (
+		    SELECT * FROM digest_rows WHERE status IS NOT NULL
+		 ),
+		 digest_payload AS (
+		    SELECT jsonb_build_object(
+		             'new', jsonb_build_object(
+		                 'critical', count(*) FILTER (WHERE status = 'new' AND severity = 'critical'),
+		                 'high', count(*) FILTER (WHERE status = 'new' AND severity = 'high'),
+		                 'medium', count(*) FILTER (WHERE status = 'new' AND severity = 'medium'),
+		                 'low', count(*) FILTER (WHERE status = 'new' AND severity = 'low'),
+		                 'info', count(*) FILTER (WHERE status = 'new' AND severity = 'info'),
+		                 'unknown', count(*) FILTER (WHERE status = 'new' AND severity = 'unknown')
+		             ),
+		             'changed', jsonb_build_object(
+		                 'critical', count(*) FILTER (WHERE status = 'changed' AND severity = 'critical'),
+		                 'high', count(*) FILTER (WHERE status = 'changed' AND severity = 'high'),
+		                 'medium', count(*) FILTER (WHERE status = 'changed' AND severity = 'medium'),
+		                 'low', count(*) FILTER (WHERE status = 'changed' AND severity = 'low'),
+		                 'info', count(*) FILTER (WHERE status = 'changed' AND severity = 'info'),
+		                 'unknown', count(*) FILTER (WHERE status = 'changed' AND severity = 'unknown')
+		             ),
+		             'fixed', jsonb_build_object(
+		                 'critical', count(*) FILTER (WHERE status = 'fixed' AND severity = 'critical'),
+		                 'high', count(*) FILTER (WHERE status = 'fixed' AND severity = 'high'),
+		                 'medium', count(*) FILTER (WHERE status = 'fixed' AND severity = 'medium'),
+		                 'low', count(*) FILTER (WHERE status = 'fixed' AND severity = 'low'),
+		                 'info', count(*) FILTER (WHERE status = 'fixed' AND severity = 'info'),
+		                 'unknown', count(*) FILTER (WHERE status = 'fixed' AND severity = 'unknown')
+		             ),
+		             'findings', coalesce(jsonb_agg(
+		                 jsonb_build_object(
+		                     'id', id,
+		                     'status', status,
+		                     'severity', severity,
+		                     'template_id', template_id,
+		                     'name', name,
+		                     'host', host,
+		                     'matched_at', matched_at
+		                 ) ORDER BY status, severity, id
+		             ), '[]'::jsonb)
+		           ) AS payload
+		      FROM mailed
 		 )
-		 UPDATE finding_lifecycle lifecycle
-		    SET last_covering_scan = completed_scan.id
-		   FROM completed_scan, locked_candidates candidate
-		  WHERE lifecycle.id = candidate.id
-		    AND EXISTS (
-		        SELECT 1
-		          FROM findings associated
-		          JOIN scans associated_scan ON associated_scan.id = associated.scan_id
-		         WHERE associated.finding_id = lifecycle.id
-		           AND associated_scan.target_id IS NOT DISTINCT FROM completed_scan.target_id
-		    )
-		    AND (
-		        lifecycle.last_covering_scan IS NULL
-		        OR EXISTS (
-		            SELECT 1
-		              FROM scans previous
-		             WHERE previous.id = lifecycle.last_covering_scan
-		               AND (previous.created_at, previous.id) <
-		                   (completed_scan.created_at, completed_scan.id)
-		        )
-		    )`, coverageOriginClaimedSQL)
+		 INSERT INTO scan_notification_outbox (scan_id, kind, payload)
+		 SELECT cs.id, '%s', coalesce(dp.payload, '{}'::jsonb)
+		   FROM completed_scan cs
+		   CROSS JOIN digest_payload dp
+		 ON CONFLICT (scan_id, kind) DO NOTHING`, coverageOriginClaimedSQL, NotifyKindDigest)
 	_, err := s.pool.Exec(ctx, query,
 		types.ScanComplete, nucleiVersion, templatesCommit, scanID, types.ScanCancelled,
 	)
@@ -613,6 +756,12 @@ type ScanRow struct {
 	NucleiVersion   string `json:"nuclei_version,omitempty"`
 	TemplatesCommit string `json:"templates_commit,omitempty"`
 	Error           string `json:"error,omitempty"`
+	// NotifyEnabled / NotifyRecipients / NotifyMinSeverity are the mail
+	// settings snapshotted at dispatch (#335). The flag gates digest and
+	// failure mail; empty recipients fall back to SMTP_TO.
+	NotifyEnabled     bool     `json:"notify_enabled"`
+	NotifyRecipients  []string `json:"notify_recipients,omitempty"`
+	NotifyMinSeverity string   `json:"notify_min_severity,omitempty"`
 	// SkippedFindingCount is the number of malformed or oversized source records
 	// safely skipped during result ingestion. Any operational ingest error still
 	// fails the scan rather than being counted here.
@@ -650,7 +799,8 @@ const scanSelect = `
 	       s.nuclei_version, s.templates_commit, s.error, s.skipped_finding_count,
 	       s.raw_object_key, s.log_object_key,
 	       s.created_at, s.finished_at, s.discovered_targets,
-	       s.covered_endpoints, s.coverage_warning, s.coverage_origin
+	       s.covered_endpoints, s.coverage_warning, s.coverage_origin,
+	       s.notify_enabled, s.notify_recipients, s.notify_min_severity
 	  FROM scans s
 	  LEFT JOIN targets t ON t.id = s.target_id
 	  LEFT JOIN template_sets ts ON ts.id = s.template_set_id
@@ -662,14 +812,15 @@ const scanCancellableStates = `('queued', 'running')`
 
 func scanScan(row pgx.Row) (ScanRow, error) {
 	var r ScanRow
-	var targetID, targetName, templateSetID, templateSetName, scanPolicyID, scanPolicyName, nodeID, nodeName, nucleiVersion, templatesCommit, errStr, rawKey, logKey, coverageWarning, coverageOrigin *string
+	var targetID, targetName, templateSetID, templateSetName, scanPolicyID, scanPolicyName, nodeID, nodeName, nucleiVersion, templatesCommit, errStr, rawKey, logKey, coverageWarning, coverageOrigin, notifyMinSeverity *string
 	var hosts []string
 	var coveredJSON []byte
 	if err := row.Scan(&r.ID, &r.State, &targetID, &targetName, &hosts, &templateSetID, &templateSetName,
 		&scanPolicyID, &scanPolicyName, &nodeID, &nodeName,
 		&nucleiVersion, &templatesCommit, &errStr, &r.SkippedFindingCount, &rawKey, &logKey,
 		&r.CreatedAt, &r.FinishedAt,
-		&r.DiscoveredTargets, &coveredJSON, &coverageWarning, &coverageOrigin); err != nil {
+		&r.DiscoveredTargets, &coveredJSON, &coverageWarning, &coverageOrigin,
+		&r.NotifyEnabled, &r.NotifyRecipients, &notifyMinSeverity); err != nil {
 		return ScanRow{}, err
 	}
 	if coveredJSON != nil {
@@ -694,6 +845,7 @@ func scanScan(row pgx.Row) (ScanRow, error) {
 	r.Error = deref(errStr)
 	r.CoverageWarning = deref(coverageWarning)
 	r.CoverageOrigin = deref(coverageOrigin)
+	r.NotifyMinSeverity = deref(notifyMinSeverity)
 	r.HasRaw = rawKey != nil
 	r.HasLog = logKey != nil
 	return r, nil

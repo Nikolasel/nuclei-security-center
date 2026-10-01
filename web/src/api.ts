@@ -226,6 +226,13 @@ export interface ScanPolicy {
   discovery_rate?: number | null;
   discovery_probe_timeout_ms?: number | null;
   discovery_retries?: number | null;
+  // Scan mail (#335). Null/false notify_enabled means no mail (digest or
+  // failure); true opts in. Empty notify_recipients inherit SMTP_TO. Empty
+  // notify_min_severity includes every severity; a floor drops lower named
+  // severities from digest counts and the list.
+  notify_enabled?: boolean | null;
+  notify_recipients?: string[] | null;
+  notify_min_severity?: string;
   created_by?: string;
   created_at: string;
   updated_at: string;

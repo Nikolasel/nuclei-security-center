@@ -67,6 +67,28 @@ func TestValidateScanPolicy(t *testing.T) {
 	if ok.Name != "fragile" || ok.TemplateSetID != "ts1" {
 		t.Errorf("fields not trimmed: %+v", ok)
 	}
+
+	if err := validateScanPolicy(&store.ScanPolicy{Name: "p", TemplateSetID: "ts1", NotifyMinSeverity: "urgent"}); err == nil {
+		t.Error("invalid notify_min_severity accepted")
+	}
+	if err := validateScanPolicy(&store.ScanPolicy{Name: "p", TemplateSetID: "ts1", NotifyRecipients: []string{"not-an-email"}}); err == nil {
+		t.Error("invalid notify_recipients accepted")
+	}
+	mailOK := &store.ScanPolicy{
+		Name: "p", TemplateSetID: "ts1",
+		NotifyMinSeverity: " Low ",
+		NotifyRecipients:  []string{" Ops@Example.COM ", "ops@example.com", " other@example.com "},
+		NotifyEnabled:     ptr(false),
+	}
+	if err := validateScanPolicy(mailOK); err != nil {
+		t.Fatalf("valid notify policy rejected: %v", err)
+	}
+	if mailOK.NotifyMinSeverity != "low" {
+		t.Errorf("notify_min_severity not normalized: %q", mailOK.NotifyMinSeverity)
+	}
+	if len(mailOK.NotifyRecipients) != 2 {
+		t.Errorf("notify_recipients = %v, want 2 unique addresses", mailOK.NotifyRecipients)
+	}
 }
 
 func TestValidateHost(t *testing.T) {

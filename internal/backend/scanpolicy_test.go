@@ -70,3 +70,18 @@ func TestOverlayScanPolicy(t *testing.T) {
 		t.Errorf("explicit opt-out should disable discovery, got %+v", off.Discovery)
 	}
 }
+
+func TestResolveScanNotify(t *testing.T) {
+	def := resolveScanNotify(store.ScanPolicy{Name: "empty"})
+	if def.Enabled || len(def.Recipients) != 0 || def.MinSeverity != "" {
+		t.Errorf("empty policy notify = %+v, want mail off / SMTP_TO / no floor", def)
+	}
+	on := resolveScanNotify(store.ScanPolicy{NotifyEnabled: ptr(true), NotifyMinSeverity: "LOW", NotifyRecipients: []string{" team@example.com ", ""}})
+	if !on.Enabled || on.MinSeverity != "low" || len(on.Recipients) != 1 || on.Recipients[0] != "team@example.com" {
+		t.Errorf("explicit notify overlay = %+v", on)
+	}
+	off := resolveScanNotify(store.ScanPolicy{NotifyEnabled: ptr(false)})
+	if off.Enabled {
+		t.Errorf("explicit false should stay off, got %+v", off)
+	}
+}

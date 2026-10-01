@@ -88,3 +88,47 @@ that do not exist; they never overwrite admin edits or delete nodes.
 - Dispatch fails fast when the selected node is known unhealthy.
 - Bundle distribution targets only stale, idle nodes; a busy node may return `409` until its scan
   releases the active template tree.
+
+## Scan email notifications
+
+When `SMTP_HOST` is set, a **scan policy that opts in** (`notify_enabled`) can mail **one digest
+per completed scan that changed the lifecycle**, and a separate alert when that scan **fails**.
+A run that changed nothing is silent. Policies default off: no scan mails anything unless
+explicitly enabled. A muted policy still records an outbox row; SMTP is skipped at send
+(`notify_disabled`). With the flag off, a failed or orphaned scan alerts no one — only the
+structured log records it.
+
+The digest uses the same evidence rules as the findings list:
+
+| Status | Meaning |
+|---|---|
+| New | First seen on this scan. |
+| Changed | Resurfaced: this covering scan observed it, and the previous covering scan did not. Announced once. |
+| Fixed | Absent from this covering scan, and the previous covering scan had observed it. Announced once. |
+
+Counts are by **effective severity** (a recast wins): critical / high / medium / low / info,
+plus **unknown** for Nuclei's `unknown` and any other non-standard value. Live `accepted` /
+`false_positive` findings are omitted; `active` findings never appear. Unproven request-trace
+coverage cannot produce Fixed lines. A covering scan that does not observe a finding still
+mails Fixed when the previous covering scan had an occurrence, even if a later failed scan
+ingested a partial result and moved `last_seen_scan`. Metadata drift (template sync rewriting
+name/severity) and analyst triage edits are not mailed. Links point at `APP_BASE_URL`
+`/scans/{id}` and `/findings/{id}`; recipients sign in normally.
+
+Mail behavior is per **scan policy** (resolved at dispatch and stored on the scan):
+
+- `notify_enabled` — unset/false means no mail (digest or failure); true opts in. Off still
+  keeps the outbox row but sends nothing.
+- `notify_recipients` — unset/empty uses `SMTP_TO` (the deployment admin mailbox) for digest
+  and failure mail.
+- `notify_min_severity` — unset includes every severity; `low` drops `info` from counts and the list.
+
+Operator cancel stays silent.
+
+`SMTP_TO` is the admin/owner fallback, not necessarily the person running scans. Set it once
+for a small team and leave policy recipients blank. Mail is a data exit (hostnames, paths,
+template names). Keep `SMTP_TO` on a small operator list.
+Sending is not an audit `event_id`; success and failure are ordinary structured logs. PostgreSQL
+holds an at-most-once outbox row so a backend restart does not resend. Unclaimed rows (crash
+after the terminal write, or scans failed as orphans on startup) are claimed and sent once when
+the notifier starts; already-claimed rows are not retried.

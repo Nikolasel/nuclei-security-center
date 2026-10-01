@@ -188,6 +188,8 @@ func (s *Store) ScanBundleForExport(ctx context.Context, scanID string) (*types.
 				DiscoveryScanType: p.DiscoveryScanType, DiscoveryPorts: p.DiscoveryPorts,
 				DiscoveryTimeoutSec: p.DiscoveryTimeoutSec, DiscoveryRate: p.DiscoveryRate,
 				DiscoveryProbeTimeoutMs: p.DiscoveryProbeTimeoutMs, DiscoveryRetries: p.DiscoveryRetries,
+				NotifyEnabled: p.NotifyEnabled, NotifyRecipients: p.NotifyRecipients,
+				NotifyMinSeverity: p.NotifyMinSeverity,
 			}
 		} else if !errors.Is(err, ErrNotFound) {
 			return nil, fmt.Errorf("read scan policy snapshot: %w", err)

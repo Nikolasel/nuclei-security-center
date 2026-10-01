@@ -99,9 +99,16 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   The exclusion foreign key is restrictive: a custom template referenced by an exclude-set
   exclusion must be consciously removed from that deny-list before it can be deleted.
 - **scan_policies** — `id, name, template_set_id, rate_limit, concurrency, timeout_sec,
-  max_host_error, response_size_read, response_size_save, discovery_*`. The central, reusable **how to scan** configuration: a required
+  max_host_error, response_size_read, response_size_save, discovery_*, notify_*`. The central, reusable **how to scan** configuration: a required
   template set (exact, all, or exclude) plus Nuclei/discovery knobs (each nullable = "use the
-  built-in default"). `response_size_read`/`save` cap nuclei's `-response-size-read` / `-save` (10 MiB / 1 MiB defaults) to bound heap on large CDN responses (#274); discovery is the optional naabu pre-pass. Every scan and schedule selects a policy and an approved target
+  built-in default"). `response_size_read`/`save` cap nuclei's `-response-size-read` / `-save` (10 MiB / 1 MiB defaults) to bound heap on large CDN responses (#274); discovery is the optional naabu pre-pass.
+  Mail knobs (`notify_enabled`, `notify_recipients`, `notify_min_severity`) are also
+  nullable inherit: NULL/false means no mail, recipients fall back to `SMTP_TO`, and a
+  severity floor drops lower named severities from digest counts and the finding list. The same
+  flag and recipient list apply to failed/orphaned mail; a policy that is off alerts no one.
+  Those settings are resolved at dispatch and snapshotted on the
+  scan (same reason as `target_id` / `template_set_id`: `scan_policy_id` is `ON DELETE SET NULL`
+  and the digest is derived later in `MarkComplete`). Every scan and schedule selects a policy and an approved target
   independently, so one policy can be reused across scopes. A template set referenced by a policy
   cannot be deleted. The scanner also derives an automatic `GOMEMLIMIT` ≈75% of its cgroup limit (leaving headroom for kernel TCP buffers) so GC pressure replaces OOM kills (#274).
 - **schedules** — `id, scan_policy_id, target_id, cron, timezone, enabled` — a policy and approved target
@@ -110,11 +117,32 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   either referenced row cascades the schedule away.
 - **scans** — `id, source (schedule|adhoc), scan_policy_id, target_id, template_set_id, status,
   started_at, finished_at, nuclei_version, templates_commit, skipped_finding_count, triggered_by`.
-  The selected target and policy's template set are resolved and recorded on the scan at dispatch
+  The selected target, policy template set, and notify settings are resolved and recorded on the scan at dispatch
   (so findings keep working and history survives `scan_policy_id` being nulled on policy delete —
   `ON DELETE SET NULL`). `skipped_finding_count` records source records skipped during backend
   ingest, including records proven malformed and records over the per-record JSONL size limit;
   database, transaction, schema, and unexpected constraint failures remain scan-fatal.
+
+- **scan_notification_outbox** — at-most-once mail payloads keyed by `(scan_id, kind)`
+  (`digest` or `failed`). Inserted in the same statement as `MarkComplete` / `MarkFailed` /
+  `FailOrphanedScans` so a backend restart cannot derive a second digest after
+  `last_covering_scan` has advanced, and orphaned queued/running scans still get a `failed`
+  payload. The completing process claims the row immediately before SMTP; a send failure is
+  logged and never retried (best-effort, same as raw-output archival). On startup, after the
+  notifier is wired, unclaimed rows (`claimed_at` NULL) are claimed and sent once — including
+  a crash after `MarkComplete`/`MarkFailed` and orphaned failures. Already-claimed rows are
+  left alone so a restart does not resend. Empty deltas still get a row so a later
+  complete cannot invent mail. Operator-cancelled scans never insert a `failed` row. SMTP is
+  optional (`SMTP_HOST` unset disables sending without failing startup). The digest lists only
+  New / Changed (resurfaced) / Fixed, by effective severity (`critical`/`high`/`medium`/`low`/
+  `info`, plus an `unknown` bucket for Nuclei's `unknown` and any other value). Changed is the
+  covering-scan transition (absent last covering scan, present now), not the stored
+  `times_mitigated` counter, so a resurfaced finding that stays open is mailed once.
+  `active` findings and live accepted / false-positive dispositions are omitted. A policy
+  `notify_min_severity` floor (snapshotted on the scan) drops lower named severities from
+  those counts and the list; `unknown` is never dropped. A muted policy still records the
+  outbox row and skips SMTP as `notify_disabled`. Status is not stored on
+  `finding_lifecycle`.
 
 - **findings** (occurrences) — the immutable per-scan observation log: `id, scan_id,
   target_id, finding_id, dedup_key, result_discriminator, template_id, name, severity,

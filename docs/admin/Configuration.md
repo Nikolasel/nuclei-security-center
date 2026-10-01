@@ -122,6 +122,32 @@ the system of record: an archive upload failure is logged but does not discard s
 findings. Downloads are proxied through the authenticated backend; NSC does not expose presigned
 URLs.
 
+## Scan email notifications
+
+Unset `SMTP_HOST` leaves mail off. Host plus `SMTP_FROM` is enough to enable sending;
+`SMTP_TO` is the fallback recipient list when a policy names none. A completed scan with
+no New / Changed / Fixed delta sends nothing. Failed and orphaned scans use the same
+policy flag and recipients as digests (flag off ⇒ no failure mail). Operator-cancelled
+scans do not mail. Non-standard severities (including Nuclei's `unknown`) are
+counted in an `unknown` bucket rather than `info`. Send failures are logged and never
+change the scan's terminal state. Recipients authenticate through the normal session; mails link to
+`APP_BASE_URL` scan and finding pages (no presigned URLs). `SMTP_PASSWORD_FILE` is re-read on each
+send so a secret agent can rotate credentials.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `SMTP_HOST` | unset (mail disabled) | SMTP server hostname. Unset disables notifications without failing startup. |
+| `SMTP_PORT` | `587` | SMTP port. |
+| `SMTP_USERNAME` | unset | SMTP AUTH username. Leave empty for unauthenticated relays. |
+| `SMTP_PASSWORD` | unset | SMTP AUTH password. Ignored when `SMTP_PASSWORD_FILE` is set. |
+| `SMTP_PASSWORD_FILE` | unset | File containing only the SMTP password. Re-read before each send. |
+| `SMTP_FROM` | unset | Envelope From. Required with `SMTP_HOST` or mail stays disabled. |
+| `SMTP_TO` | unset | Comma-separated fallback recipients when a policy lists none. Optional: host + `SMTP_FROM` enable sending; a policy with no recipients and no `SMTP_TO` skips SMTP as `no_recipients`. |
+| `SMTP_STARTTLS` | `true` | Require STARTTLS on the submission port. Set `false` only for a trusted plaintext relay. |
+| `SMTP_TLS` | `false` | Implicit TLS (typically port 465). When `true`, STARTTLS is not used. |
+
+See [Operations](Operations.md#scan-email-notifications) for what a digest contains.
+
 ## Scanner
 
 | Variable | Default | Purpose |

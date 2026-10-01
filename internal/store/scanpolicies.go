@@ -43,26 +43,37 @@ type ScanPolicy struct {
 	DiscoveryPorts      string `json:"discovery_ports,omitempty"`
 	DiscoveryTimeoutSec *int   `json:"discovery_timeout_sec,omitempty"`
 	// naabu per-probe tuning (all nil = naabu's default). See DiscoveryOptions.
-	DiscoveryRate           *int      `json:"discovery_rate,omitempty"`
-	DiscoveryProbeTimeoutMs *int      `json:"discovery_probe_timeout_ms,omitempty"`
-	DiscoveryRetries        *int      `json:"discovery_retries,omitempty"`
-	CreatedBy               string    `json:"created_by,omitempty"`
-	CreatedAt               time.Time `json:"created_at"`
-	UpdatedAt               time.Time `json:"updated_at"`
+	DiscoveryRate           *int `json:"discovery_rate,omitempty"`
+	DiscoveryProbeTimeoutMs *int `json:"discovery_probe_timeout_ms,omitempty"`
+	DiscoveryRetries        *int `json:"discovery_retries,omitempty"`
+	// NotifyEnabled nil/false means no mail (digest or failure). true opts in (#335).
+	NotifyEnabled *bool `json:"notify_enabled,omitempty"`
+	// NotifyRecipients nil/empty inherits SMTP_TO for digest and failure mail.
+	NotifyRecipients []string `json:"notify_recipients,omitempty"`
+	// NotifyMinSeverity empty inherits "all severities"; a floor drops lower
+	// named severities from digest counts and the finding list.
+	NotifyMinSeverity string    `json:"notify_min_severity,omitempty"`
+	CreatedBy         string    `json:"created_by,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 const scanPolicyCols = `id, name, template_set_id, rate_limit, concurrency, timeout_sec, max_host_error,
 	response_size_read, response_size_save,
 	discovery_enabled, discovery_host_discovery, discovery_scan_type, discovery_ports, discovery_timeout_sec, discovery_rate,
-	discovery_probe_timeout_ms, discovery_retries, created_by, created_at, updated_at`
+	discovery_probe_timeout_ms, discovery_retries,
+	notify_enabled, notify_recipients, notify_min_severity,
+	created_by, created_at, updated_at`
 
 // scanScanPolicy reads one row (column order must match scanPolicyCols).
 func scanScanPolicy(row pgx.Row) (ScanPolicy, error) {
 	var p ScanPolicy
-	var discoveryScanType, discoveryPorts, createdBy *string
+	var discoveryScanType, discoveryPorts, notifyMinSeverity, createdBy *string
 	err := row.Scan(&p.ID, &p.Name, &p.TemplateSetID, &p.RateLimit, &p.Concurrency, &p.TimeoutSec,
 		&p.MaxHostError, &p.ResponseSizeRead, &p.ResponseSizeSave, &p.DiscoveryEnabled, &p.DiscoveryHostDiscovery, &discoveryScanType, &discoveryPorts, &p.DiscoveryTimeoutSec, &p.DiscoveryRate,
-		&p.DiscoveryProbeTimeoutMs, &p.DiscoveryRetries, &createdBy, &p.CreatedAt, &p.UpdatedAt)
+		&p.DiscoveryProbeTimeoutMs, &p.DiscoveryRetries,
+		&p.NotifyEnabled, &p.NotifyRecipients, &notifyMinSeverity,
+		&createdBy, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ScanPolicy{}, ErrNotFound
@@ -71,6 +82,7 @@ func scanScanPolicy(row pgx.Row) (ScanPolicy, error) {
 	}
 	p.DiscoveryScanType = deref(discoveryScanType)
 	p.DiscoveryPorts = deref(discoveryPorts)
+	p.NotifyMinSeverity = deref(notifyMinSeverity)
 	p.CreatedBy = deref(createdBy)
 	return p, nil
 }
@@ -83,13 +95,15 @@ func (s *Store) CreateScanPolicy(ctx context.Context, in ScanPolicy) (ScanPolicy
 		`INSERT INTO scan_policies (id, name, template_set_id, rate_limit, concurrency, timeout_sec, max_host_error,
 		     response_size_read, response_size_save,
 		     discovery_enabled, discovery_host_discovery, discovery_scan_type, discovery_ports, discovery_timeout_sec, discovery_rate,
-		     discovery_probe_timeout_ms, discovery_retries, created_by)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, TRUE), $11, $12, $13, $14, $15, $16, $17, $18)
+		     discovery_probe_timeout_ms, discovery_retries,
+		     notify_enabled, notify_recipients, notify_min_severity, created_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, TRUE), $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		 RETURNING `+scanPolicyCols,
 		in.ID, in.Name, in.TemplateSetID, in.RateLimit, in.Concurrency, in.TimeoutSec, in.MaxHostError,
 		in.ResponseSizeRead, in.ResponseSizeSave,
 		in.DiscoveryEnabled, in.DiscoveryHostDiscovery, nullStr(in.DiscoveryScanType), nullStr(in.DiscoveryPorts), in.DiscoveryTimeoutSec, in.DiscoveryRate,
-		in.DiscoveryProbeTimeoutMs, in.DiscoveryRetries, nullStr(in.CreatedBy)))
+		in.DiscoveryProbeTimeoutMs, in.DiscoveryRetries,
+		in.NotifyEnabled, nullStrSlice(in.NotifyRecipients), nullStr(in.NotifyMinSeverity), nullStr(in.CreatedBy)))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ScanPolicy{}, ErrConflict
@@ -135,13 +149,16 @@ func (s *Store) UpdateScanPolicy(ctx context.Context, id string, in ScanPolicy) 
 		     timeout_sec = $6, max_host_error = $7, response_size_read = $8, response_size_save = $9,
 		     discovery_enabled = COALESCE($10, TRUE),
 		     discovery_host_discovery = $11, discovery_scan_type = $12, discovery_ports = $13, discovery_timeout_sec = $14, discovery_rate = $15,
-		     discovery_probe_timeout_ms = $16, discovery_retries = $17, updated_at = now()
+		     discovery_probe_timeout_ms = $16, discovery_retries = $17,
+		     notify_enabled = $18, notify_recipients = $19, notify_min_severity = $20,
+		     updated_at = now()
 		 WHERE id = $1
 		 RETURNING `+scanPolicyCols,
 		id, in.Name, in.TemplateSetID, in.RateLimit, in.Concurrency, in.TimeoutSec, in.MaxHostError,
 		in.ResponseSizeRead, in.ResponseSizeSave,
 		in.DiscoveryEnabled, in.DiscoveryHostDiscovery, nullStr(in.DiscoveryScanType), nullStr(in.DiscoveryPorts), in.DiscoveryTimeoutSec, in.DiscoveryRate,
-		in.DiscoveryProbeTimeoutMs, in.DiscoveryRetries))
+		in.DiscoveryProbeTimeoutMs, in.DiscoveryRetries,
+		in.NotifyEnabled, nullStrSlice(in.NotifyRecipients), nullStr(in.NotifyMinSeverity)))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ScanPolicy{}, ErrConflict

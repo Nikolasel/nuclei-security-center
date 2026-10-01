@@ -370,7 +370,35 @@ func (s *Server) resolvePolicySpec(ctx context.Context, policyID, targetID strin
 	}
 	spec.Options = overlayScanPolicy(spec.Options, pol)
 	link.ScanPolicyID = pol.ID
+	notify := resolveScanNotify(pol)
+	link.NotifyEnabled = &notify.Enabled
+	link.NotifyRecipients = notify.Recipients
+	link.NotifyMinSeverity = notify.MinSeverity
 	return spec, link, nil
+}
+
+// scanNotifySettings is the mail configuration resolved from a policy at
+// dispatch. Recipients empty means SMTP_TO; MinSeverity empty means no floor.
+type scanNotifySettings struct {
+	Enabled     bool
+	Recipients  []string
+	MinSeverity string
+}
+
+// resolveScanNotify overlays a policy's nullable mail knobs onto the
+// deployment defaults (mail off, SMTP_TO, all severities). Pure so tests do
+// not need a database round-trip.
+func resolveScanNotify(p store.ScanPolicy) scanNotifySettings {
+	out := scanNotifySettings{MinSeverity: strings.ToLower(strings.TrimSpace(p.NotifyMinSeverity))}
+	if p.NotifyEnabled != nil {
+		out.Enabled = *p.NotifyEnabled
+	}
+	for _, r := range p.NotifyRecipients {
+		if r = strings.TrimSpace(r); r != "" {
+			out.Recipients = append(out.Recipients, r)
+		}
+	}
+	return out
 }
 
 // resolveConfigSpec builds a scan spec + config link from a stored target and an

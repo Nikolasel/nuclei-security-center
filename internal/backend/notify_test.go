@@ -64,7 +64,7 @@ func (f *fakeNotifyStore) ClaimScanNotification(_ context.Context, scanID, kind 
 
 func (f *fakeNotifyStore) GetScan(_ context.Context, id string) (store.ScanRow, error) {
 	if f.scan.ID == "" {
-		return store.ScanRow{ID: id, NotifyDigestEnabled: true}, nil
+		return store.ScanRow{ID: id, NotifyEnabled: true}, nil
 	}
 	return f.scan, nil
 }
@@ -178,6 +178,13 @@ func TestSMTPConfigFromEnvDisabled(t *testing.T) {
 	}
 }
 
+func TestNewSMTPSenderWithoutFallbackTo(t *testing.T) {
+	sender, err := NewSMTPSender(SMTPConfig{Host: "mail.example", From: "nsc@example"})
+	if err != nil || sender == nil {
+		t.Fatalf("sender = %v err = %v, want sender with host+from only", sender, err)
+	}
+}
+
 func TestScanNotifierNotifyUnclaimedSendsOnce(t *testing.T) {
 	digest, _ := json.Marshal(store.ScanDigestPayload{
 		New: store.SeverityCounts{Unknown: 1},
@@ -227,7 +234,7 @@ func TestScanNotifierDigestDisabledDoesNotSend(t *testing.T) {
 	raw, _ := json.Marshal(payload)
 	st := &fakeNotifyStore{
 		payloads: map[string][]byte{"s1/" + store.NotifyKindDigest: raw},
-		scan:     store.ScanRow{ID: "s1", NotifyDigestEnabled: false},
+		scan:     store.ScanRow{ID: "s1", NotifyEnabled: false},
 	}
 	sender := &recordingSender{}
 	n := NewScanNotifier(st, sender, "http://nsc.example", "nsc@example", []string{"ops@example"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -239,14 +246,14 @@ func TestScanNotifierDigestDisabledDoesNotSend(t *testing.T) {
 	}
 }
 
-func TestScanNotifierFailedIgnoresPolicyMuteAndRecipients(t *testing.T) {
+func TestScanNotifierFailedDisabledDoesNotSend(t *testing.T) {
 	raw, _ := json.Marshal(store.ScanFailedPayload{Reason: "node down"})
 	st := &fakeNotifyStore{
 		payloads: map[string][]byte{"s1/" + store.NotifyKindFailed: raw},
 		scan: store.ScanRow{
-			ID:                  "s1",
-			NotifyDigestEnabled: false,
-			NotifyRecipients:    []string{"policy@example"},
+			ID:               "s1",
+			NotifyEnabled:    false,
+			NotifyRecipients: []string{"policy@example"},
 		},
 	}
 	sender := &recordingSender{}
@@ -254,11 +261,60 @@ func TestScanNotifierFailedIgnoresPolicyMuteAndRecipients(t *testing.T) {
 	if err := n.Notify(context.Background(), "s1", store.NotifyKindFailed); err != nil {
 		t.Fatalf("notify: %v", err)
 	}
-	if len(sender.msgs) != 1 {
-		t.Fatalf("sent %d, want 1 failed mail", len(sender.msgs))
+	if got := sender.subjects(); len(got) != 0 {
+		t.Fatalf("muted policy sent failure mail: %v", got)
 	}
-	if !slices.Equal(sender.msgs[0].To, []string{"ops@example"}) {
-		t.Fatalf("failed mail recipients = %v, want SMTP_TO", sender.msgs[0].To)
+}
+
+func TestScanNotifierFailedUsesPolicyRecipients(t *testing.T) {
+	raw, _ := json.Marshal(store.ScanFailedPayload{Reason: "node down"})
+	st := &fakeNotifyStore{
+		payloads: map[string][]byte{"s1/" + store.NotifyKindFailed: raw},
+		scan: store.ScanRow{
+			ID:               "s1",
+			NotifyEnabled:    true,
+			NotifyRecipients: []string{"policy@example"},
+		},
+	}
+	sender := &recordingSender{}
+	n := NewScanNotifier(st, sender, "http://nsc.example", "nsc@example", []string{"ops@example"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := n.Notify(context.Background(), "s1", store.NotifyKindFailed); err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+	if len(sender.msgs) != 1 || !slices.Equal(sender.msgs[0].To, []string{"policy@example"}) {
+		t.Fatalf("failed mail recipients = %v, want policy override", sender.msgs)
+	}
+}
+
+func TestScanNotifierFailedFallsBackToSMTPTo(t *testing.T) {
+	raw, _ := json.Marshal(store.ScanFailedPayload{Reason: "orphaned"})
+	st := &fakeNotifyStore{
+		payloads: map[string][]byte{"s1/" + store.NotifyKindFailed: raw},
+		scan:     store.ScanRow{ID: "s1", NotifyEnabled: true},
+	}
+	sender := &recordingSender{}
+	n := NewScanNotifier(st, sender, "http://nsc.example", "nsc@example", []string{"ops@example"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := n.Notify(context.Background(), "s1", store.NotifyKindFailed); err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+	if len(sender.msgs) != 1 || !slices.Equal(sender.msgs[0].To, []string{"ops@example"}) {
+		t.Fatalf("failed mail recipients = %v, want SMTP_TO", sender.msgs)
+	}
+}
+
+func TestScanNotifierNoRecipientsDoesNotSend(t *testing.T) {
+	raw, _ := json.Marshal(store.ScanFailedPayload{Reason: "node down"})
+	st := &fakeNotifyStore{
+		payloads: map[string][]byte{"s1/" + store.NotifyKindFailed: raw},
+		scan:     store.ScanRow{ID: "s1", NotifyEnabled: true},
+	}
+	sender := &recordingSender{}
+	n := NewScanNotifier(st, sender, "http://nsc.example", "nsc@example", nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := n.Notify(context.Background(), "s1", store.NotifyKindFailed); err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+	if got := sender.subjects(); len(got) != 0 {
+		t.Fatalf("sent with no recipients: %v", got)
 	}
 }
 
@@ -271,9 +327,9 @@ func TestScanNotifierDigestUsesPolicyRecipients(t *testing.T) {
 	st := &fakeNotifyStore{
 		payloads: map[string][]byte{"s1/" + store.NotifyKindDigest: raw},
 		scan: store.ScanRow{
-			ID:                  "s1",
-			NotifyDigestEnabled: true,
-			NotifyRecipients:    []string{"team@example"},
+			ID:               "s1",
+			NotifyEnabled:    true,
+			NotifyRecipients: []string{"team@example"},
 		},
 	}
 	sender := &recordingSender{}

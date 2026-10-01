@@ -158,7 +158,7 @@ type ScanPolicyBundleSnapshot struct {
 	DiscoveryRate           *int     `json:"discovery_rate,omitempty"`
 	DiscoveryProbeTimeoutMs *int     `json:"discovery_probe_timeout_ms,omitempty"`
 	DiscoveryRetries        *int     `json:"discovery_retries,omitempty"`
-	NotifyDigestEnabled     *bool    `json:"notify_digest_enabled,omitempty"`
+	NotifyEnabled           *bool    `json:"notify_enabled,omitempty"`
 	NotifyRecipients        []string `json:"notify_recipients,omitempty"`
 	NotifyMinSeverity       string   `json:"notify_min_severity,omitempty"`
 }

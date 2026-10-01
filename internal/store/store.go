@@ -303,13 +303,14 @@ type ScanLink struct {
 	ScanPolicyID  string
 	Source        string
 	ScheduleID    string
-	// Notify* are digest settings resolved from the scan policy at dispatch
-	// (#335). They are snapshotted onto the scan so MarkComplete and SMTP
-	// still see them after the policy is edited or deleted. Nil/empty inherit
-	// the deployment default (digest on, SMTP_TO, no severity floor).
-	NotifyDigestEnabled *bool
-	NotifyRecipients    []string
-	NotifyMinSeverity   string
+	// Notify* are mail settings resolved from the scan policy at dispatch
+	// (#335). They are snapshotted onto the scan so MarkComplete, MarkFailed,
+	// and SMTP still see them after the policy is edited or deleted. Nil/false
+	// means no mail; empty recipients inherit SMTP_TO; empty floor is all
+	// severities.
+	NotifyEnabled     *bool
+	NotifyRecipients  []string
+	NotifyMinSeverity string
 }
 
 // CreateScan inserts a new scan in the queued state and returns its id.
@@ -323,17 +324,17 @@ func (s *Store) CreateScan(ctx context.Context, spec types.ScanSpec, link ScanLi
 	if source == "" {
 		source = "adhoc"
 	}
-	digestEnabled := true
-	if link.NotifyDigestEnabled != nil {
-		digestEnabled = *link.NotifyDigestEnabled
+	notifyEnabled := false
+	if link.NotifyEnabled != nil {
+		notifyEnabled = *link.NotifyEnabled
 	}
 	_, err = s.pool.Exec(ctx,
 		`INSERT INTO scans (id, state, spec, target_id, template_set_id, scan_policy_id, source, schedule_id, templates_commit, coverage_origin,
-		                    notify_digest_enabled, notify_recipients, notify_min_severity)
+		                    notify_enabled, notify_recipients, notify_min_severity)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 		id, types.ScanQueued, specJSON, nullStr(link.TargetID), nullStr(link.TemplateSetID),
 		nullStr(link.ScanPolicyID), source, nullStr(link.ScheduleID), nullStr(spec.Templates.TemplatesCommit), CoverageOriginNode,
-		digestEnabled, nullStrSlice(link.NotifyRecipients), nullStr(link.NotifyMinSeverity),
+		notifyEnabled, nullStrSlice(link.NotifyRecipients), nullStr(link.NotifyMinSeverity),
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert scan: %w", err)
@@ -748,12 +749,12 @@ type ScanRow struct {
 	NucleiVersion   string `json:"nuclei_version,omitempty"`
 	TemplatesCommit string `json:"templates_commit,omitempty"`
 	Error           string `json:"error,omitempty"`
-	// NotifyDigestEnabled / NotifyRecipients / NotifyMinSeverity are the
-	// digest settings snapshotted at dispatch (#335). Failed mail ignores
-	// these and always uses SMTP_TO.
-	NotifyDigestEnabled bool     `json:"notify_digest_enabled"`
-	NotifyRecipients    []string `json:"notify_recipients,omitempty"`
-	NotifyMinSeverity   string   `json:"notify_min_severity,omitempty"`
+	// NotifyEnabled / NotifyRecipients / NotifyMinSeverity are the mail
+	// settings snapshotted at dispatch (#335). The flag gates digest and
+	// failure mail; empty recipients fall back to SMTP_TO.
+	NotifyEnabled     bool     `json:"notify_enabled"`
+	NotifyRecipients  []string `json:"notify_recipients,omitempty"`
+	NotifyMinSeverity string   `json:"notify_min_severity,omitempty"`
 	// SkippedFindingCount is the number of malformed or oversized source records
 	// safely skipped during result ingestion. Any operational ingest error still
 	// fails the scan rather than being counted here.
@@ -792,7 +793,7 @@ const scanSelect = `
 	       s.raw_object_key, s.log_object_key,
 	       s.created_at, s.finished_at, s.discovered_targets,
 	       s.covered_endpoints, s.coverage_warning, s.coverage_origin,
-	       s.notify_digest_enabled, s.notify_recipients, s.notify_min_severity
+	       s.notify_enabled, s.notify_recipients, s.notify_min_severity
 	  FROM scans s
 	  LEFT JOIN targets t ON t.id = s.target_id
 	  LEFT JOIN template_sets ts ON ts.id = s.template_set_id
@@ -812,7 +813,7 @@ func scanScan(row pgx.Row) (ScanRow, error) {
 		&nucleiVersion, &templatesCommit, &errStr, &r.SkippedFindingCount, &rawKey, &logKey,
 		&r.CreatedAt, &r.FinishedAt,
 		&r.DiscoveredTargets, &coveredJSON, &coverageWarning, &coverageOrigin,
-		&r.NotifyDigestEnabled, &r.NotifyRecipients, &notifyMinSeverity); err != nil {
+		&r.NotifyEnabled, &r.NotifyRecipients, &notifyMinSeverity); err != nil {
 		return ScanRow{}, err
 	}
 	if coveredJSON != nil {

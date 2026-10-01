@@ -700,14 +700,15 @@ Each knob is optional: a `null` (omitted) field means "use the built-in default"
 concurrency `25` / timeout `600`s / `max_host_error` Nuclei's own `30`), so a policy can tune
 just one knob and leave the rest alone.
 
-Digest mail is the same pattern (`notify_digest_enabled`, `notify_recipients`,
-`notify_min_severity`): null inherits digest-on, `SMTP_TO`, and all severities. Set
-`notify_digest_enabled` to `false` to mute completed-scan digests for a noisy policy.
+Mail is the same pattern (`notify_enabled`, `notify_recipients`,
+`notify_min_severity`): null/false means no mail; recipients empty/`null` fall back to
+`SMTP_TO`; unset severity includes every severity. Set `notify_enabled` to `true` to
+opt a policy into digest and failed/orphaned mail. Out of the box no scan mails anything.
 `notify_min_severity` of `low` drops `info` from digest counts and the finding list
-(`unknown` is kept). Recipients empty/`null` fall back to `SMTP_TO`. These values are
+(`unknown` is kept). These values are
 resolved at dispatch and stored on the scan, so a later policy edit or delete does not
-change that run's mail. Failed/orphaned alerts always use `SMTP_TO`; they are not muted
-by the policy.
+change that run's mail. With the flag off, a failed or orphaned scan alerts no one —
+only the structured log records it.
 
 Because the policy is reusable, its discovery mode, rate, timeouts, and host-error tolerance are
 applied unchanged to whichever target is selected. Operators should confirm those settings suit

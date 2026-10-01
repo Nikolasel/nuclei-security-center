@@ -394,8 +394,9 @@ func buildObjectStore(ctx context.Context, log *slog.Logger) (backend.ObjectStor
 }
 
 // buildScanNotifier wires optional SMTP digest/failure mail. Unset SMTP_HOST
-// disables the feature with no startup failure. A host without SMTP_FROM/SMTP_TO
-// is also disabled (logged) rather than crashing the backend.
+// disables the feature with no startup failure. A host without SMTP_FROM
+// is also disabled (logged) rather than crashing the backend. SMTP_TO is the
+// fallback mailbox when a policy names no recipients.
 func buildScanNotifier(st *store.Store, log *slog.Logger) *backend.ScanNotifier {
 	cfg, err := backend.SMTPConfigFromEnv()
 	if err != nil {

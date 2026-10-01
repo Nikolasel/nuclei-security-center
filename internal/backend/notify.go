@@ -58,15 +58,24 @@ func (n *ScanNotifier) Notify(ctx context.Context, scanID, kind string) error {
 	scan, scanErr := n.store.GetScan(ctx, scanID)
 	if scanErr != nil {
 		n.log.Warn("scan notification: load scan", "scan_id", scanID, "err", scanErr)
+		n.log.Info("scan notification skipped", "scan_id", scanID, "kind", kind, "reason", "notify_disabled")
+		return nil
+	}
+	if !scan.NotifyEnabled {
+		n.log.Info("scan notification skipped", "scan_id", scanID, "kind", kind, "reason", "notify_disabled")
+		return nil
 	}
 	var msg MailMessage
 	to := n.to
+	if len(scan.NotifyRecipients) > 0 {
+		to = append([]string(nil), scan.NotifyRecipients...)
+	}
+	if len(to) == 0 {
+		n.log.Info("scan notification skipped", "scan_id", scanID, "kind", kind, "reason", "no_recipients")
+		return nil
+	}
 	switch kind {
 	case store.NotifyKindDigest:
-		if scanErr == nil && !scan.NotifyDigestEnabled {
-			n.log.Info("scan notification skipped", "scan_id", scanID, "kind", kind, "reason", "digest_disabled")
-			return nil
-		}
 		payload, err := store.ParseScanDigestPayload(raw)
 		if err != nil {
 			return err
@@ -74,9 +83,6 @@ func (n *ScanNotifier) Notify(ctx context.Context, scanID, kind string) error {
 		if !payload.HasDelta() {
 			n.log.Info("scan notification skipped", "scan_id", scanID, "kind", kind, "reason", "empty_delta")
 			return nil
-		}
-		if scanErr == nil && len(scan.NotifyRecipients) > 0 {
-			to = append([]string(nil), scan.NotifyRecipients...)
 		}
 		msg = composeDigestMail(n.base, scan, payload)
 	case store.NotifyKindFailed:

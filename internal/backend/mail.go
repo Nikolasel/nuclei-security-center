@@ -40,7 +40,8 @@ type SMTPConfig struct {
 }
 
 // SMTPConfigFromEnv reads SMTP_* variables. Unset host means disabled.
-// A set host with missing From/To is also treated as disabled (no startup failure).
+// A set host with missing From is also treated as disabled (no startup failure).
+// SMTP_TO is optional: it is the fallback recipient list when a policy has none.
 func SMTPConfigFromEnv() (SMTPConfig, error) {
 	host := strings.TrimSpace(os.Getenv("SMTP_HOST"))
 	if host == "" {
@@ -94,8 +95,8 @@ func NewSMTPSender(cfg SMTPConfig) (MailSender, error) {
 	if cfg.Host == "" {
 		return nil, nil
 	}
-	if cfg.From == "" || len(cfg.To) == 0 {
-		return nil, errors.New("smtp: from and at least one recipient are required")
+	if cfg.From == "" {
+		return nil, errors.New("smtp: from is required")
 	}
 	if cfg.Port == 0 {
 		cfg.Port = 587
@@ -104,6 +105,9 @@ func NewSMTPSender(cfg SMTPConfig) (MailSender, error) {
 }
 
 func (s *smtpSender) Send(ctx context.Context, msg MailMessage) error {
+	if len(msg.To) == 0 {
+		return errors.New("smtp: at least one recipient is required")
+	}
 	password, err := s.password()
 	if err != nil {
 		return err

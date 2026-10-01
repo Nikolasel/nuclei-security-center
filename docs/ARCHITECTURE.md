@@ -102,10 +102,11 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   max_host_error, response_size_read, response_size_save, discovery_*, notify_*`. The central, reusable **how to scan** configuration: a required
   template set (exact, all, or exclude) plus Nuclei/discovery knobs (each nullable = "use the
   built-in default"). `response_size_read`/`save` cap nuclei's `-response-size-read` / `-save` (10 MiB / 1 MiB defaults) to bound heap on large CDN responses (#274); discovery is the optional naabu pre-pass.
-  Digest mail knobs (`notify_digest_enabled`, `notify_recipients`, `notify_min_severity`) are also
-  nullable inherit: off mutes completed-scan digests, recipients fall back to `SMTP_TO`, and a
-  severity floor drops lower named severities from counts and the finding list. Failed/orphaned
-  mail always uses `SMTP_TO`. Those settings are resolved at dispatch and snapshotted on the
+  Mail knobs (`notify_enabled`, `notify_recipients`, `notify_min_severity`) are also
+  nullable inherit: NULL/false means no mail, recipients fall back to `SMTP_TO`, and a
+  severity floor drops lower named severities from digest counts and the finding list. The same
+  flag and recipient list apply to failed/orphaned mail; a policy that is off alerts no one.
+  Those settings are resolved at dispatch and snapshotted on the
   scan (same reason as `target_id` / `template_set_id`: `scan_policy_id` is `ON DELETE SET NULL`
   and the digest is derived later in `MarkComplete`). Every scan and schedule selects a policy and an approved target
   independently, so one policy can be reused across scopes. A template set referenced by a policy
@@ -116,7 +117,7 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   either referenced row cascades the schedule away.
 - **scans** — `id, source (schedule|adhoc), scan_policy_id, target_id, template_set_id, status,
   started_at, finished_at, nuclei_version, templates_commit, skipped_finding_count, triggered_by`.
-  The selected target, policy template set, and digest-notify settings are resolved and recorded on the scan at dispatch
+  The selected target, policy template set, and notify settings are resolved and recorded on the scan at dispatch
   (so findings keep working and history survives `scan_policy_id` being nulled on policy delete —
   `ON DELETE SET NULL`). `skipped_finding_count` records source records skipped during backend
   ingest, including records proven malformed and records over the per-record JSONL size limit;
@@ -138,7 +139,7 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   findings and live accepted / false-positive dispositions are omitted. A policy
   `notify_min_severity` floor (snapshotted on the scan) drops lower named severities from
   those counts and the list; `unknown` is never dropped. A muted policy still records the
-  outbox row and skips SMTP as `digest_disabled`. Status is not stored on
+  outbox row and skips SMTP as `notify_disabled`. Status is not stored on
   `finding_lifecycle`.
 
 - **findings** (occurrences) — the immutable per-scan observation log: `id, scan_id,

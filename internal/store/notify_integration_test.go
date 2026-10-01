@@ -392,17 +392,26 @@ func TestScanDigestMinSeverityPostgres(t *testing.T) {
 	}
 
 	muted := false
-	mutedScan := complete(ScanLink{TargetID: target.ID, NotifyDigestEnabled: &muted}, "critical", "tpl-floor-muted")
+	mutedScan := complete(ScanLink{TargetID: target.ID, NotifyEnabled: &muted}, "critical", "tpl-floor-muted")
 	row, err := st.GetScan(ctx, mutedScan)
 	if err != nil {
 		t.Fatalf("get muted scan: %v", err)
 	}
-	if row.NotifyDigestEnabled {
-		t.Fatal("muted scan must snapshot notify_digest_enabled=false")
+	if row.NotifyEnabled {
+		t.Fatal("muted scan must snapshot notify_enabled=false")
 	}
 	p = mustClaimDigest(t, ctx, st, mutedScan)
 	if p.New.Critical != 1 {
 		t.Fatalf("muted scan still records a digest payload, got %+v", p)
+	}
+
+	defaultScan := complete(ScanLink{TargetID: target.ID}, "critical", "tpl-floor-default-off")
+	row, err = st.GetScan(ctx, defaultScan)
+	if err != nil {
+		t.Fatalf("get default scan: %v", err)
+	}
+	if row.NotifyEnabled {
+		t.Fatal("nil notify link must snapshot notify_enabled=false")
 	}
 }
 

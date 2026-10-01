@@ -76,9 +76,9 @@ func TestValidateScanPolicy(t *testing.T) {
 	}
 	mailOK := &store.ScanPolicy{
 		Name: "p", TemplateSetID: "ts1",
-		NotifyMinSeverity:   " Low ",
-		NotifyRecipients:    []string{" Ops@Example.COM ", "ops@example.com", " other@example.com "},
-		NotifyDigestEnabled: ptr(false),
+		NotifyMinSeverity: " Low ",
+		NotifyRecipients:  []string{" Ops@Example.COM ", "ops@example.com", " other@example.com "},
+		NotifyEnabled:     ptr(false),
 	}
 	if err := validateScanPolicy(mailOK); err != nil {
 		t.Fatalf("valid notify policy rejected: %v", err)

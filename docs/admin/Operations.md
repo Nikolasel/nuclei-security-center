@@ -91,8 +91,12 @@ that do not exist; they never overwrite admin edits or delete nodes.
 
 ## Scan email notifications
 
-When `SMTP_HOST` is set, the backend mails **one digest per completed scan that changed the
-lifecycle**, and a separate alert when a scan **fails**. A run that changed nothing is silent.
+When `SMTP_HOST` is set, a **scan policy that opts in** (`notify_enabled`) can mail **one digest
+per completed scan that changed the lifecycle**, and a separate alert when that scan **fails**.
+A run that changed nothing is silent. Policies default off: no scan mails anything unless
+explicitly enabled. A muted policy still records an outbox row; SMTP is skipped at send
+(`notify_disabled`). With the flag off, a failed or orphaned scan alerts no one — only the
+structured log records it.
 
 The digest uses the same evidence rules as the findings list:
 
@@ -111,16 +115,19 @@ ingested a partial result and moved `last_seen_scan`. Metadata drift (template s
 name/severity) and analyst triage edits are not mailed. Links point at `APP_BASE_URL`
 `/scans/{id}` and `/findings/{id}`; recipients sign in normally.
 
-Digest behavior is per **scan policy** (resolved at dispatch and stored on the scan):
+Mail behavior is per **scan policy** (resolved at dispatch and stored on the scan):
 
-- `notify_digest_enabled` — unset inherits on; off keeps the outbox row but sends no digest.
-- `notify_recipients` — unset/empty uses `SMTP_TO`.
+- `notify_enabled` — unset/false means no mail (digest or failure); true opts in. Off still
+  keeps the outbox row but sends nothing.
+- `notify_recipients` — unset/empty uses `SMTP_TO` (the deployment admin mailbox) for digest
+  and failure mail.
 - `notify_min_severity` — unset includes every severity; `low` drops `info` from counts and the list.
 
-Failed and orphaned scans still mail `SMTP_TO` even when the policy's digest is off. Operator
-cancel stays silent.
+Operator cancel stays silent.
 
-Mail is a data exit (hostnames, paths, template names). Keep `SMTP_TO` on a small operator list.
+`SMTP_TO` is the admin/owner fallback, not necessarily the person running scans. Set it once
+for a small team and leave policy recipients blank. Mail is a data exit (hostnames, paths,
+template names). Keep `SMTP_TO` on a small operator list.
 Sending is not an audit `event_id`; success and failure are ordinary structured logs. PostgreSQL
 holds an at-most-once outbox row so a backend restart does not resend. Unclaimed rows (crash
 after the terminal write, or scans failed as orphans on startup) are claimed and sent once when

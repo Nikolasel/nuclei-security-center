@@ -188,7 +188,7 @@ func (s *Store) ScanBundleForExport(ctx context.Context, scanID string) (*types.
 				DiscoveryScanType: p.DiscoveryScanType, DiscoveryPorts: p.DiscoveryPorts,
 				DiscoveryTimeoutSec: p.DiscoveryTimeoutSec, DiscoveryRate: p.DiscoveryRate,
 				DiscoveryProbeTimeoutMs: p.DiscoveryProbeTimeoutMs, DiscoveryRetries: p.DiscoveryRetries,
-				NotifyDigestEnabled: p.NotifyDigestEnabled, NotifyRecipients: p.NotifyRecipients,
+				NotifyEnabled: p.NotifyEnabled, NotifyRecipients: p.NotifyRecipients,
 				NotifyMinSeverity: p.NotifyMinSeverity,
 			}
 		} else if !errors.Is(err, ErrNotFound) {

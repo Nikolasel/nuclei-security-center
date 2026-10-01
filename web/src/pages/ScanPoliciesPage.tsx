@@ -124,7 +124,7 @@ function ScanPolicyModal({
   const [discoveryRetries, setDiscoveryRetries] = useState(
     existing?.discovery_retries != null ? String(existing.discovery_retries) : "",
   );
-  const [notifyDigestEnabled, setNotifyDigestEnabled] = useState(existing?.notify_digest_enabled ?? true);
+  const [notifyEnabled, setNotifyEnabled] = useState(existing?.notify_enabled === true);
   const [notifyRecipients, setNotifyRecipients] = useState((existing?.notify_recipients ?? []).join(", "));
   const [notifyMinSeverity, setNotifyMinSeverity] = useState(existing?.notify_min_severity ?? "");
 
@@ -165,7 +165,7 @@ function ScanPolicyModal({
         discovery_rate: discoveryEnabled ? parseKnob(discoveryRate) : null,
         discovery_probe_timeout_ms: discoveryEnabled ? parseKnob(discoveryProbeTimeoutMs) : null,
         discovery_retries: discoveryEnabled ? parseKnob(discoveryRetries) : null,
-        notify_digest_enabled: notifyDigestEnabled,
+        notify_enabled: notifyEnabled,
         notify_recipients: parseRecipients(notifyRecipients),
         notify_min_severity: notifyMinSeverity || undefined,
       };
@@ -400,19 +400,19 @@ function ScanPolicyModal({
             <input
               type="checkbox"
               className="mt-1"
-              checked={notifyDigestEnabled}
-              onChange={(e) => setNotifyDigestEnabled(e.target.checked)}
+              checked={notifyEnabled}
+              onChange={(e) => setNotifyEnabled(e.target.checked)}
             />
             <span className="text-sm">
-              <span className="font-medium">Email digest of result changes</span>
+              <span className="font-medium">Email scan result changes and failures</span>
               <span className="block text-xs text-neutral-500">
-                Mail New / Changed / Fixed after a completed scan. Failed and orphaned scans still
-                mail the deployment recipient list even when this is off. Operator cancel stays silent.
+                Off by default. When on, mail New / Changed / Fixed after a completed scan, and
+                failed or orphaned scans. Operator cancel stays silent.
               </span>
             </span>
           </label>
           <div className="mt-3 space-y-4">
-            <Field label="Digest recipients (blank = SMTP_TO)">
+            <Field label="Recipients (blank = SMTP_TO)">
               <Textarea
                 rows={2}
                 value={notifyRecipients}
@@ -421,8 +421,8 @@ function ScanPolicyModal({
                 className="min-h-[2.5rem] resize-y"
               />
               <span className="mt-1 block text-xs text-neutral-500">
-                Comma-separated. Empty inherits the deployment SMTP_TO list. Failed-scan mail always
-                uses SMTP_TO.
+                Comma-separated. Empty uses the deployment SMTP_TO admin mailbox for digest and
+                failure mail. With this flag off, no mail is sent.
               </span>
             </Field>
             {recipientsInvalid(notifyRecipients) && (
@@ -505,8 +505,8 @@ function discoverySummary(p: ScanPolicy): string {
   return `${mode} \u00b7 ${hostDiscovery} \u00b7 ${ports}`;
 }
 
-function digestSummary(p: ScanPolicy): string {
-  if (p.notify_digest_enabled === false) return "off";
+function notifySummary(p: ScanPolicy): string {
+  if (!p.notify_enabled) return "off";
   const parts: string[] = ["on"];
   if (p.notify_min_severity) parts.push(`≥${p.notify_min_severity}`);
   const n = p.notify_recipients?.filter((r) => r.trim()).length ?? 0;
@@ -571,7 +571,7 @@ export function ScanPoliciesPage() {
                   <th className="px-3 py-2 font-medium">Template set</th>
                   <th className="px-3 py-2 font-medium">Execution</th>
                   <th className="px-3 py-2 font-medium">Discovery</th>
-                  <th className="px-3 py-2 font-medium">Digest</th>
+                  <th className="px-3 py-2 font-medium">Notify</th>
                   {(canWrite || canDelete) && <th className="px-3 py-2" />}
                 </tr>
               </thead>
@@ -593,8 +593,8 @@ export function ScanPoliciesPage() {
                         <span className={disc === "off" ? "text-neutral-400" : "font-mono text-xs"}>{disc}</span>
                       </td>
                       <td className="px-3 py-2">
-                        <span className={p.notify_digest_enabled === false ? "text-neutral-400" : "font-mono text-xs"}>
-                          {digestSummary(p)}
+                        <span className={!p.notify_enabled ? "text-neutral-400" : "font-mono text-xs"}>
+                          {notifySummary(p)}
                         </span>
                       </td>
                     {(canWrite || canDelete) && (

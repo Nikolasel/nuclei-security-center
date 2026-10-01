@@ -46,10 +46,9 @@ type ScanPolicy struct {
 	DiscoveryRate           *int `json:"discovery_rate,omitempty"`
 	DiscoveryProbeTimeoutMs *int `json:"discovery_probe_timeout_ms,omitempty"`
 	DiscoveryRetries        *int `json:"discovery_retries,omitempty"`
-	// NotifyDigestEnabled nil inherits digest-on; false mutes completed-scan
-	// digest mail. Failed/orphaned mail still uses the deployment SMTP_TO list (#335).
-	NotifyDigestEnabled *bool `json:"notify_digest_enabled,omitempty"`
-	// NotifyRecipients nil/empty inherits SMTP_TO for digest mail.
+	// NotifyEnabled nil/false means no mail (digest or failure). true opts in (#335).
+	NotifyEnabled *bool `json:"notify_enabled,omitempty"`
+	// NotifyRecipients nil/empty inherits SMTP_TO for digest and failure mail.
 	NotifyRecipients []string `json:"notify_recipients,omitempty"`
 	// NotifyMinSeverity empty inherits "all severities"; a floor drops lower
 	// named severities from digest counts and the finding list.
@@ -63,7 +62,7 @@ const scanPolicyCols = `id, name, template_set_id, rate_limit, concurrency, time
 	response_size_read, response_size_save,
 	discovery_enabled, discovery_host_discovery, discovery_scan_type, discovery_ports, discovery_timeout_sec, discovery_rate,
 	discovery_probe_timeout_ms, discovery_retries,
-	notify_digest_enabled, notify_recipients, notify_min_severity,
+	notify_enabled, notify_recipients, notify_min_severity,
 	created_by, created_at, updated_at`
 
 // scanScanPolicy reads one row (column order must match scanPolicyCols).
@@ -73,7 +72,7 @@ func scanScanPolicy(row pgx.Row) (ScanPolicy, error) {
 	err := row.Scan(&p.ID, &p.Name, &p.TemplateSetID, &p.RateLimit, &p.Concurrency, &p.TimeoutSec,
 		&p.MaxHostError, &p.ResponseSizeRead, &p.ResponseSizeSave, &p.DiscoveryEnabled, &p.DiscoveryHostDiscovery, &discoveryScanType, &discoveryPorts, &p.DiscoveryTimeoutSec, &p.DiscoveryRate,
 		&p.DiscoveryProbeTimeoutMs, &p.DiscoveryRetries,
-		&p.NotifyDigestEnabled, &p.NotifyRecipients, &notifyMinSeverity,
+		&p.NotifyEnabled, &p.NotifyRecipients, &notifyMinSeverity,
 		&createdBy, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -97,14 +96,14 @@ func (s *Store) CreateScanPolicy(ctx context.Context, in ScanPolicy) (ScanPolicy
 		     response_size_read, response_size_save,
 		     discovery_enabled, discovery_host_discovery, discovery_scan_type, discovery_ports, discovery_timeout_sec, discovery_rate,
 		     discovery_probe_timeout_ms, discovery_retries,
-		     notify_digest_enabled, notify_recipients, notify_min_severity, created_by)
+		     notify_enabled, notify_recipients, notify_min_severity, created_by)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, TRUE), $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		 RETURNING `+scanPolicyCols,
 		in.ID, in.Name, in.TemplateSetID, in.RateLimit, in.Concurrency, in.TimeoutSec, in.MaxHostError,
 		in.ResponseSizeRead, in.ResponseSizeSave,
 		in.DiscoveryEnabled, in.DiscoveryHostDiscovery, nullStr(in.DiscoveryScanType), nullStr(in.DiscoveryPorts), in.DiscoveryTimeoutSec, in.DiscoveryRate,
 		in.DiscoveryProbeTimeoutMs, in.DiscoveryRetries,
-		in.NotifyDigestEnabled, nullStrSlice(in.NotifyRecipients), nullStr(in.NotifyMinSeverity), nullStr(in.CreatedBy)))
+		in.NotifyEnabled, nullStrSlice(in.NotifyRecipients), nullStr(in.NotifyMinSeverity), nullStr(in.CreatedBy)))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ScanPolicy{}, ErrConflict
@@ -151,7 +150,7 @@ func (s *Store) UpdateScanPolicy(ctx context.Context, id string, in ScanPolicy) 
 		     discovery_enabled = COALESCE($10, TRUE),
 		     discovery_host_discovery = $11, discovery_scan_type = $12, discovery_ports = $13, discovery_timeout_sec = $14, discovery_rate = $15,
 		     discovery_probe_timeout_ms = $16, discovery_retries = $17,
-		     notify_digest_enabled = $18, notify_recipients = $19, notify_min_severity = $20,
+		     notify_enabled = $18, notify_recipients = $19, notify_min_severity = $20,
 		     updated_at = now()
 		 WHERE id = $1
 		 RETURNING `+scanPolicyCols,
@@ -159,7 +158,7 @@ func (s *Store) UpdateScanPolicy(ctx context.Context, id string, in ScanPolicy) 
 		in.ResponseSizeRead, in.ResponseSizeSave,
 		in.DiscoveryEnabled, in.DiscoveryHostDiscovery, nullStr(in.DiscoveryScanType), nullStr(in.DiscoveryPorts), in.DiscoveryTimeoutSec, in.DiscoveryRate,
 		in.DiscoveryProbeTimeoutMs, in.DiscoveryRetries,
-		in.NotifyDigestEnabled, nullStrSlice(in.NotifyRecipients), nullStr(in.NotifyMinSeverity)))
+		in.NotifyEnabled, nullStrSlice(in.NotifyRecipients), nullStr(in.NotifyMinSeverity)))
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ScanPolicy{}, ErrConflict

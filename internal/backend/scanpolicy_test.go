@@ -73,11 +73,15 @@ func TestOverlayScanPolicy(t *testing.T) {
 
 func TestResolveScanNotify(t *testing.T) {
 	def := resolveScanNotify(store.ScanPolicy{Name: "empty"})
-	if !def.DigestEnabled || len(def.Recipients) != 0 || def.MinSeverity != "" {
-		t.Errorf("empty policy notify = %+v, want digest on / SMTP_TO / no floor", def)
+	if def.Enabled || len(def.Recipients) != 0 || def.MinSeverity != "" {
+		t.Errorf("empty policy notify = %+v, want mail off / SMTP_TO / no floor", def)
 	}
-	off := resolveScanNotify(store.ScanPolicy{NotifyDigestEnabled: ptr(false), NotifyMinSeverity: "LOW", NotifyRecipients: []string{" team@example.com ", ""}})
-	if off.DigestEnabled || off.MinSeverity != "low" || len(off.Recipients) != 1 || off.Recipients[0] != "team@example.com" {
-		t.Errorf("explicit notify overlay = %+v", off)
+	on := resolveScanNotify(store.ScanPolicy{NotifyEnabled: ptr(true), NotifyMinSeverity: "LOW", NotifyRecipients: []string{" team@example.com ", ""}})
+	if !on.Enabled || on.MinSeverity != "low" || len(on.Recipients) != 1 || on.Recipients[0] != "team@example.com" {
+		t.Errorf("explicit notify overlay = %+v", on)
+	}
+	off := resolveScanNotify(store.ScanPolicy{NotifyEnabled: ptr(false)})
+	if off.Enabled {
+		t.Errorf("explicit false should stay off, got %+v", off)
 	}
 }

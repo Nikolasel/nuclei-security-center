@@ -104,8 +104,10 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   built-in default"). `response_size_read`/`save` cap nuclei's `-response-size-read` / `-save` (10 MiB / 1 MiB defaults) to bound heap on large CDN responses (#274); discovery is the optional naabu pre-pass. Every scan and schedule selects a policy and an approved target
   independently, so one policy can be reused across scopes. A template set referenced by a policy
   cannot be deleted. The scanner also derives an automatic `GOMEMLIMIT` ≈75% of its cgroup limit (leaving headroom for kernel TCP buffers) so GC pressure replaces OOM kills (#274).
-- **schedules** — `id, scan_policy_id, target_id, cron, enabled` — a policy and approved target
-  paired with a cadence. Deleting either referenced row cascades the schedule away.
+- **schedules** — `id, scan_policy_id, target_id, cron, timezone, enabled` — a policy and approved target
+  paired with a cadence. `timezone` is an IANA name (`UTC` default) used when evaluating the cron so
+  `0 3 * * *` means 03:00 in that zone, including DST; `next_run_at` remains a UTC instant. Deleting
+  either referenced row cascades the schedule away.
 - **scans** — `id, source (schedule|adhoc), scan_policy_id, target_id, template_set_id, status,
   started_at, finished_at, nuclei_version, templates_commit, skipped_finding_count, triggered_by`.
   The selected target and policy's template set are resolved and recorded on the scan at dispatch

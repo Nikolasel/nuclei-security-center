@@ -190,6 +190,13 @@ func validateSchedule(s *store.Schedule) error {
 	if _, err := parseCron(s.Cron); err != nil {
 		return fmt.Errorf("invalid cron %q: %w", s.Cron, err)
 	}
+	s.Timezone = strings.TrimSpace(s.Timezone)
+	if s.Timezone == "" {
+		s.Timezone = "UTC"
+	}
+	if _, err := loadTimezone(s.Timezone); err != nil {
+		return err
+	}
 	return nil
 }
 

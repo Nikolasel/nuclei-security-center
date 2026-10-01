@@ -88,5 +88,7 @@ jobs:
 
       - run: npm ci
 
+      - run: npm test
+
       # `npm run build` runs `tsc -b` first, so this covers typecheck + bundle.
       - run: npm run build

@@ -150,12 +150,12 @@ send so a secret agent can rotate credentials.
 | `SMTP_HOST` | unset (mail disabled) | SMTP server hostname. Unset disables notifications without failing startup. |
 | `SMTP_PORT` | `587` | SMTP port. |
 | `SMTP_USERNAME` | unset | SMTP AUTH username. Leave empty for unauthenticated relays. |
-| `SMTP_PASSWORD` | unset | SMTP AUTH password. Ignored when `SMTP_PASSWORD_FILE` is set. |
+| `SMTP_PASSWORD` | unset | SMTP AUTH password. Ignored when SMTP_PASSWORD_FILE is set. |
 | `SMTP_PASSWORD_FILE` | unset | File containing only the SMTP password. Re-read before each send. |
-| `SMTP_FROM` | unset | Envelope From. Required with `SMTP_HOST` or mail stays disabled. |
-| `SMTP_TO` | unset | Comma-separated fallback recipients when a policy lists none. Optional: host + `SMTP_FROM` enable sending; a policy with no recipients and no `SMTP_TO` skips SMTP as `no_recipients`. |
-| `SMTP_STARTTLS` | `true` | Require STARTTLS on the submission port. Set `false` only for a trusted plaintext relay. |
-| `SMTP_TLS` | `false` | Implicit TLS (typically port 465). When `true`, STARTTLS is not used. |
+| `SMTP_FROM` | unset | Envelope From. Required with SMTP_HOST or mail stays disabled. |
+| `SMTP_TO` | unset | Comma-separated fallback recipients when a policy lists none. Optional: host + SMTP_FROM enable sending; a policy with no recipients and no SMTP_TO skips SMTP as no_recipients. |
+| `SMTP_STARTTLS` | `true` | Require STARTTLS on the submission port. Set false only for a trusted plaintext relay. |
+| `SMTP_TLS` | `false` | Implicit TLS (typically port 465). When true, STARTTLS is not used. |
 
 See [Operations](Operations.md#scan-email-notifications) for what a digest contains.
 

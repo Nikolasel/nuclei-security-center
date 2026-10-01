@@ -27,6 +27,7 @@ const (
 	envGroupRetention   = "retention sweeps"
 	envGroupScannerSeed = "scanner seeding"
 	envGroupExport      = "export scratch"
+	envGroupMail        = "scan email"
 
 	defaultTemplateRepo = "https://github.com/projectdiscovery/nuclei-templates.git"
 )
@@ -49,6 +50,7 @@ const (
 	envKindPostLogin
 	envKindDiscovery
 	envKindTemplateRepo
+	envKindTCPPort
 )
 
 // envSpec is one allowlisted backend environment variable.
@@ -130,6 +132,16 @@ var backendEnvRegistry = []envSpec{
 	{Name: "NODE_HEALTH_INTERVAL", Group: envGroupScannerSeed, Default: "30s", Kind: envKindDuration, Description: "Capability-poll interval. A node stays healthy for three times this interval after its last successful poll."},
 
 	{Name: "EXPORT_SPOOL_DIR", Group: envGroupExport, Kind: envKindPath, Description: "Writable scratch directory for findings exports and scan-bundle imports."},
+
+	{Name: "SMTP_HOST", Group: envGroupMail, Kind: envKindString, Description: "SMTP server hostname. Unset disables notifications without failing startup."},
+	{Name: "SMTP_PORT", Group: envGroupMail, Default: "587", Kind: envKindTCPPort, Description: "SMTP port."},
+	{Name: "SMTP_USERNAME", Group: envGroupMail, Kind: envKindString, Description: "SMTP AUTH username. Leave empty for unauthenticated relays."},
+	{Name: "SMTP_PASSWORD", Group: envGroupMail, Sensitive: true, Kind: envKindSecret, Description: "SMTP AUTH password. Ignored when SMTP_PASSWORD_FILE is set."},
+	{Name: "SMTP_PASSWORD_FILE", Group: envGroupMail, Sensitive: true, Kind: envKindPath, Description: "File containing only the SMTP password. Re-read before each send."},
+	{Name: "SMTP_FROM", Group: envGroupMail, Kind: envKindString, Description: "Envelope From. Required with SMTP_HOST or mail stays disabled."},
+	{Name: "SMTP_TO", Group: envGroupMail, Kind: envKindString, Description: "Comma-separated fallback recipients when a policy lists none. Optional: host + SMTP_FROM enable sending; a policy with no recipients and no SMTP_TO skips SMTP as no_recipients."},
+	{Name: "SMTP_STARTTLS", Group: envGroupMail, Default: "true", Kind: envKindBoolNotFalse, Description: "Require STARTTLS on the submission port. Set false only for a trusted plaintext relay."},
+	{Name: "SMTP_TLS", Group: envGroupMail, Default: "false", Kind: envKindBoolExactTrue, Description: "Implicit TLS (typically port 465). When true, STARTTLS is not used."},
 }
 
 func resolveEnvConfig() []EnvVariable {
@@ -188,6 +200,9 @@ func resolveEnvSpec(spec envSpec) EnvVariable {
 		return row
 	case envKindInt:
 		row.Effective = strPtr(strconv.Itoa(effectiveInt(raw, spec.Default)))
+		return row
+	case envKindTCPPort:
+		row.Effective = strPtr(strconv.Itoa(effectiveTCPPort(raw, spec.Default)))
 		return row
 	case envKindFloat:
 		row.Effective = strPtr(formatFloat(effectiveFloat(raw, spec.Default)))
@@ -273,6 +288,23 @@ func effectiveInt(raw, def string) int {
 	}
 	v, err := strconv.Atoi(raw)
 	if err != nil {
+		return fallback
+	}
+	return v
+}
+
+// effectiveTCPPort matches SMTPConfigFromEnv: empty uses the default, values
+// outside 1–65535 are rejected and fall back to that default.
+func effectiveTCPPort(raw, def string) int {
+	fallback, _ := strconv.Atoi(def)
+	if fallback < 1 || fallback > 65535 {
+		fallback = 587
+	}
+	if strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || v < 1 || v > 65535 {
 		return fallback
 	}
 	return v

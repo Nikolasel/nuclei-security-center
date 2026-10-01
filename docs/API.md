@@ -950,8 +950,8 @@ the process has the variable in its environment (`LookupEnv`); `effective` is wh
 the backend actually consumes (defaults applied, durations/booleans parsed). `description`
 is the short purpose string from the same registry that `Configuration.md` is checked
 against. Secrets
-never appear in `effective` (`SCANNER_TOKEN`, `OIDC_CLIENT_SECRET`, S3 static keys).
-`DATABASE_URL` returns a parsed DSN rebuilt without credentials (unparseable values are hidden, never echoed); `DATABASE_PASSWORD_FILE` and
+never appear in `effective` (`SCANNER_TOKEN`, `OIDC_CLIENT_SECRET`, S3 static keys, `SMTP_PASSWORD`).
+`DATABASE_URL` returns a parsed DSN rebuilt without credentials (unparseable values are hidden, never echoed); `DATABASE_PASSWORD_FILE`, `SMTP_PASSWORD_FILE`, and
 other file-backed variables return the path, never file contents; `SCAN_ZONES`
 returns a seed-node count only. Unrelated platform env is not dumped.
 

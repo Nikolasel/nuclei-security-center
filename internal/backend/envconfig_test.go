@@ -29,6 +29,8 @@ const (
 	canaryFileSecret   = "nsc-canary-db-file-secret-7e13ecd1"
 	canaryZoneToken    = "nsc-canary-zone-token-7e13ecd1"
 	canaryZoneKey      = "nsc-canary-zone-tls-key-7e13ecd1"
+	canarySMTPPassword = "nsc-canary-smtp-password-7e13ecd1"
+	canarySMTPFile     = "nsc-canary-smtp-file-secret-7e13ecd1"
 )
 
 func TestGetEnvironmentRedactsPlantedSecrets(t *testing.T) {
@@ -43,6 +45,12 @@ func TestGetEnvironmentRedactsPlantedSecrets(t *testing.T) {
 	t.Setenv("S3_ACCESS_KEY_ID", canaryS3Access)
 	t.Setenv("S3_SECRET_ACCESS_KEY", canaryS3Secret)
 	t.Setenv("SCAN_ZONES", `[{"name":"dmz","url":"https://scanner-dmz:8081","token":"`+canaryZoneToken+`","cidrs":["10.20.0.0/16"],"tls_client_key":"`+canaryZoneKey+`"}]`)
+	smtpFile := filepath.Join(t.TempDir(), "smtp.pw")
+	if err := os.WriteFile(smtpFile, []byte(canarySMTPFile+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SMTP_PASSWORD", canarySMTPPassword)
+	t.Setenv("SMTP_PASSWORD_FILE", smtpFile)
 
 	s := &Server{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	rr := httptest.NewRecorder()
@@ -54,7 +62,7 @@ func TestGetEnvironmentRedactsPlantedSecrets(t *testing.T) {
 	for _, secret := range []string{
 		canaryScannerToken, canaryOIDCSecret, canaryS3Access, canaryS3Secret,
 		canaryDBPassword, canaryFileSecret, canaryZoneToken, canaryZoneKey,
-		"nsc:",
+		canarySMTPPassword, canarySMTPFile, "nsc:",
 	} {
 		if strings.Contains(body, secret) {
 			t.Errorf("response leaked %q: %s", secret, body)
@@ -77,10 +85,13 @@ func TestGetEnvironmentRedactsPlantedSecrets(t *testing.T) {
 	if v := byName["DATABASE_PASSWORD_FILE"]; v.Effective == nil || *v.Effective != pwFile {
 		t.Errorf("DATABASE_PASSWORD_FILE effective = %v, want path %q", v.Effective, pwFile)
 	}
+	if v := byName["SMTP_PASSWORD_FILE"]; v.Effective == nil || *v.Effective != smtpFile {
+		t.Errorf("SMTP_PASSWORD_FILE effective = %v, want path %q", v.Effective, smtpFile)
+	}
 	if v := byName["SCAN_ZONES"]; v.Effective == nil || *v.Effective != "1 seed nodes" {
 		t.Errorf("SCAN_ZONES effective = %v, want 1 seed nodes", v.Effective)
 	}
-	for _, name := range []string{"SCANNER_TOKEN", "OIDC_CLIENT_SECRET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY"} {
+	for _, name := range []string{"SCANNER_TOKEN", "OIDC_CLIENT_SECRET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "SMTP_PASSWORD"} {
 		if v := byName[name]; !v.Set || v.Effective != nil {
 			t.Errorf("%s set=%v effective=%v, want set with null effective", name, v.Set, v.Effective)
 		}
@@ -146,6 +157,10 @@ func TestResolveEnvConfigParsesEffectiveValues(t *testing.T) {
 	t.Setenv("TEMPLATE_SYNC_REPO", "")
 	t.Setenv("S3_USE_SSL", "false")
 	t.Setenv("SESSION_TTL", "45m")
+	t.Setenv("SMTP_HOST", "mail.internal")
+	t.Setenv("SMTP_PORT", "465")
+	t.Setenv("SMTP_STARTTLS", "false")
+	t.Setenv("SMTP_TLS", "true")
 
 	byName := map[string]EnvVariable{}
 	for _, v := range resolveEnvConfig() {
@@ -167,12 +182,30 @@ func TestResolveEnvConfigParsesEffectiveValues(t *testing.T) {
 	assertEff("S3_USE_SSL", "false")
 	assertEff("SESSION_TTL", "45m")
 	assertEff("SESSION_COOKIE_NAME", "nsc_session")
+	assertEff("SMTP_HOST", "mail.internal")
+	assertEff("SMTP_PORT", "465")
+	assertEff("SMTP_STARTTLS", "false")
+	assertEff("SMTP_TLS", "true")
 	if !byName["TEMPLATE_SYNC_REPO"].Set {
 		t.Error("TEMPLATE_SYNC_REPO should be set (explicit empty)")
 	}
 	if byName["BACKEND_ADDR"].Description == "" {
 		t.Error("BACKEND_ADDR description missing from API payload")
 	}
+}
+
+func TestEffectiveTCPPortRejectsOutOfRange(t *testing.T) {
+	t.Setenv("SMTP_PORT", "70000")
+	for _, v := range resolveEnvConfig() {
+		if v.Name != "SMTP_PORT" {
+			continue
+		}
+		if v.Effective == nil || *v.Effective != "587" {
+			t.Fatalf("SMTP_PORT effective = %v, want 587 (out of range rejected)", v.Effective)
+		}
+		return
+	}
+	t.Fatal("SMTP_PORT missing from registry")
 }
 
 func TestBackendEnvRegistryMatchesConfigurationDocs(t *testing.T) {

@@ -28,6 +28,7 @@ import {
   Spinner,
   Textarea,
 } from "../components/ui";
+import { formatRefRange, formatSyncRunResult, shortDigest } from "../syncRunSummary";
 import { parseList } from "../util";
 
 const PAGE_SIZE = 30;
@@ -37,10 +38,6 @@ const MAX_TEMPLATE_EXPORT_URL_LENGTH = 7_000;
 
 function fmtTime(value?: string) {
   return value ? new Date(value).toLocaleString() : "—";
-}
-
-function shortDigest(value?: string) {
-  return value ? value.slice(0, 12) : "—";
 }
 
 function TemplateDetailModal({
@@ -688,28 +685,36 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
                 </tr>
               </thead>
               <tbody>
-                {runs.data.items.map((run) => (
-                  <tr key={run.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
-                    <td className="px-3 py-2 whitespace-nowrap">{fmtTime(run.started_at)}</td>
-                    <td className="px-3 py-2"><Pill tone={run.status === "success" ? "good" : run.status === "failed" ? "warn" : "neutral"}>{run.status}</Pill></td>
-                    <td className="px-3 py-2 whitespace-nowrap tabular-nums">+{run.added} / ~{run.updated} / −{run.removed} / {run.skipped} skipped</td>
-                    <td className="px-3 py-2 whitespace-nowrap">
-                      {run.templates_commit ? (
-                        <>
-                          <div className="font-mono text-xs" title={run.templates_commit}>
-                            {shortDigest(run.templates_commit)}
-                          </div>
-                          <div className="text-xs tabular-nums text-neutral-500">
-                            {run.template_count ?? 0} templates
-                          </div>
-                        </>
-                      ) : "—"}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs" title={run.ref_after}>{shortDigest(run.ref_after)}</td>
-                    <td className="px-3 py-2 whitespace-nowrap text-neutral-500">{fmtTime(run.finished_at)}</td>
-                    <td className="max-w-md px-3 py-2 text-xs text-rose-600 dark:text-rose-400" title={run.error}>{run.error || "—"}</td>
-                  </tr>
-                ))}
+                {runs.data.items.map((run) => {
+                  const result = formatSyncRunResult(run);
+                  const upstream = formatRefRange(run.ref_before, run.ref_after);
+                  return (
+                    <tr key={run.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
+                      <td className="px-3 py-2 whitespace-nowrap">{fmtTime(run.started_at)}</td>
+                      <td className="px-3 py-2"><Pill tone={run.status === "success" ? "good" : run.status === "failed" ? "warn" : "neutral"}>{run.status}</Pill></td>
+                      <td className="px-3 py-2 tabular-nums" title={result.title || undefined}>
+                        {result.text}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        {run.templates_commit ? (
+                          <>
+                            <div className="font-mono text-xs" title={run.templates_commit}>
+                              {shortDigest(run.templates_commit)}
+                            </div>
+                            <div className="text-xs tabular-nums text-neutral-500">
+                              {run.template_count ?? 0} templates
+                            </div>
+                          </>
+                        ) : "—"}
+                      </td>
+                      <td className="px-3 py-2 font-mono text-xs" title={upstream.title || undefined}>
+                        {upstream.text}
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap text-neutral-500">{fmtTime(run.finished_at)}</td>
+                      <td className="max-w-md px-3 py-2 text-xs text-rose-600 dark:text-rose-400" title={run.error}>{run.error || "—"}</td>
+                    </tr>
+                  );
+                })}
                 {runs.data.items.length === 0 && <tr><td colSpan={7} className="px-3 py-8 text-center text-neutral-400">No upstream sync has run yet.</td></tr>}
               </tbody>
             </table>

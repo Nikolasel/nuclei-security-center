@@ -276,3 +276,18 @@ func TestHandleCreateScheduleRejectsUnknownTimezone(t *testing.T) {
 		t.Errorf("body = %q, want unknown timezone", rr.Body.String())
 	}
 }
+
+func TestHandleCreateScheduleRejectsCronTZPrefix(t *testing.T) {
+	srv := &Server{log: slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil))}
+	body := `{"name":"x","scan_policy_id":"p","target_id":"t","cron":"CRON_TZ=America/New_York 0 3 * * *"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/schedules", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	srv.handleCreateSchedule(rr, req)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 body %q", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "timezone") {
+		t.Errorf("body = %q, want a 400 that points at timezone", rr.Body.String())
+	}
+}

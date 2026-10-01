@@ -460,7 +460,7 @@ run missed while the backend was down fires once on the next tick, then reschedu
 ```sh
 # create a schedule: run a policy against a target at 03:00 nightly in the given
 # IANA zone (5-field cron; also accepts @hourly/@daily/… and "@every 30m").
-# Omit timezone to default to UTC. Unknown zones are 400.
+# Omit timezone to default to UTC. Unknown zones are 400. TZ=/CRON_TZ= in cron is 400; use timezone.
 curl -sb jar.txt -X POST localhost:8080/api/schedules -H 'content-type: application/json' -H 'Origin: http://localhost:8080' -d '{
   "name": "nightly-prod",
   "scan_policy_id": "<scan_policy_id>",

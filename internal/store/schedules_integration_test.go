@@ -141,3 +141,84 @@ func TestScheduleTimezoneRoundTripPostgres(t *testing.T) {
 		t.Fatalf("UpdateSchedule Timezone = %q, want Europe/Paris", updated.Timezone)
 	}
 }
+
+func TestScheduleTimezoneMigratesCronTZPrefixPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st, _ := openEmptyIsolatedPostgres(t, ctx, dsn)
+
+	for _, name := range []string{
+		"0001_init.sql",
+		"0002_add_scan_policy_response_limits.sql",
+		"0003_finding_result_identity.sql",
+	} {
+		sqlBytes, err := migrationsFS.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		if _, err := st.pool.Exec(ctx, string(sqlBytes)); err != nil {
+			t.Fatalf("apply %s: %v", name, err)
+		}
+	}
+
+	targetID := types.NewID()
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO targets (id, name, hosts) VALUES ($1, 'schedule-tz-migrate-target', ARRAY['sched-tz-mig.invalid'])`,
+		targetID); err != nil {
+		t.Fatalf("insert target: %v", err)
+	}
+	templateSetID := types.NewID()
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO template_sets (id, name) VALUES ($1, 'schedule-tz-migrate-templates')`,
+		templateSetID); err != nil {
+		t.Fatalf("insert template set: %v", err)
+	}
+	policyID := types.NewID()
+	if _, err := st.pool.Exec(ctx,
+		`INSERT INTO scan_policies (id, name, template_set_id) VALUES ($1, 'schedule-tz-migrate-policy', $2)`,
+		policyID, templateSetID); err != nil {
+		t.Fatalf("insert scan policy: %v", err)
+	}
+
+	cronTZID := types.NewID()
+	tzID := types.NewID()
+	plainID := types.NewID()
+	badID := types.NewID()
+	if _, err := st.pool.Exec(ctx, `
+		INSERT INTO schedules (id, name, cron, scan_policy_id, target_id) VALUES
+			($1, 'cron-tz-prefixed', 'CRON_TZ=America/New_York 0 3 * * *', $5, $6),
+			($2, 'tz-prefixed', 'TZ=Europe/Paris 0 5 * * *', $5, $6),
+			($3, 'plain', '0 4 * * *', $5, $6),
+			($4, 'bad-prefix', 'CRON_TZ=Not/AZone 0 6 * * *', $5, $6)`,
+		cronTZID, tzID, plainID, badID, policyID, targetID); err != nil {
+		t.Fatalf("insert schedules: %v", err)
+	}
+
+	mig, err := migrationsFS.ReadFile("migrations/0004_schedule_timezone.sql")
+	if err != nil {
+		t.Fatalf("read 0004: %v", err)
+	}
+	if _, err := st.pool.Exec(ctx, string(mig)); err != nil {
+		t.Fatalf("apply 0004: %v", err)
+	}
+
+	assertRow := func(id, wantCron, wantTZ string) {
+		t.Helper()
+		var cron, timezone string
+		if err := st.pool.QueryRow(ctx, `SELECT cron, timezone FROM schedules WHERE id = $1`, id).Scan(&cron, &timezone); err != nil {
+			t.Fatalf("select %s: %v", id, err)
+		}
+		if cron != wantCron || timezone != wantTZ {
+			t.Errorf("schedule %s: cron=%q timezone=%q, want cron=%q timezone=%q", id, cron, timezone, wantCron, wantTZ)
+		}
+	}
+	assertRow(cronTZID, "0 3 * * *", "America/New_York")
+	assertRow(tzID, "0 5 * * *", "Europe/Paris")
+	assertRow(plainID, "0 4 * * *", "UTC")
+	assertRow(badID, "CRON_TZ=Not/AZone 0 6 * * *", "UTC")
+}

@@ -22,8 +22,39 @@ var cronParser = cron.NewParser(
 	cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
 )
 
+// cronTZPrefix reports a robfig TZ= / CRON_TZ= prefix. Parser.Parse applies
+// that prefix to SpecSchedule.Location; the timezone column is the only zone
+// we honor, so callers reject the prefix instead of letting it fight the column.
+func cronTZPrefix(spec string) (zone, rest string, ok bool) {
+	spec = strings.TrimSpace(spec)
+	var prefix string
+	switch {
+	case strings.HasPrefix(spec, "CRON_TZ="):
+		prefix = "CRON_TZ="
+	case strings.HasPrefix(spec, "TZ="):
+		prefix = "TZ="
+	default:
+		return "", spec, false
+	}
+	body := spec[len(prefix):]
+	if i := strings.IndexByte(body, ' '); i >= 0 {
+		return body[:i], strings.TrimSpace(body[i+1:]), true
+	}
+	return body, "", true
+}
+
+func cronTZPrefixError(zone string) error {
+	if zone == "" {
+		return errors.New("cron must not start with TZ= or CRON_TZ=; set timezone instead")
+	}
+	return fmt.Errorf("cron must not start with TZ= or CRON_TZ=; set timezone %q instead", zone)
+}
+
 // parseCron validates a cron expression, returning its compiled schedule.
 func parseCron(spec string) (cron.Schedule, error) {
+	if zone, _, ok := cronTZPrefix(spec); ok {
+		return nil, cronTZPrefixError(zone)
+	}
 	return cronParser.Parse(spec)
 }
 

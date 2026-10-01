@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -30,6 +31,8 @@ func TestParseCron(t *testing.T) {
 		"60 * * * *", // minute out of range
 		"* * * * 8",  // day-of-week out of range
 		"@every",     // missing duration
+		"CRON_TZ=America/New_York 0 3 * * *",
+		"TZ=UTC 0 3 * * *",
 	}
 	for _, c := range invalid {
 		if _, err := parseCron(c); err == nil {
@@ -151,12 +154,23 @@ func TestValidateSchedule(t *testing.T) {
 		{Name: "x", ScanPolicyID: "p1", TargetID: "t1", Cron: "not a cron"}, // bad cron
 		{Name: "x", ScanPolicyID: "p1", TargetID: "t1", Cron: "0 3 * * *", Timezone: "Not/AZone"},
 		{Name: "x", ScanPolicyID: "p1", TargetID: "t1", Cron: "0 3 * * *", Timezone: "Local"},
+		{Name: "x", ScanPolicyID: "p1", TargetID: "t1", Cron: "CRON_TZ=America/New_York 0 3 * * *"},
+		{Name: "x", ScanPolicyID: "p1", TargetID: "t1", Cron: "TZ=UTC 0 3 * * *", Timezone: "Europe/Paris"},
 	}
 	for _, s := range bad {
 		s := s
 		if err := validateSchedule(&s); err == nil {
 			t.Errorf("validateSchedule(%+v) = nil, want error", s)
 		}
+	}
+
+	prefixed := store.Schedule{Name: "x", ScanPolicyID: "p1", TargetID: "t1", Cron: "CRON_TZ=America/New_York 0 3 * * *"}
+	err := validateSchedule(&prefixed)
+	if err == nil {
+		t.Fatal("validateSchedule(CRON_TZ prefix) = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "timezone") || !strings.Contains(err.Error(), "America/New_York") {
+		t.Errorf("validateSchedule(CRON_TZ prefix) = %v, want error pointing at timezone America/New_York", err)
 	}
 }
 

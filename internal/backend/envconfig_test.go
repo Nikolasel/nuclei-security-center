@@ -18,6 +18,8 @@ import (
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 )
 
+var backendEnvDocName = regexp.MustCompile(`^[A-Z][A-Z0-9_]+$`)
+
 const (
 	canaryScannerToken = "nsc-canary-scanner-token-7e13ecd1"
 	canaryOIDCSecret   = "nsc-canary-oidc-secret-7e13ecd1"
@@ -168,6 +170,9 @@ func TestResolveEnvConfigParsesEffectiveValues(t *testing.T) {
 	if !byName["TEMPLATE_SYNC_REPO"].Set {
 		t.Error("TEMPLATE_SYNC_REPO should be set (explicit empty)")
 	}
+	if byName["BACKEND_ADDR"].Description == "" {
+		t.Error("BACKEND_ADDR description missing from API payload")
+	}
 }
 
 func TestBackendEnvRegistryMatchesConfigurationDocs(t *testing.T) {
@@ -181,19 +186,26 @@ func TestBackendEnvRegistryMatchesConfigurationDocs(t *testing.T) {
 		t.Fatal(err)
 	}
 	backendSection, _, _ := strings.Cut(string(raw), "\n## Scanner\n")
-	re := regexp.MustCompile("(?m)^\\| `([A-Z][A-Z0-9_]+)` \\|")
-	documented := map[string]struct{}{}
-	for _, m := range re.FindAllStringSubmatch(backendSection, -1) {
-		documented[m[1]] = struct{}{}
-	}
-	registered := map[string]struct{}{}
+	documented := parseBackendEnvDocTable(t, backendSection)
+	registered := map[string]envSpec{}
 	for _, spec := range backendEnvRegistry {
 		if _, dup := registered[spec.Name]; dup {
 			t.Errorf("duplicate registry entry %s", spec.Name)
 		}
-		registered[spec.Name] = struct{}{}
-		if _, ok := documented[spec.Name]; !ok {
+		registered[spec.Name] = spec
+		if spec.Description == "" {
+			t.Errorf("registry variable %s has empty Description", spec.Name)
+		}
+		if strings.Contains(spec.Description, "`") || strings.Contains(spec.Description, "](") {
+			t.Errorf("registry variable %s Description must be plain (no backticks or markdown links): %q", spec.Name, spec.Description)
+		}
+		purpose, ok := documented[spec.Name]
+		if !ok {
 			t.Errorf("registry variable %s missing from Configuration.md backend tables", spec.Name)
+			continue
+		}
+		if purpose != spec.Description {
+			t.Errorf("%s Description drifted from Configuration.md Purpose\n  registry: %q\n  docs:     %q", spec.Name, spec.Description, purpose)
 		}
 	}
 	for name := range documented {
@@ -201,6 +213,46 @@ func TestBackendEnvRegistryMatchesConfigurationDocs(t *testing.T) {
 			t.Errorf("Configuration.md documents %s but it is not in backendEnvRegistry", name)
 		}
 	}
+}
+
+func parseBackendEnvDocTable(t *testing.T, backendSection string) map[string]string {
+	t.Helper()
+	documented := map[string]string{}
+	for _, line := range strings.Split(backendSection, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "|") {
+			continue
+		}
+		cells := markdownTableCells(line)
+		if len(cells) < 3 {
+			continue
+		}
+		name := strings.Trim(cells[0], "`")
+		if !backendEnvDocName.MatchString(name) {
+			continue
+		}
+		purpose := strings.TrimSpace(cells[len(cells)-1])
+		if purpose == "" || purpose == "Purpose" {
+			continue
+		}
+		if _, dup := documented[name]; dup {
+			t.Errorf("Configuration.md documents %s twice", name)
+		}
+		documented[name] = purpose
+	}
+	return documented
+}
+
+func markdownTableCells(line string) []string {
+	line = strings.TrimSpace(line)
+	line = strings.TrimPrefix(line, "|")
+	line = strings.TrimSuffix(line, "|")
+	parts := strings.Split(line, "|")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		out = append(out, strings.TrimSpace(p))
+	}
+	return out
 }
 
 func TestRedactDSN(t *testing.T) {

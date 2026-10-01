@@ -15,18 +15,23 @@ documented separately because the backend never sees them.
 |---|---|---|
 | `BACKEND_ADDR` | `:8080` | HTTP listen address. |
 | `DATABASE_URL` | required | PostgreSQL DSN. Use TLS in production. |
-| `DATABASE_PASSWORD_FILE` | unset | File containing only the DB password. It is re-read before each new connection, allowing an external secret agent to rotate credentials without restarting NSC. |
+| `DATABASE_PASSWORD_FILE` | unset | File containing only the DB password. Re-read before each new connection so credentials can rotate without a restart. |
 | `SCANNER_URL` | `http://localhost:8081` | Endpoint used to seed the first catch-all scanner node. Seed-only after first boot. |
-| `SCANNER_TOKEN` | required, at least 32 characters on the scanner | Token used with `SCANNER_URL` to seed the default node. Generate with `openssl rand -base64 24`. |
-| `SCAN_ZONES` | unset | JSON array of additional seed nodes with `name`, `url`, `token`, `cidrs`, optional `max_concurrent_scans`, and optional per-node TLS fields. Seed-only; PostgreSQL is authoritative afterward. |
+| `SCANNER_TOKEN` | required, at least 32 characters on the scanner | Token used with SCANNER_URL to seed the default node. At least 32 characters on the scanner. |
+| `SCAN_ZONES` | unset | JSON array of additional seed nodes. Seed-only; PostgreSQL is authoritative afterward. |
 | `NODE_HEALTH_INTERVAL` | `30s` | Capability-poll interval. A node stays healthy for three times this interval after its last successful poll. |
 | `RETENTION_SWEEP_INTERVAL` | `1h` | How often the backend applies the DB-backed scan-retention policy. |
 | `TEMPLATE_SYNC_INTERVAL` | `6h` | Upstream catalog refresh cadence. |
-| `TEMPLATE_SYNC_REPO` | ProjectDiscovery `nuclei-templates` Git repository | Upstream catalog. Set the variable to an explicit empty value to disable upstream sync while retaining custom templates and distribution. |
-| `TEMPLATE_SYNC_REF` | `latest` | Revision to mirror. `latest` resolves to the highest stable semantic-version tag; tags and commit SHAs are reproducible, while branch names advance. |
+| `TEMPLATE_SYNC_REPO` | ProjectDiscovery `nuclei-templates` Git repository | Upstream catalog Git repository. Set to an explicit empty value to disable upstream sync while retaining custom templates and distribution. |
+| `TEMPLATE_SYNC_REF` | `latest` | Revision to mirror. latest is the highest stable tag; tags and SHAs are reproducible, branches advance. |
 | `TEMPLATE_SYNC_DIR` | `/tmp/nsc-template-sync` | Backend clone cache. Mount persistent storage to avoid repeated full clones. |
 | `TEMPLATE_DISTRIBUTE_INTERVAL` | `1h` | How often stale, idle scanner nodes receive the current full catalog bundle. Pre-dispatch top-up still runs. |
-| `EXPORT_SPOOL_DIR` | `os.TempDir()` (usually `/tmp`) | Writable backend-local scratch directory for findings exports and scan-bundle imports. Reserve at least 512 MiB for four simultaneous 64 MiB exports plus up to 512 MiB for the one in-flight scan-bundle ZIP spool; SARIF uses a second bounded rule spool. On a read-only-root deployment mount a writable `emptyDir`/volume and point this variable at it. |
+| `EXPORT_SPOOL_DIR` | `os.TempDir()` (usually `/tmp`) | Writable scratch directory for findings exports and scan-bundle imports. |
+
+Reserve at least 512 MiB in `EXPORT_SPOOL_DIR` for four simultaneous 64 MiB exports plus up to
+512 MiB for the one in-flight scan-bundle ZIP spool; SARIF uses a second bounded rule spool. On a
+read-only-root deployment mount a writable `emptyDir`/volume and point this variable at it.
+Generate `SCANNER_TOKEN` with `openssl rand -base64 24`.
 
 Scanner nodes likewise need writable scratch: the image's HOME directory (`/home/scanner`) for nuclei/naabu/uncover config cache (`$HOME/.config`, `$HOME/nuclei-templates`) and `SCANNER_WORK_DIR` (defaults to a private `0700` dir under `os.TempDir()`/`/tmp`) for per-scan work dirs. On a `read_only: true` deployment mount writable `emptyDir`/tmpfs volumes at both paths, as with `EXPORT_SPOOL_DIR`/`TEMPLATE_SYNC_DIR` for the backend.
 
@@ -43,27 +48,27 @@ are insert-only by node name; PostgreSQL and subsequent API/UI edits are authori
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `OIDC_ISSUER` | required unless `AUTH_DISABLED=true` | Browser-visible issuer URL. Setting it enables OIDC/BFF auth. |
-| `AUTH_DISABLED` | `false` | Explicit all-roles development mode when `OIDC_ISSUER` is unset. Never use in production. |
+| `OIDC_ISSUER` | required unless `AUTH_DISABLED=true` | Browser-visible issuer URL. Setting it enables OIDC/BFF auth. Required unless AUTH_DISABLED is true. |
+| `AUTH_DISABLED` | `false` | Explicit all-roles development mode when OIDC_ISSUER is unset. Never use in production. |
 | `OIDC_DISCOVERY_URL` | `OIDC_ISSUER` | Internal metadata URL when the backend reaches the issuer at a different address. |
-| `OIDC_CLIENT_ID` | required with OIDC | Confidential client ID. |
-| `OIDC_CLIENT_SECRET` | required with OIDC | Confidential client secret. |
-| `APP_BASE_URL` | `http://localhost:8080` | Canonical public application URL. Browser login and the SPA redirect onto this origin when `Host` differs (e.g. `127.0.0.1` vs `localhost`). |
+| `OIDC_CLIENT_ID` | required with OIDC | Confidential client ID. Required with OIDC. |
+| `OIDC_CLIENT_SECRET` | required with OIDC | Confidential client secret. Required with OIDC. |
+| `APP_BASE_URL` | `http://localhost:8080` | Canonical public application URL. Browser login and the SPA redirect onto this origin when Host differs. |
 | `OIDC_REDIRECT_URL` | `APP_BASE_URL/api/auth/callback` | Callback registered with the IdP. |
 | `POST_LOGIN_REDIRECT` | `APP_BASE_URL/` | Browser destination after login. |
 | `OIDC_SCOPES` | `openid,profile,email` | Comma-separated scopes. |
-| `OIDC_ROLES_CLAIM` | `groups` | ID-token claim containing groups/roles. |
+| `OIDC_ROLES_CLAIM` | `groups` | ID-token claim containing groups or roles. |
 | `OIDC_ADMIN_GROUP` | `admin` | Group mapped to NSC admin. |
 | `OIDC_OPERATOR_GROUP` | `operator` | Group mapped to NSC operator. |
 | `OIDC_VIEWER_GROUP` | `viewer` | Group mapped to NSC viewer. |
-| `SESSION_TTL` | `12h` | Server-side session lifetime. Must be between `15m` and `24h`; longer values are rejected. The maximum bounds the worst-case privilege-revocation latency when a role is removed at the IdP — see [session revocation](Authentication.md#session-revocation-and-privilege-revocation-latency). |
-| `SESSION_COOKIE_NAME` | `__Host-nsc_session` when `COOKIE_SECURE=true`; `nsc_session` otherwise | Session cookie name. Secure deployments enforce the `__Host-` prefix. |
-| `COOKIE_SECURE` | `true` | Secure-cookie flag. Set `false` only for local plaintext HTTP. |
-| `AUTH_MAX_LIVE_FLOWS` | `10000` | Global active browser-flow cap across backend replicas (`1`–`100000`). At the cap, new flows fail closed with `429`. |
-| `AUTH_LOGIN_RATE` | `1` | Per-peer login-flow token refill rate in requests/second (`0.000001`–`1000`). |
-| `AUTH_LOGIN_BURST` | `5` | Per-peer login burst (`1`–`1000`). |
-| `AUTH_LOGIN_MAX_CLIENTS` | `4096` | Maximum in-memory peer limiters (`1`–`65536`); the stalest entry is evicted at capacity. |
-| `AUTH_TRUSTED_PROXY_CIDRS` | unset | Comma-separated trusted proxy CIDRs (maximum 64). Only matching direct peers may supply sanitized `X-Forwarded-For` client addresses. |
+| `SESSION_TTL` | `12h` | Server-side session lifetime, between 15m and 24h. Longer values are rejected. |
+| `SESSION_COOKIE_NAME` | `__Host-nsc_session` when `COOKIE_SECURE=true`; `nsc_session` otherwise | Session cookie name. Secure deployments use the Host- prefix. |
+| `COOKIE_SECURE` | `true` | Secure-cookie flag. Set false only for local plaintext HTTP. |
+| `AUTH_MAX_LIVE_FLOWS` | `10000` | Global active browser-flow cap across backend replicas. At the cap, new flows fail closed with 429. |
+| `AUTH_LOGIN_RATE` | `1` | Per-peer login-flow token refill rate in requests per second. |
+| `AUTH_LOGIN_BURST` | `5` | Per-peer login burst. |
+| `AUTH_LOGIN_MAX_CLIENTS` | `4096` | Maximum in-memory peer limiters; the stalest entry is evicted at capacity. |
+| `AUTH_TRUSTED_PROXY_CIDRS` | unset | Comma-separated trusted proxy CIDRs (maximum 64). Only matching direct peers may supply sanitized X-Forwarded-For client addresses. |
 
 When `COOKIE_SECURE=true`, the session cookie is host-locked: it uses the `__Host-` prefix, `Path=/`,
 `Secure`, and no `Domain` attribute. This prevents a sibling subdomain from setting a competing
@@ -103,12 +108,12 @@ OIDC setup, browser mutation protection, service accounts, mTLS, and session rev
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `S3_ENDPOINT` | unset (archiving disabled) | S3-compatible endpoint as `host:port`, without a scheme. |
+| `S3_ENDPOINT` | unset (archiving disabled) | S3-compatible endpoint as host:port, without a scheme. Unset disables archiving. |
 | `S3_BUCKET` | `nuclei-raw` | Archive bucket; created at startup when absent. |
 | `S3_ACCESS_KEY_ID` | unset | Static access key. Leave empty to use the ambient AWS credential chain. |
 | `S3_SECRET_ACCESS_KEY` | unset | Static secret key. |
-| `S3_REGION` | `us-east-1` | S3 region. Must match the store's configured region (Compose Garage uses `us-east-1`). |
-| `S3_USE_SSL` | `true` | TLS for the S3 endpoint. Set `false` only for local plaintext HTTP (Garage in `docker compose`). |
+| `S3_REGION` | `us-east-1` | S3 region. Must match the store's configured region. |
+| `S3_USE_SSL` | `true` | TLS for the S3 endpoint. Set false only for local plaintext HTTP. |
 
 Compose runs unmodified [Garage](https://garagehq.deuxfleurs.fr/) (`dxflrs/garage`, AGPL-3.0)
 as the local S3 endpoint. The image tag is `${GARAGE_VERSION:-v2.3.0}`: `dxflrs/garage` publishes

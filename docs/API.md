@@ -945,9 +945,11 @@ running backend's allowlisted environment variables (also admin; operator and vi
 receive `403`). It is not folded into the mutable settings payload so a retention
 save cannot be confused with deploy-time config.
 
-Each row is `{name, group, set, effective, default, sensitive}`. `set` is whether
+Each row is `{name, group, set, effective, default, sensitive, description}`. `set` is whether
 the process has the variable in its environment (`LookupEnv`); `effective` is what
-the backend actually consumes (defaults applied, durations/booleans parsed). Secrets
+the backend actually consumes (defaults applied, durations/booleans parsed). `description`
+is the short purpose string from the same registry that `Configuration.md` is checked
+against. Secrets
 never appear in `effective` (`SCANNER_TOKEN`, `OIDC_CLIENT_SECRET`, S3 static keys).
 `DATABASE_URL` returns a parsed DSN rebuilt without credentials (unparseable values are hidden, never echoed); `DATABASE_PASSWORD_FILE` and
 other file-backed variables return the path, never file contents; `SCAN_ZONES`

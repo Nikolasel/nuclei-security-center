@@ -552,6 +552,8 @@ export interface EnvVariable {
   effective: string | null;
   default: string;
   sensitive: boolean;
+  /** Short purpose from the backend env registry (same text as Configuration.md). */
+  description: string;
 }
 
 export interface EnvConfig {

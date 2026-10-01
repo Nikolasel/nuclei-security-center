@@ -140,7 +140,7 @@ send so a secret agent can rotate credentials.
 | `SMTP_PASSWORD` | unset | SMTP AUTH password. Ignored when `SMTP_PASSWORD_FILE` is set. |
 | `SMTP_PASSWORD_FILE` | unset | File containing only the SMTP password. Re-read before each send. |
 | `SMTP_FROM` | unset | Envelope From. Required with `SMTP_HOST` or mail stays disabled. |
-| `SMTP_TO` | unset | Comma-separated recipients. Required with `SMTP_HOST` or mail stays disabled. |
+| `SMTP_TO` | unset | Comma-separated default digest recipients, and the only list for failed/orphaned scans. Required with `SMTP_HOST` or mail stays disabled. A policy may override digest recipients. |
 | `SMTP_STARTTLS` | `true` | Require STARTTLS on the submission port. Set `false` only for a trusted plaintext relay. |
 | `SMTP_TLS` | `false` | Implicit TLS (typically port 465). When `true`, STARTTLS is not used. |
 

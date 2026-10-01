@@ -58,6 +58,17 @@ function portsInvalid(s: string): boolean {
   });
 }
 
+function parseRecipients(s: string): string[] {
+  return s
+    .split(/[,;\n]+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+}
+
+function recipientsInvalid(s: string): boolean {
+  return parseRecipients(s).some((addr) => !addr.includes("@") || addr.includes(" "));
+}
+
 function ScanPolicyModal({
   existing,
   duplicate = false,
@@ -113,6 +124,9 @@ function ScanPolicyModal({
   const [discoveryRetries, setDiscoveryRetries] = useState(
     existing?.discovery_retries != null ? String(existing.discovery_retries) : "",
   );
+  const [notifyDigestEnabled, setNotifyDigestEnabled] = useState(existing?.notify_digest_enabled ?? true);
+  const [notifyRecipients, setNotifyRecipients] = useState((existing?.notify_recipients ?? []).join(", "));
+  const [notifyMinSeverity, setNotifyMinSeverity] = useState(existing?.notify_min_severity ?? "");
 
   const anyInvalid =
     knobInvalid(rateLimit) ||
@@ -126,7 +140,8 @@ function ScanPolicyModal({
         knobInvalid(discoveryTimeoutSec) ||
         knobInvalid(discoveryRate) ||
         knobInvalid(discoveryProbeTimeoutMs) ||
-        knobInvalid(discoveryRetries)));
+        knobInvalid(discoveryRetries))) ||
+    recipientsInvalid(notifyRecipients);
   const canSave = name.trim() !== "" && templateSetId !== "" && !anyInvalid;
 
   const save = useMutation({
@@ -150,6 +165,9 @@ function ScanPolicyModal({
         discovery_rate: discoveryEnabled ? parseKnob(discoveryRate) : null,
         discovery_probe_timeout_ms: discoveryEnabled ? parseKnob(discoveryProbeTimeoutMs) : null,
         discovery_retries: discoveryEnabled ? parseKnob(discoveryRetries) : null,
+        notify_digest_enabled: notifyDigestEnabled,
+        notify_recipients: parseRecipients(notifyRecipients),
+        notify_min_severity: notifyMinSeverity || undefined,
       };
       return existing && !duplicate ? api.updateScanPolicy(existing.id, body) : api.createScanPolicy(body);
     },
@@ -377,6 +395,58 @@ function ScanPolicyModal({
             </div>
           )}
         </div>
+        <div className="border-t border-neutral-200 pt-4 dark:border-neutral-800">
+          <label className="flex items-start gap-2">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={notifyDigestEnabled}
+              onChange={(e) => setNotifyDigestEnabled(e.target.checked)}
+            />
+            <span className="text-sm">
+              <span className="font-medium">Email digest of result changes</span>
+              <span className="block text-xs text-neutral-500">
+                Mail New / Changed / Fixed after a completed scan. Failed and orphaned scans still
+                mail the deployment recipient list even when this is off. Operator cancel stays silent.
+              </span>
+            </span>
+          </label>
+          <div className="mt-3 space-y-4">
+            <Field label="Digest recipients (blank = SMTP_TO)">
+              <Textarea
+                rows={2}
+                value={notifyRecipients}
+                onChange={(e) => setNotifyRecipients(e.target.value)}
+                placeholder="ops@example.com, sec@example.com"
+                className="min-h-[2.5rem] resize-y"
+              />
+              <span className="mt-1 block text-xs text-neutral-500">
+                Comma-separated. Empty inherits the deployment SMTP_TO list. Failed-scan mail always
+                uses SMTP_TO.
+              </span>
+            </Field>
+            {recipientsInvalid(notifyRecipients) && (
+              <p className="text-xs text-red-600 dark:text-red-400">Each recipient must be an email address.</p>
+            )}
+            <Field label="Minimum severity">
+              <Select
+                value={notifyMinSeverity}
+                onChange={(e) => setNotifyMinSeverity(e.target.value)}
+                className="max-w-xs"
+              >
+                <option value="">All severities (including info)</option>
+                <option value="low">Low and above (drop info)</option>
+                <option value="medium">Medium and above</option>
+                <option value="high">High and above</option>
+                <option value="critical">Critical only</option>
+              </Select>
+              <span className="mt-1 block text-xs text-neutral-500">
+                Applies to digest counts and the finding list. Unknown / non-standard severities are
+                still included.
+              </span>
+            </Field>
+          </div>
+        </div>
         {anyInvalid && (
           <p className="text-xs text-red-600 dark:text-red-400">
             Each value must be a positive whole number (or blank to use the default).
@@ -433,6 +503,15 @@ function discoverySummary(p: ScanPolicy): string {
         : "no host discovery";
   const ports = p.discovery_ports?.trim() || "top-1000";
   return `${mode} \u00b7 ${hostDiscovery} \u00b7 ${ports}`;
+}
+
+function digestSummary(p: ScanPolicy): string {
+  if (p.notify_digest_enabled === false) return "off";
+  const parts: string[] = ["on"];
+  if (p.notify_min_severity) parts.push(`≥${p.notify_min_severity}`);
+  const n = p.notify_recipients?.filter((r) => r.trim()).length ?? 0;
+  if (n > 0) parts.push(`${n} recipient${n === 1 ? "" : "s"}`);
+  return parts.join(" \u00b7 ");
 }
 
 export function ScanPoliciesPage() {
@@ -492,6 +571,7 @@ export function ScanPoliciesPage() {
                   <th className="px-3 py-2 font-medium">Template set</th>
                   <th className="px-3 py-2 font-medium">Execution</th>
                   <th className="px-3 py-2 font-medium">Discovery</th>
+                  <th className="px-3 py-2 font-medium">Digest</th>
                   {(canWrite || canDelete) && <th className="px-3 py-2" />}
                 </tr>
               </thead>
@@ -511,6 +591,11 @@ export function ScanPoliciesPage() {
                       </td>
                       <td className="px-3 py-2">
                         <span className={disc === "off" ? "text-neutral-400" : "font-mono text-xs"}>{disc}</span>
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className={p.notify_digest_enabled === false ? "text-neutral-400" : "font-mono text-xs"}>
+                          {digestSummary(p)}
+                        </span>
                       </td>
                     {(canWrite || canDelete) && (
                       <td className="px-3 py-2 text-right whitespace-nowrap">
@@ -554,7 +639,7 @@ export function ScanPoliciesPage() {
                 })}
                 {(q.data ?? []).length === 0 && (
                   <tr>
-                    <td colSpan={4 + (canWrite || canDelete ? 1 : 0)} className="px-3 py-8 text-center text-neutral-400">
+                    <td colSpan={5 + (canWrite || canDelete ? 1 : 0)} className="px-3 py-8 text-center text-neutral-400">
                       No scan policies yet.
                     </td>
                   </tr>

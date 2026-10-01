@@ -151,13 +151,16 @@ type ScanPolicyBundleSnapshot struct {
 	DiscoveryEnabled *bool `json:"discovery_enabled,omitempty"`
 	// DiscoveryHostDiscovery nil preserves the selected scan mode's default;
 	// true/false records an explicit host-discovery override (#133).
-	DiscoveryHostDiscovery  *bool  `json:"discovery_host_discovery,omitempty"`
-	DiscoveryScanType       string `json:"discovery_scan_type,omitempty"`
-	DiscoveryPorts          string `json:"discovery_ports,omitempty"`
-	DiscoveryTimeoutSec     *int   `json:"discovery_timeout_sec,omitempty"`
-	DiscoveryRate           *int   `json:"discovery_rate,omitempty"`
-	DiscoveryProbeTimeoutMs *int   `json:"discovery_probe_timeout_ms,omitempty"`
-	DiscoveryRetries        *int   `json:"discovery_retries,omitempty"`
+	DiscoveryHostDiscovery  *bool    `json:"discovery_host_discovery,omitempty"`
+	DiscoveryScanType       string   `json:"discovery_scan_type,omitempty"`
+	DiscoveryPorts          string   `json:"discovery_ports,omitempty"`
+	DiscoveryTimeoutSec     *int     `json:"discovery_timeout_sec,omitempty"`
+	DiscoveryRate           *int     `json:"discovery_rate,omitempty"`
+	DiscoveryProbeTimeoutMs *int     `json:"discovery_probe_timeout_ms,omitempty"`
+	DiscoveryRetries        *int     `json:"discovery_retries,omitempty"`
+	NotifyDigestEnabled     *bool    `json:"notify_digest_enabled,omitempty"`
+	NotifyRecipients        []string `json:"notify_recipients,omitempty"`
+	NotifyMinSeverity       string   `json:"notify_min_severity,omitempty"`
 }
 
 // ScanBundleFinding is one immutable occurrence with its preserved Nuclei JSON.

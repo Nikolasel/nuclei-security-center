@@ -303,6 +303,13 @@ type ScanLink struct {
 	ScanPolicyID  string
 	Source        string
 	ScheduleID    string
+	// Notify* are digest settings resolved from the scan policy at dispatch
+	// (#335). They are snapshotted onto the scan so MarkComplete and SMTP
+	// still see them after the policy is edited or deleted. Nil/empty inherit
+	// the deployment default (digest on, SMTP_TO, no severity floor).
+	NotifyDigestEnabled *bool
+	NotifyRecipients    []string
+	NotifyMinSeverity   string
 }
 
 // CreateScan inserts a new scan in the queued state and returns its id.
@@ -316,11 +323,17 @@ func (s *Store) CreateScan(ctx context.Context, spec types.ScanSpec, link ScanLi
 	if source == "" {
 		source = "adhoc"
 	}
+	digestEnabled := true
+	if link.NotifyDigestEnabled != nil {
+		digestEnabled = *link.NotifyDigestEnabled
+	}
 	_, err = s.pool.Exec(ctx,
-		`INSERT INTO scans (id, state, spec, target_id, template_set_id, scan_policy_id, source, schedule_id, templates_commit, coverage_origin)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		`INSERT INTO scans (id, state, spec, target_id, template_set_id, scan_policy_id, source, schedule_id, templates_commit, coverage_origin,
+		                    notify_digest_enabled, notify_recipients, notify_min_severity)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 		id, types.ScanQueued, specJSON, nullStr(link.TargetID), nullStr(link.TemplateSetID),
 		nullStr(link.ScanPolicyID), source, nullStr(link.ScheduleID), nullStr(spec.Templates.TemplatesCommit), CoverageOriginNode,
+		digestEnabled, nullStrSlice(link.NotifyRecipients), nullStr(link.NotifyMinSeverity),
 	)
 	if err != nil {
 		return "", fmt.Errorf("insert scan: %w", err)
@@ -469,7 +482,7 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 		    UPDATE scans
 		       SET state = $1, nuclei_version = $2, templates_commit = $3, finished_at = now()
 		     WHERE id = $4 AND state <> $5
-		     RETURNING id, target_id, covered_endpoints, coverage_origin, skipped_finding_count, created_at
+		    RETURNING id, target_id, covered_endpoints, coverage_origin, skipped_finding_count, created_at, notify_min_severity
 		 ),
 		 coverage_pairs AS MATERIALIZED (
 		    SELECT pair->>'template_id' AS template_id,
@@ -556,6 +569,26 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 		      JOIN locked_candidates c ON c.id = l.id
 		      CROSS JOIN completed_scan cs
 		     WHERE (`+lcEffectiveExpr+`) NOT IN ('accepted', 'false_positive')
+		       AND (
+		            COALESCE(cs.notify_min_severity, '') = ''
+		            OR CASE lower(coalesce(l.recast_severity, l.severity))
+		                 WHEN 'info' THEN 0
+		                 WHEN 'low' THEN 1
+		                 WHEN 'medium' THEN 2
+		                 WHEN 'high' THEN 3
+		                 WHEN 'critical' THEN 4
+		                 ELSE 4
+		               END
+		               >=
+		               CASE cs.notify_min_severity
+		                 WHEN 'info' THEN 0
+		                 WHEN 'low' THEN 1
+		                 WHEN 'medium' THEN 2
+		                 WHEN 'high' THEN 3
+		                 WHEN 'critical' THEN 4
+		                 ELSE 0
+		               END
+		       )
 		 ),
 		 mailed AS (
 		    SELECT * FROM digest_rows WHERE status IS NOT NULL
@@ -715,6 +748,12 @@ type ScanRow struct {
 	NucleiVersion   string `json:"nuclei_version,omitempty"`
 	TemplatesCommit string `json:"templates_commit,omitempty"`
 	Error           string `json:"error,omitempty"`
+	// NotifyDigestEnabled / NotifyRecipients / NotifyMinSeverity are the
+	// digest settings snapshotted at dispatch (#335). Failed mail ignores
+	// these and always uses SMTP_TO.
+	NotifyDigestEnabled bool     `json:"notify_digest_enabled"`
+	NotifyRecipients    []string `json:"notify_recipients,omitempty"`
+	NotifyMinSeverity   string   `json:"notify_min_severity,omitempty"`
 	// SkippedFindingCount is the number of malformed or oversized source records
 	// safely skipped during result ingestion. Any operational ingest error still
 	// fails the scan rather than being counted here.
@@ -752,7 +791,8 @@ const scanSelect = `
 	       s.nuclei_version, s.templates_commit, s.error, s.skipped_finding_count,
 	       s.raw_object_key, s.log_object_key,
 	       s.created_at, s.finished_at, s.discovered_targets,
-	       s.covered_endpoints, s.coverage_warning, s.coverage_origin
+	       s.covered_endpoints, s.coverage_warning, s.coverage_origin,
+	       s.notify_digest_enabled, s.notify_recipients, s.notify_min_severity
 	  FROM scans s
 	  LEFT JOIN targets t ON t.id = s.target_id
 	  LEFT JOIN template_sets ts ON ts.id = s.template_set_id
@@ -764,14 +804,15 @@ const scanCancellableStates = `('queued', 'running')`
 
 func scanScan(row pgx.Row) (ScanRow, error) {
 	var r ScanRow
-	var targetID, targetName, templateSetID, templateSetName, scanPolicyID, scanPolicyName, nodeID, nodeName, nucleiVersion, templatesCommit, errStr, rawKey, logKey, coverageWarning, coverageOrigin *string
+	var targetID, targetName, templateSetID, templateSetName, scanPolicyID, scanPolicyName, nodeID, nodeName, nucleiVersion, templatesCommit, errStr, rawKey, logKey, coverageWarning, coverageOrigin, notifyMinSeverity *string
 	var hosts []string
 	var coveredJSON []byte
 	if err := row.Scan(&r.ID, &r.State, &targetID, &targetName, &hosts, &templateSetID, &templateSetName,
 		&scanPolicyID, &scanPolicyName, &nodeID, &nodeName,
 		&nucleiVersion, &templatesCommit, &errStr, &r.SkippedFindingCount, &rawKey, &logKey,
 		&r.CreatedAt, &r.FinishedAt,
-		&r.DiscoveredTargets, &coveredJSON, &coverageWarning, &coverageOrigin); err != nil {
+		&r.DiscoveredTargets, &coveredJSON, &coverageWarning, &coverageOrigin,
+		&r.NotifyDigestEnabled, &r.NotifyRecipients, &notifyMinSeverity); err != nil {
 		return ScanRow{}, err
 	}
 	if coveredJSON != nil {
@@ -796,6 +837,7 @@ func scanScan(row pgx.Row) (ScanRow, error) {
 	r.Error = deref(errStr)
 	r.CoverageWarning = deref(coverageWarning)
 	r.CoverageOrigin = deref(coverageOrigin)
+	r.NotifyMinSeverity = deref(notifyMinSeverity)
 	r.HasRaw = rawKey != nil
 	r.HasLog = logKey != nil
 	return r, nil

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -63,7 +64,7 @@ func (f *fakeNotifyStore) ClaimScanNotification(_ context.Context, scanID, kind 
 
 func (f *fakeNotifyStore) GetScan(_ context.Context, id string) (store.ScanRow, error) {
 	if f.scan.ID == "" {
-		return store.ScanRow{ID: id}, nil
+		return store.ScanRow{ID: id, NotifyDigestEnabled: true}, nil
 	}
 	return f.scan, nil
 }
@@ -215,5 +216,72 @@ func TestScanDigestPayloadHasDelta(t *testing.T) {
 	}
 	if !(store.ScanDigestPayload{New: store.SeverityCounts{Unknown: 1}}).HasDelta() {
 		t.Fatal("unknown severity count is a delta")
+	}
+}
+
+func TestScanNotifierDigestDisabledDoesNotSend(t *testing.T) {
+	payload := store.ScanDigestPayload{
+		New:      store.SeverityCounts{Critical: 1},
+		Findings: []store.ScanDigestFinding{{ID: 1, Status: "new", Severity: "critical", TemplateID: "t"}},
+	}
+	raw, _ := json.Marshal(payload)
+	st := &fakeNotifyStore{
+		payloads: map[string][]byte{"s1/" + store.NotifyKindDigest: raw},
+		scan:     store.ScanRow{ID: "s1", NotifyDigestEnabled: false},
+	}
+	sender := &recordingSender{}
+	n := NewScanNotifier(st, sender, "http://nsc.example", "nsc@example", []string{"ops@example"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := n.Notify(context.Background(), "s1", store.NotifyKindDigest); err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+	if got := sender.subjects(); len(got) != 0 {
+		t.Fatalf("muted policy sent digest: %v", got)
+	}
+}
+
+func TestScanNotifierFailedIgnoresPolicyMuteAndRecipients(t *testing.T) {
+	raw, _ := json.Marshal(store.ScanFailedPayload{Reason: "node down"})
+	st := &fakeNotifyStore{
+		payloads: map[string][]byte{"s1/" + store.NotifyKindFailed: raw},
+		scan: store.ScanRow{
+			ID:                  "s1",
+			NotifyDigestEnabled: false,
+			NotifyRecipients:    []string{"policy@example"},
+		},
+	}
+	sender := &recordingSender{}
+	n := NewScanNotifier(st, sender, "http://nsc.example", "nsc@example", []string{"ops@example"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := n.Notify(context.Background(), "s1", store.NotifyKindFailed); err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+	if len(sender.msgs) != 1 {
+		t.Fatalf("sent %d, want 1 failed mail", len(sender.msgs))
+	}
+	if !slices.Equal(sender.msgs[0].To, []string{"ops@example"}) {
+		t.Fatalf("failed mail recipients = %v, want SMTP_TO", sender.msgs[0].To)
+	}
+}
+
+func TestScanNotifierDigestUsesPolicyRecipients(t *testing.T) {
+	payload := store.ScanDigestPayload{
+		New:      store.SeverityCounts{High: 1},
+		Findings: []store.ScanDigestFinding{{ID: 1, Status: "new", Severity: "high", TemplateID: "t"}},
+	}
+	raw, _ := json.Marshal(payload)
+	st := &fakeNotifyStore{
+		payloads: map[string][]byte{"s1/" + store.NotifyKindDigest: raw},
+		scan: store.ScanRow{
+			ID:                  "s1",
+			NotifyDigestEnabled: true,
+			NotifyRecipients:    []string{"team@example"},
+		},
+	}
+	sender := &recordingSender{}
+	n := NewScanNotifier(st, sender, "http://nsc.example", "nsc@example", []string{"ops@example"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := n.Notify(context.Background(), "s1", store.NotifyKindDigest); err != nil {
+		t.Fatalf("notify: %v", err)
+	}
+	if len(sender.msgs) != 1 || !slices.Equal(sender.msgs[0].To, []string{"team@example"}) {
+		t.Fatalf("digest recipients = %v", sender.msgs)
 	}
 }

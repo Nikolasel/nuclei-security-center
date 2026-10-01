@@ -71,7 +71,10 @@ execution knobs `rate_limit` / `concurrency` / `timeout_sec` / `max_host_error` 
 nullable = "use the built-in default"). `POST /api/scans` takes
 `{scan_policy_id,target_id}`; `Server.resolvePolicySpec` loads the policy and resolves the
 request's approved target plus the policy's template set via `resolveConfigSpec`, then overlays
-the policy's non-nil knobs over `defaultOptions()` (pure step: `overlayScanPolicy`). The
+the policy's non-nil knobs over `defaultOptions()` (pure step: `overlayScanPolicy`). Digest
+mail knobs (`notify_digest_enabled` / `notify_recipients` / `notify_min_severity`) resolve the
+same way (nullable inherit; `resolveScanNotify`) and are snapshotted onto the scan at dispatch —
+failed/orphaned mail still uses `SMTP_TO` even when a policy mutes digests. The
 resolved `target_id`/`template_set_id`
 are recorded on the scan (via `ScanLink`) so findings/lifecycle work unchanged; `scan_policy_id`
 on `scans` is `ON DELETE SET NULL` (history survives a policy delete). `max_host_error` wires

@@ -182,6 +182,14 @@ func nullStr(s string) *string {
 	return &s
 }
 
+// nullStrSlice maps a nil/empty slice to SQL NULL (inherit-default arrays).
+func nullStrSlice(s []string) any {
+	if len(s) == 0 {
+		return nil
+	}
+	return s
+}
+
 // orEmpty guarantees a non-nil slice so pgx encodes '{}' (NOT NULL columns).
 func orEmpty(s []string) []string {
 	if s == nil {

@@ -226,6 +226,13 @@ export interface ScanPolicy {
   discovery_rate?: number | null;
   discovery_probe_timeout_ms?: number | null;
   discovery_retries?: number | null;
+  // Digest mail (#335). Null notify_digest_enabled inherits on; false mutes
+  // completed-scan digests (failed-scan mail still uses SMTP_TO). Empty
+  // notify_recipients inherit SMTP_TO. Empty notify_min_severity includes every
+  // severity; a floor drops lower named severities from counts and the list.
+  notify_digest_enabled?: boolean | null;
+  notify_recipients?: string[] | null;
+  notify_min_severity?: string;
   created_by?: string;
   created_at: string;
   updated_at: string;

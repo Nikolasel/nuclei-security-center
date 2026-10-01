@@ -111,6 +111,15 @@ ingested a partial result and moved `last_seen_scan`. Metadata drift (template s
 name/severity) and analyst triage edits are not mailed. Links point at `APP_BASE_URL`
 `/scans/{id}` and `/findings/{id}`; recipients sign in normally.
 
+Digest behavior is per **scan policy** (resolved at dispatch and stored on the scan):
+
+- `notify_digest_enabled` — unset inherits on; off keeps the outbox row but sends no digest.
+- `notify_recipients` — unset/empty uses `SMTP_TO`.
+- `notify_min_severity` — unset includes every severity; `low` drops `info` from counts and the list.
+
+Failed and orphaned scans still mail `SMTP_TO` even when the policy's digest is off. Operator
+cancel stays silent.
+
 Mail is a data exit (hostnames, paths, template names). Keep `SMTP_TO` on a small operator list.
 Sending is not an audit `event_id`; success and failure are ordinary structured logs. PostgreSQL
 holds an at-most-once outbox row so a backend restart does not resend. Unclaimed rows (crash

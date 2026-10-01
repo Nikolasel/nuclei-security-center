@@ -326,6 +326,86 @@ func TestScanDigestBucketsPostgres(t *testing.T) {
 	}
 }
 
+func TestScanDigestMinSeverityPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	st := openIsolatedPostgres(t, ctx, dsn)
+
+	target, err := st.CreateTarget(ctx, Target{
+		Name:  "digest-floor-" + types.NewID(),
+		Hosts: []string{"digest-floor.invalid"},
+	})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+
+	complete := func(link ScanLink, sev, templateID string) string {
+		t.Helper()
+		scanID, createErr := st.CreateScan(ctx, types.ScanSpec{
+			Targets:   target.Hosts,
+			Templates: types.TemplateSelector{TemplateIDs: []string{templateID}, TemplatesCommit: "digest-test"},
+		}, link)
+		if createErr != nil {
+			t.Fatalf("create scan: %v", createErr)
+		}
+		finding := types.NucleiFinding{
+			TemplateID: templateID,
+			Host:       "digest-floor.invalid",
+			MatchedAt:  "https://digest-floor.invalid/" + templateID,
+			Type:       "http",
+			Info:       types.NucleiInfo{Name: sev, Severity: sev},
+		}
+		raw, _ := json.Marshal(finding)
+		if ingestErr := st.IngestFinding(ctx, scanID, target.ID, finding, raw); ingestErr != nil {
+			t.Fatalf("ingest: %v", ingestErr)
+		}
+		if coverageErr := st.SetScanCoverage(ctx, scanID, []types.EndpointCoverage{{TemplateID: templateID, Endpoint: "digest-floor.invalid:443"}}, ""); coverageErr != nil {
+			t.Fatalf("coverage: %v", coverageErr)
+		}
+		if completeErr := st.MarkComplete(ctx, scanID, "digest-test", "digest-test"); completeErr != nil {
+			t.Fatalf("complete: %v", completeErr)
+		}
+		return scanID
+	}
+
+	infoScan := complete(ScanLink{TargetID: target.ID, NotifyMinSeverity: "low"}, "info", "tpl-floor-info")
+	p := mustClaimDigest(t, ctx, st, infoScan)
+	if p.HasDelta() || len(p.Findings) != 0 {
+		t.Fatalf("info-only delta with min=low must be empty, got %+v", p)
+	}
+
+	highScan := complete(ScanLink{TargetID: target.ID, NotifyMinSeverity: "low"}, "high", "tpl-floor-high")
+	p = mustClaimDigest(t, ctx, st, highScan)
+	if p.New.High != 1 || p.New.Info != 0 || len(p.Findings) != 1 {
+		t.Fatalf("high finding with min=low = %+v", p)
+	}
+
+	unknownScan := complete(ScanLink{TargetID: target.ID, NotifyMinSeverity: "low"}, "not-a-severity", "tpl-floor-unknown")
+	p = mustClaimDigest(t, ctx, st, unknownScan)
+	if p.New.Unknown != 1 {
+		t.Fatalf("unknown severity must still mail at min=low, got %+v", p)
+	}
+
+	muted := false
+	mutedScan := complete(ScanLink{TargetID: target.ID, NotifyDigestEnabled: &muted}, "critical", "tpl-floor-muted")
+	row, err := st.GetScan(ctx, mutedScan)
+	if err != nil {
+		t.Fatalf("get muted scan: %v", err)
+	}
+	if row.NotifyDigestEnabled {
+		t.Fatal("muted scan must snapshot notify_digest_enabled=false")
+	}
+	p = mustClaimDigest(t, ctx, st, mutedScan)
+	if p.New.Critical != 1 {
+		t.Fatalf("muted scan still records a digest payload, got %+v", p)
+	}
+}
+
 func mustClaimDigest(t *testing.T, ctx context.Context, st *Store, scanID string) ScanDigestPayload {
 	t.Helper()
 	raw, ok, err := st.ClaimScanNotification(ctx, scanID, NotifyKindDigest)

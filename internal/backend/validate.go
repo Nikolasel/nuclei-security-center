@@ -3,6 +3,7 @@ package backend
 import (
 	"errors"
 	"fmt"
+	"net/mail"
 	"net/netip"
 	"net/url"
 	"regexp"
@@ -123,6 +124,35 @@ func validateScanPolicy(p *store.ScanPolicy) error {
 	if err := validatePortSpec(p.DiscoveryPorts); err != nil {
 		return err
 	}
+	p.NotifyMinSeverity = strings.ToLower(strings.TrimSpace(p.NotifyMinSeverity))
+	switch p.NotifyMinSeverity {
+	case "", "info", "low", "medium", "high", "critical":
+	default:
+		return fmt.Errorf("notify_min_severity must be info, low, medium, high, or critical")
+	}
+	var recipients []string
+	seen := make(map[string]struct{})
+	for _, raw := range p.NotifyRecipients {
+		addr := strings.TrimSpace(raw)
+		if addr == "" {
+			continue
+		}
+		parsed, err := mail.ParseAddress(addr)
+		if err != nil || parsed.Address == "" {
+			return fmt.Errorf("notify_recipients: invalid address %q", addr)
+		}
+		normalized := parsed.Address
+		key := strings.ToLower(normalized)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		recipients = append(recipients, normalized)
+	}
+	if len(recipients) > 50 {
+		return errors.New("notify_recipients: at most 50 addresses")
+	}
+	p.NotifyRecipients = recipients
 	return nil
 }
 

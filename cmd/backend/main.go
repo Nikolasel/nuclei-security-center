@@ -110,6 +110,9 @@ func main() {
 	orch := backend.NewOrchestrator(st, archive, health, log)
 	if notifier := buildScanNotifier(st, log); notifier != nil {
 		orch.SetNotifier(notifier)
+		if err := notifier.NotifyUnclaimed(ctx); err != nil {
+			log.Error("drain pending scan notifications", "err", err)
+		}
 	}
 
 	auth, err := buildAuthenticator(ctx, st, log, loginSettings)

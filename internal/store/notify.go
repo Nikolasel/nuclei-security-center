@@ -16,17 +16,25 @@ const (
 )
 
 // SeverityCounts is per-severity tally used in a scan digest mail.
+// Unknown covers Nuclei's "unknown" and any other non-standard value.
 type SeverityCounts struct {
 	Critical int `json:"critical"`
 	High     int `json:"high"`
 	Medium   int `json:"medium"`
 	Low      int `json:"low"`
 	Info     int `json:"info"`
+	Unknown  int `json:"unknown"`
 }
 
 // Total is the sum of all severity buckets.
 func (c SeverityCounts) Total() int {
-	return c.Critical + c.High + c.Medium + c.Low + c.Info
+	return c.Critical + c.High + c.Medium + c.Low + c.Info + c.Unknown
+}
+
+// ScanNotificationRef is an unclaimed outbox row the startup drain can send.
+type ScanNotificationRef struct {
+	ScanID string
+	Kind   string
 }
 
 // ScanDigestFinding is one New/Changed/Fixed row included in a digest payload.
@@ -77,6 +85,35 @@ func (s *Store) ClaimScanNotification(ctx context.Context, scanID, kind string) 
 		return nil, false, fmt.Errorf("claim scan notification: %w", err)
 	}
 	return payload, true, nil
+}
+
+// ListUnclaimedScanNotifications returns outbox rows that have not been claimed.
+// Already-claimed rows are omitted so a restart does not resend.
+func (s *Store) ListUnclaimedScanNotifications(ctx context.Context) ([]ScanNotificationRef, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT scan_id, kind
+		   FROM scan_notification_outbox
+		  WHERE claimed_at IS NULL
+		  ORDER BY created_at, scan_id, kind`)
+	if err != nil {
+		return nil, fmt.Errorf("list unclaimed scan notifications: %w", err)
+	}
+	defer rows.Close()
+	var out []ScanNotificationRef
+	for rows.Next() {
+		var ref ScanNotificationRef
+		if err := rows.Scan(&ref.ScanID, &ref.Kind); err != nil {
+			return nil, fmt.Errorf("scan unclaimed notification: %w", err)
+		}
+		out = append(out, ref)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list unclaimed scan notifications: %w", err)
+	}
+	if out == nil {
+		out = []ScanNotificationRef{}
+	}
+	return out, nil
 }
 
 // ParseScanDigestPayload decodes a digest outbox payload.

@@ -115,14 +115,19 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   database, transaction, schema, and unexpected constraint failures remain scan-fatal.
 
 - **scan_notification_outbox** — at-most-once mail payloads keyed by `(scan_id, kind)`
-  (`digest` or `failed`). Inserted in the same statement as `MarkComplete` / `MarkFailed` so a
-  backend restart cannot derive a second digest after `last_covering_scan` has advanced. The
-  completing process claims the row immediately before SMTP; a send failure is logged and never
-  retried (best-effort, same as raw-output archival). Empty deltas still get a row so a later
+  (`digest` or `failed`). Inserted in the same statement as `MarkComplete` / `MarkFailed` /
+  `FailOrphanedScans` so a backend restart cannot derive a second digest after
+  `last_covering_scan` has advanced, and orphaned queued/running scans still get a `failed`
+  payload. The completing process claims the row immediately before SMTP; a send failure is
+  logged and never retried (best-effort, same as raw-output archival). On startup, after the
+  notifier is wired, unclaimed rows (`claimed_at` NULL) are claimed and sent once — including
+  a crash after `MarkComplete`/`MarkFailed` and orphaned failures. Already-claimed rows are
+  left alone so a restart does not resend. Empty deltas still get a row so a later
   complete cannot invent mail. Operator-cancelled scans never insert a `failed` row. SMTP is
   optional (`SMTP_HOST` unset disables sending without failing startup). The digest lists only
-  New / Changed (resurfaced) / Fixed, by effective severity; `active` findings and live
-  accepted / false-positive dispositions are omitted. Status is not stored on
+  New / Changed (resurfaced) / Fixed, by effective severity (`critical`/`high`/`medium`/`low`/
+  `info`, plus an `unknown` bucket for Nuclei's `unknown` and any other value); `active`
+  findings and live accepted / false-positive dispositions are omitted. Status is not stored on
   `finding_lifecycle`.
 
 - **findings** (occurrences) — the immutable per-scan observation log: `id, scan_id,

@@ -67,7 +67,10 @@ func (o *Orchestrator) SetTemplateDistributor(d *TemplateDistributor) { o.distri
 
 // SetNotifier enables best-effort scan digest / failure mail. It is wired once
 // during backend startup when SMTP_HOST is set; nil disables sending (the
-// outbox row is still recorded at MarkComplete/MarkFailed).
+// outbox row is still recorded at MarkComplete/MarkFailed/FailOrphanedScans).
+// After wiring, the process claims and sends unclaimed outbox rows once so a
+// crash between the terminal write and SMTP still delivers; already-claimed
+// rows are left alone.
 func (o *Orchestrator) SetNotifier(n *ScanNotifier) { o.notifier = n }
 
 // Health exposes the node health monitor (nil when health polling is disabled).

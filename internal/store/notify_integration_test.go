@@ -215,6 +215,115 @@ func TestScanDigestBucketsPostgres(t *testing.T) {
 	if _, ok, err := st.ClaimScanNotification(ctx, first, NotifyKindDigest); err != nil || ok {
 		t.Fatalf("repeat complete must not yield a new unclaimed digest, ok=%v err=%v", ok, err)
 	}
+
+	// Nuclei unknown and any other non-standard severity are their own bucket.
+	unknownScan := nextScan([]string{"tpl-unknown"}, []types.NucleiFinding{{
+		TemplateID: "tpl-unknown",
+		Host:       "digest.invalid",
+		MatchedAt:  "https://digest.invalid/unknown",
+		Type:       "http",
+		Info:       types.NucleiInfo{Name: "U", Severity: "unknown"},
+	}}, []types.EndpointCoverage{{TemplateID: "tpl-unknown", Endpoint: "digest.invalid:443"}})
+	p = mustClaimDigest(t, ctx, st, unknownScan)
+	if p.New.Unknown != 1 || p.New.Info != 0 {
+		t.Fatalf("unknown severity digest = %+v, want 1 new unknown", p)
+	}
+	otherScan := nextScan([]string{"tpl-other"}, []types.NucleiFinding{{
+		TemplateID: "tpl-other",
+		Host:       "digest.invalid",
+		MatchedAt:  "https://digest.invalid/other",
+		Type:       "http",
+		Info:       types.NucleiInfo{Name: "O", Severity: "not-a-severity"},
+	}}, []types.EndpointCoverage{{TemplateID: "tpl-other", Endpoint: "digest.invalid:443"}})
+	p = mustClaimDigest(t, ctx, st, otherScan)
+	if p.New.Unknown != 1 || p.New.Info != 0 {
+		t.Fatalf("non-standard severity digest = %+v, want 1 new unknown", p)
+	}
+
+	// A failed scan that ingested the finding moves last_seen_scan without
+	// advancing last_covering_scan; the next covering absence is still Fixed.
+	failedPartial, err := st.CreateScan(ctx, types.ScanSpec{
+		Targets:   target.Hosts,
+		Templates: types.TemplateSelector{TemplateIDs: []string{"tpl-a"}, TemplatesCommit: "digest-test"},
+	}, ScanLink{TargetID: target.ID})
+	if err != nil {
+		t.Fatalf("create partial fail scan: %v", err)
+	}
+	createdAt = createdAt.Add(time.Minute)
+	if _, err := st.pool.Exec(ctx, `UPDATE scans SET created_at = $2 WHERE id = $1`, failedPartial, createdAt); err != nil {
+		t.Fatalf("order partial fail scan: %v", err)
+	}
+	rawPartial, _ := json.Marshal(finding("critical"))
+	if err := st.IngestFinding(ctx, failedPartial, target.ID, finding("critical"), rawPartial); err != nil {
+		t.Fatalf("ingest partial fail: %v", err)
+	}
+	if err := st.MarkFailed(ctx, failedPartial, "node died mid-ingest", "", ""); err != nil {
+		t.Fatalf("mark partial fail: %v", err)
+	}
+	if _, ok, err := st.ClaimScanNotification(ctx, failedPartial, NotifyKindFailed); err != nil || !ok {
+		t.Fatalf("claim partial fail: ok=%v err=%v", ok, err)
+	}
+	absenceAfterFail := nextScan([]string{"tpl-a"}, nil, endpoint)
+	p = mustClaimDigest(t, ctx, st, absenceAfterFail)
+	if p.Fixed.Critical != 1 || p.New.Total() != 0 || p.Changed.Total() != 0 {
+		t.Fatalf("absence after failed partial ingest = %+v, want 1 fixed critical", p)
+	}
+
+	// Startup orphan sweep writes a failed outbox row; claimed rows stay claimed.
+	orphanID, err := st.CreateScan(ctx, types.ScanSpec{
+		Targets:   target.Hosts,
+		Templates: types.TemplateSelector{TemplateIDs: []string{"tpl-a"}, TemplatesCommit: "digest-test"},
+	}, ScanLink{TargetID: target.ID})
+	if err != nil {
+		t.Fatalf("create orphan scan: %v", err)
+	}
+	n, err := st.FailOrphanedScans(ctx, "orphaned: backend restarted while scan was in progress")
+	if err != nil || n != 1 {
+		t.Fatalf("FailOrphanedScans = %d, %v want 1, nil", n, err)
+	}
+	rawFail, ok, err = st.ClaimScanNotification(ctx, orphanID, NotifyKindFailed)
+	if err != nil || !ok {
+		t.Fatalf("claim orphan failed: ok=%v err=%v", ok, err)
+	}
+	fp, err = ParseScanFailedPayload(rawFail)
+	if err != nil || fp.Reason != "orphaned: backend restarted while scan was in progress" {
+		t.Fatalf("orphan payload = %+v err=%v", fp, err)
+	}
+	pending, err := st.ListUnclaimedScanNotifications(ctx)
+	if err != nil {
+		t.Fatalf("list unclaimed: %v", err)
+	}
+	for _, ref := range pending {
+		if ref.ScanID == orphanID {
+			t.Fatalf("claimed orphan still listed: %+v", pending)
+		}
+	}
+	queuedAgain, err := st.CreateScan(ctx, types.ScanSpec{
+		Targets:   target.Hosts,
+		Templates: types.TemplateSelector{TemplateIDs: []string{"tpl-a"}, TemplatesCommit: "digest-test"},
+	}, ScanLink{TargetID: target.ID})
+	if err != nil {
+		t.Fatalf("create second orphan: %v", err)
+	}
+	if _, err := st.FailOrphanedScans(ctx, "orphaned again"); err != nil {
+		t.Fatalf("second FailOrphanedScans: %v", err)
+	}
+	pending, err = st.ListUnclaimedScanNotifications(ctx)
+	if err != nil {
+		t.Fatalf("list unclaimed after second orphan: %v", err)
+	}
+	foundQueued := false
+	for _, ref := range pending {
+		if ref.ScanID == queuedAgain && ref.Kind == NotifyKindFailed {
+			foundQueued = true
+		}
+		if ref.ScanID == orphanID {
+			t.Fatalf("already-claimed orphan listed after later sweep: %+v", pending)
+		}
+	}
+	if !foundQueued {
+		t.Fatalf("unclaimed orphan missing from list: %+v", pending)
+	}
 }
 
 func mustClaimDigest(t *testing.T, ctx context.Context, st *Store, scanID string) ScanDigestPayload {

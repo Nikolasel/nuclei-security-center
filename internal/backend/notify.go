@@ -14,6 +14,7 @@ const maxDigestFindingsInMail = 100
 
 type scanNotifyStore interface {
 	ClaimScanNotification(ctx context.Context, scanID, kind string) (payload []byte, ok bool, err error)
+	ListUnclaimedScanNotifications(ctx context.Context) ([]store.ScanNotificationRef, error)
 	GetScan(ctx context.Context, id string) (store.ScanRow, error)
 }
 
@@ -89,6 +90,29 @@ func (n *ScanNotifier) Notify(ctx context.Context, scanID, kind string) error {
 	return nil
 }
 
+// NotifyUnclaimed claims and sends every outbox row with claimed_at NULL.
+// Already-claimed rows are not listed and are not resent. Empty digest
+// payloads are claimed and skipped, matching Notify.
+func (n *ScanNotifier) NotifyUnclaimed(ctx context.Context) error {
+	if n == nil || n.sender == nil {
+		return nil
+	}
+	refs, err := n.store.ListUnclaimedScanNotifications(ctx)
+	if err != nil {
+		return err
+	}
+	var first error
+	for _, ref := range refs {
+		if err := n.Notify(ctx, ref.ScanID, ref.Kind); err != nil {
+			n.log.Error("scan notification", "scan_id", ref.ScanID, "kind", ref.Kind, "err", err)
+			if first == nil {
+				first = err
+			}
+		}
+	}
+	return first
+}
+
 func composeDigestMail(base string, scan store.ScanRow, p store.ScanDigestPayload) MailMessage {
 	scanURL := joinURL(base, "/scans/"+scan.ID)
 	title := "Scan result changes"
@@ -127,7 +151,7 @@ func composeDigestMail(base string, scan store.ScanRow, p store.ScanDigestPayloa
 	if scan.ScanPolicyName != "" {
 		fmt.Fprintf(&htmlBody, `<p>Policy: %s</p>`, html.EscapeString(scan.ScanPolicyName))
 	}
-	htmlBody.WriteString("<table><thead><tr><th>Status</th><th>Critical</th><th>High</th><th>Medium</th><th>Low</th><th>Info</th></tr></thead><tbody>")
+	htmlBody.WriteString("<table><thead><tr><th>Status</th><th>Critical</th><th>High</th><th>Medium</th><th>Low</th><th>Info</th><th>Unknown</th></tr></thead><tbody>")
 	writeCountsHTML(&htmlBody, "New", p.New)
 	writeCountsHTML(&htmlBody, "Changed", p.Changed)
 	writeCountsHTML(&htmlBody, "Fixed", p.Fixed)
@@ -174,13 +198,13 @@ func writeCountsText(b *strings.Builder, label string, c store.SeverityCounts) {
 	if c.Total() == 0 {
 		return
 	}
-	fmt.Fprintf(b, "%s: critical=%d high=%d medium=%d low=%d info=%d (total %d)\n",
-		label, c.Critical, c.High, c.Medium, c.Low, c.Info, c.Total())
+	fmt.Fprintf(b, "%s: critical=%d high=%d medium=%d low=%d info=%d unknown=%d (total %d)\n",
+		label, c.Critical, c.High, c.Medium, c.Low, c.Info, c.Unknown, c.Total())
 }
 
 func writeCountsHTML(b *strings.Builder, label string, c store.SeverityCounts) {
-	fmt.Fprintf(b, `<tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td></tr>`,
-		html.EscapeString(label), c.Critical, c.High, c.Medium, c.Low, c.Info)
+	fmt.Fprintf(b, `<tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td></tr>`,
+		html.EscapeString(label), c.Critical, c.High, c.Medium, c.Low, c.Info, c.Unknown)
 }
 
 func joinURL(base, path string) string {

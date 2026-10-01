@@ -68,6 +68,21 @@ func (f *fakeNotifyStore) GetScan(_ context.Context, id string) (store.ScanRow, 
 	return f.scan, nil
 }
 
+func (f *fakeNotifyStore) ListUnclaimedScanNotifications(_ context.Context) ([]store.ScanNotificationRef, error) {
+	var out []store.ScanNotificationRef
+	for key := range f.payloads {
+		if f.claimed[key] {
+			continue
+		}
+		scanID, kind, ok := strings.Cut(key, "/")
+		if !ok {
+			continue
+		}
+		out = append(out, store.ScanNotificationRef{ScanID: scanID, Kind: kind})
+	}
+	return out, nil
+}
+
 func TestScanNotifierEmptyDeltaDoesNotSend(t *testing.T) {
 	raw, _ := json.Marshal(store.ScanDigestPayload{})
 	st := &fakeNotifyStore{payloads: map[string][]byte{"s1/" + store.NotifyKindDigest: raw}}
@@ -140,7 +155,7 @@ func TestComposeDigestMailCountsAndLinks(t *testing.T) {
 	if !strings.Contains(msg.Text, "http://nsc.example/findings/42") {
 		t.Errorf("text missing finding link: %s", msg.Text)
 	}
-	if !strings.Contains(msg.HTML, "Changed") || !strings.Contains(msg.HTML, "Fixed") {
+	if !strings.Contains(msg.HTML, "Changed") || !strings.Contains(msg.HTML, "Fixed") || !strings.Contains(msg.HTML, "Unknown") {
 		t.Errorf("html missing buckets: %s", msg.HTML)
 	}
 }
@@ -162,11 +177,43 @@ func TestSMTPConfigFromEnvDisabled(t *testing.T) {
 	}
 }
 
+func TestScanNotifierNotifyUnclaimedSendsOnce(t *testing.T) {
+	digest, _ := json.Marshal(store.ScanDigestPayload{
+		New: store.SeverityCounts{Unknown: 1},
+		Findings: []store.ScanDigestFinding{
+			{ID: 1, Status: "new", Severity: "unknown", TemplateID: "t"},
+		},
+	})
+	failed, _ := json.Marshal(store.ScanFailedPayload{Reason: "orphaned"})
+	st := &fakeNotifyStore{payloads: map[string][]byte{
+		"s1/" + store.NotifyKindDigest: digest,
+		"s2/" + store.NotifyKindFailed: failed,
+	}}
+	st.claimed = map[string]bool{"s1/" + store.NotifyKindDigest: true}
+	sender := &recordingSender{}
+	n := NewScanNotifier(st, sender, "http://nsc.example", "nsc@example", []string{"ops@example"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := n.NotifyUnclaimed(context.Background()); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if got := sender.subjects(); len(got) != 1 || !strings.Contains(got[0], "failed") {
+		t.Fatalf("sent %v, want only the unclaimed failed mail", got)
+	}
+	if err := n.NotifyUnclaimed(context.Background()); err != nil {
+		t.Fatalf("second drain: %v", err)
+	}
+	if got := sender.subjects(); len(got) != 1 {
+		t.Fatalf("second drain resent: %v", got)
+	}
+}
+
 func TestScanDigestPayloadHasDelta(t *testing.T) {
 	if (store.ScanDigestPayload{}).HasDelta() {
 		t.Fatal("empty payload must not have a delta")
 	}
 	if !(store.ScanDigestPayload{Changed: store.SeverityCounts{Medium: 1}}).HasDelta() {
 		t.Fatal("changed count is a delta")
+	}
+	if !(store.ScanDigestPayload{New: store.SeverityCounts{Unknown: 1}}).HasDelta() {
+		t.Fatal("unknown severity count is a delta")
 	}
 }

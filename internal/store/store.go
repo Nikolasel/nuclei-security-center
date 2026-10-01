@@ -421,18 +421,31 @@ func (s *Store) SetScanSkippedFindingCount(ctx context.Context, scanID string, c
 // scan still queued/running when the backend starts up was orphaned by the
 // previous process exiting (crash, deploy, OOM) mid-run — nothing will ever
 // finish driving it otherwise, and it would sit in the UI as "running"
-// forever. Called once at startup, after migrations. Returns the count
-// reconciled.
+// forever. Called once at startup, after migrations. Inserts a `failed`
+// outbox row per orphan (same payload as MarkFailed) so a restart can mail
+// those failures. Returns the count reconciled.
 func (s *Store) FailOrphanedScans(ctx context.Context, reason string) (int64, error) {
-	tag, err := s.pool.Exec(ctx,
-		`UPDATE scans SET state = $1, error = $2, finished_at = now()
-		 WHERE state IN ($3, $4)`,
-		types.ScanFailed, reason, types.ScanQueued, types.ScanRunning,
-	)
+	var n int64
+	err := s.pool.QueryRow(ctx,
+		`WITH failed AS (
+		    UPDATE scans SET state = $1, error = $2, finished_at = now()
+		     WHERE state IN ($3, $4)
+		 RETURNING id, error
+		 ),
+		 ins AS (
+		 INSERT INTO scan_notification_outbox (scan_id, kind, payload)
+		 SELECT id, $5, jsonb_build_object('reason', coalesce(error, ''))
+		   FROM failed
+		 ON CONFLICT (scan_id, kind) DO NOTHING
+		 RETURNING scan_id
+		 )
+		 SELECT count(*) FROM failed LEFT JOIN ins ON FALSE`,
+		types.ScanFailed, reason, types.ScanQueued, types.ScanRunning, NotifyKindFailed,
+	).Scan(&n)
 	if err != nil {
 		return 0, err
 	}
-	return tag.RowsAffected(), nil
+	return n, nil
 }
 
 // MarkComplete records successful completion and the versions that ran. It also
@@ -521,7 +534,11 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 		             WHEN l.last_seen_scan = cs.id AND l.times_mitigated >= 1 THEN 'changed'
 		             WHEN l.last_seen_scan IS DISTINCT FROM cs.id
 		              AND c.prev_covering IS NOT NULL
-		              AND l.last_seen_scan IS NOT DISTINCT FROM c.prev_covering
+		              AND EXISTS (
+		                  SELECT 1 FROM findings observed
+		                   WHERE observed.finding_id = l.id
+		                     AND observed.scan_id = c.prev_covering
+		              )
 		             THEN 'fixed'
 		             ELSE NULL
 		           END AS status,
@@ -530,7 +547,8 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 		             WHEN 'high' THEN 'high'
 		             WHEN 'medium' THEN 'medium'
 		             WHEN 'low' THEN 'low'
-		             ELSE 'info'
+		             WHEN 'info' THEN 'info'
+		             ELSE 'unknown'
 		           END AS severity,
 		           l.template_id, l.name, l.host, l.matched_at
 		      FROM covering_update u
@@ -549,21 +567,24 @@ func (s *Store) MarkComplete(ctx context.Context, scanID, nucleiVersion, templat
 		                 'high', count(*) FILTER (WHERE status = 'new' AND severity = 'high'),
 		                 'medium', count(*) FILTER (WHERE status = 'new' AND severity = 'medium'),
 		                 'low', count(*) FILTER (WHERE status = 'new' AND severity = 'low'),
-		                 'info', count(*) FILTER (WHERE status = 'new' AND severity = 'info')
+		                 'info', count(*) FILTER (WHERE status = 'new' AND severity = 'info'),
+		                 'unknown', count(*) FILTER (WHERE status = 'new' AND severity = 'unknown')
 		             ),
 		             'changed', jsonb_build_object(
 		                 'critical', count(*) FILTER (WHERE status = 'changed' AND severity = 'critical'),
 		                 'high', count(*) FILTER (WHERE status = 'changed' AND severity = 'high'),
 		                 'medium', count(*) FILTER (WHERE status = 'changed' AND severity = 'medium'),
 		                 'low', count(*) FILTER (WHERE status = 'changed' AND severity = 'low'),
-		                 'info', count(*) FILTER (WHERE status = 'changed' AND severity = 'info')
+		                 'info', count(*) FILTER (WHERE status = 'changed' AND severity = 'info'),
+		                 'unknown', count(*) FILTER (WHERE status = 'changed' AND severity = 'unknown')
 		             ),
 		             'fixed', jsonb_build_object(
 		                 'critical', count(*) FILTER (WHERE status = 'fixed' AND severity = 'critical'),
 		                 'high', count(*) FILTER (WHERE status = 'fixed' AND severity = 'high'),
 		                 'medium', count(*) FILTER (WHERE status = 'fixed' AND severity = 'medium'),
 		                 'low', count(*) FILTER (WHERE status = 'fixed' AND severity = 'low'),
-		                 'info', count(*) FILTER (WHERE status = 'fixed' AND severity = 'info')
+		                 'info', count(*) FILTER (WHERE status = 'fixed' AND severity = 'info'),
+		                 'unknown', count(*) FILTER (WHERE status = 'fixed' AND severity = 'unknown')
 		             ),
 		             'findings', coalesce(jsonb_agg(
 		                 jsonb_build_object(

@@ -102,12 +102,17 @@ The digest uses the same evidence rules as the findings list:
 | Changed | Resurfaced: previously mitigated, observed again (`times_mitigated` bumped). |
 | Fixed | Absent from this covering scan, and the previous covering scan had observed it. Announced once. |
 
-Counts are by **effective severity** (a recast wins). Live `accepted` / `false_positive` findings
-are omitted; `active` findings never appear. Unproven request-trace coverage cannot produce Fixed
-lines. Metadata drift (template sync rewriting name/severity) and analyst triage edits are not
-mailed. Links point at `APP_BASE_URL` `/scans/{id}` and `/findings/{id}`; recipients sign in
-normally.
+Counts are by **effective severity** (a recast wins): critical / high / medium / low / info,
+plus **unknown** for Nuclei's `unknown` and any other non-standard value. Live `accepted` /
+`false_positive` findings are omitted; `active` findings never appear. Unproven request-trace
+coverage cannot produce Fixed lines. A covering scan that does not observe a finding still
+mails Fixed when the previous covering scan had an occurrence, even if a later failed scan
+ingested a partial result and moved `last_seen_scan`. Metadata drift (template sync rewriting
+name/severity) and analyst triage edits are not mailed. Links point at `APP_BASE_URL`
+`/scans/{id}` and `/findings/{id}`; recipients sign in normally.
 
 Mail is a data exit (hostnames, paths, template names). Keep `SMTP_TO` on a small operator list.
 Sending is not an audit `event_id`; success and failure are ordinary structured logs. PostgreSQL
-holds an at-most-once outbox row so a backend restart does not resend.
+holds an at-most-once outbox row so a backend restart does not resend. Unclaimed rows (crash
+after the terminal write, or scans failed as orphans on startup) are claimed and sent once when
+the notifier starts; already-claimed rows are not retried.

@@ -125,7 +125,9 @@ URLs.
 ## Scan email notifications
 
 Unset `SMTP_HOST` leaves mail off. A completed scan with no New / Changed / Fixed delta sends
-nothing. Failed scans notify; operator-cancelled scans do not. Send failures are logged and never
+nothing. Failed scans notify (including scans marked failed as orphans on backend startup);
+operator-cancelled scans do not. Non-standard severities (including Nuclei's `unknown`) are
+counted in an `unknown` bucket rather than `info`. Send failures are logged and never
 change the scan's terminal state. Recipients authenticate through the normal session; mails link to
 `APP_BASE_URL` scan and finding pages (no presigned URLs). `SMTP_PASSWORD_FILE` is re-read on each
 send so a secret agent can rotate credentials.

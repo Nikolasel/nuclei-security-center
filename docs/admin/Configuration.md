@@ -150,7 +150,7 @@ send so a secret agent can rotate credentials.
 | Variable | Default | Purpose |
 |---|---|---|
 | `SMTP_HOST` | unset (mail disabled) | SMTP server hostname. Unset disables notifications without failing startup. |
-| `SMTP_PORT` | `587` | SMTP port. |
+| `SMTP_PORT` | `587` | SMTP port. Must be 1-65535; invalid values disable mail. |
 | `SMTP_USERNAME` | unset | SMTP AUTH username. Leave empty for unauthenticated relays. |
 | `SMTP_PASSWORD` | unset | SMTP AUTH password. Ignored when SMTP_PASSWORD_FILE is set. |
 | `SMTP_PASSWORD_FILE` | unset | File containing only the SMTP password. Re-read before each send. |

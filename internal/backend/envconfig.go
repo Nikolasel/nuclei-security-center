@@ -134,7 +134,7 @@ var backendEnvRegistry = []envSpec{
 	{Name: "EXPORT_SPOOL_DIR", Group: envGroupExport, Kind: envKindPath, Description: "Writable scratch directory for findings exports and scan-bundle imports."},
 
 	{Name: "SMTP_HOST", Group: envGroupMail, Kind: envKindString, Description: "SMTP server hostname. Unset disables notifications without failing startup."},
-	{Name: "SMTP_PORT", Group: envGroupMail, Default: "587", Kind: envKindTCPPort, Description: "SMTP port."},
+	{Name: "SMTP_PORT", Group: envGroupMail, Default: "587", Kind: envKindTCPPort, Description: "SMTP port. Must be 1-65535; invalid values disable mail."},
 	{Name: "SMTP_USERNAME", Group: envGroupMail, Kind: envKindString, Description: "SMTP AUTH username. Leave empty for unauthenticated relays."},
 	{Name: "SMTP_PASSWORD", Group: envGroupMail, Sensitive: true, Kind: envKindSecret, Description: "SMTP AUTH password. Ignored when SMTP_PASSWORD_FILE is set."},
 	{Name: "SMTP_PASSWORD_FILE", Group: envGroupMail, Sensitive: true, Kind: envKindPath, Description: "File containing only the SMTP password. Re-read before each send."},
@@ -202,7 +202,7 @@ func resolveEnvSpec(spec envSpec) EnvVariable {
 		row.Effective = strPtr(strconv.Itoa(effectiveInt(raw, spec.Default)))
 		return row
 	case envKindTCPPort:
-		row.Effective = strPtr(strconv.Itoa(effectiveTCPPort(raw, spec.Default)))
+		row.Effective = strPtr(effectiveTCPPort(raw, spec.Default))
 		return row
 	case envKindFloat:
 		row.Effective = strPtr(formatFloat(effectiveFloat(raw, spec.Default)))
@@ -293,21 +293,24 @@ func effectiveInt(raw, def string) int {
 	return v
 }
 
-// effectiveTCPPort matches SMTPConfigFromEnv: empty uses the default, values
-// outside 1–65535 are rejected and fall back to that default.
-func effectiveTCPPort(raw, def string) int {
+const invalidTCPPortEffective = "(invalid, mail disabled)"
+
+// effectiveTCPPort matches SMTPConfigFromEnv: empty uses the default; a
+// non-empty value outside 1–65535 is an error that disables mail rather than
+// falling back.
+func effectiveTCPPort(raw, def string) string {
 	fallback, _ := strconv.Atoi(def)
 	if fallback < 1 || fallback > 65535 {
 		fallback = 587
 	}
 	if strings.TrimSpace(raw) == "" {
-		return fallback
+		return strconv.Itoa(fallback)
 	}
 	v, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil || v < 1 || v > 65535 {
-		return fallback
+		return invalidTCPPortEffective
 	}
-	return v
+	return strconv.Itoa(v)
 }
 
 func effectiveFloat(raw, def string) float64 {

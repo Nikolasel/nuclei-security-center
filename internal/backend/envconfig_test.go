@@ -195,17 +195,21 @@ func TestResolveEnvConfigParsesEffectiveValues(t *testing.T) {
 }
 
 func TestEffectiveTCPPortRejectsOutOfRange(t *testing.T) {
-	t.Setenv("SMTP_PORT", "70000")
-	for _, v := range resolveEnvConfig() {
-		if v.Name != "SMTP_PORT" {
-			continue
-		}
-		if v.Effective == nil || *v.Effective != "587" {
-			t.Fatalf("SMTP_PORT effective = %v, want 587 (out of range rejected)", v.Effective)
-		}
-		return
+	for _, raw := range []string{"70000", "not-a-port", "0"} {
+		t.Run(raw, func(t *testing.T) {
+			t.Setenv("SMTP_PORT", raw)
+			for _, v := range resolveEnvConfig() {
+				if v.Name != "SMTP_PORT" {
+					continue
+				}
+				if v.Effective == nil || *v.Effective != invalidTCPPortEffective {
+					t.Fatalf("SMTP_PORT effective = %v, want %q", v.Effective, invalidTCPPortEffective)
+				}
+				return
+			}
+			t.Fatal("SMTP_PORT missing from registry")
+		})
 	}
-	t.Fatal("SMTP_PORT missing from registry")
 }
 
 func TestBackendEnvRegistryMatchesConfigurationDocs(t *testing.T) {

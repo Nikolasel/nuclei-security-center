@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { CircleHelp } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type EnvVariable } from "../api";
 import { hasRole, useMe } from "../auth";
 import { Button, Card, cn, ErrorText, Field, Input, Spinner } from "../components/ui";
@@ -92,6 +92,7 @@ function EnvConfigTable({ variables }: { variables: EnvVariable[] }) {
 
 function EnvVarInfo({ name, description }: { name: string; description: string }) {
   const [open, setOpen] = useState(false);
+  const lastPointerType = useRef<string>("");
   if (!description) return null;
   return (
     <Tooltip.Root open={open} delayDuration={0} onOpenChange={setOpen}>
@@ -102,11 +103,13 @@ function EnvVarInfo({ name, description }: { name: string; description: string }
           aria-expanded={open}
           className="shrink-0 rounded p-0.5 text-neutral-400 hover:text-neutral-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-indigo-500 dark:hover:text-neutral-200"
           onPointerDown={(e) => {
-            // Mouse/keyboard: Radix opens on hover/focus via onOpenChange.
-            // Touch/pen have no hover; toggle here and preventDefault so the
-            // following click/focus does not also fire onOpenChange(true) and
-            // immediately fight the toggle.
-            if (e.pointerType === "touch" || e.pointerType === "pen") {
+            lastPointerType.current = e.pointerType;
+          }}
+          onClick={(e) => {
+            // Touch/pen have no hover. Toggle here and preventDefault so
+            // Radix Trigger's composed onClick (context.onClose) does not
+            // immediately close the tooltip that this click just opened.
+            if (lastPointerType.current === "touch" || lastPointerType.current === "pen") {
               e.preventDefault();
               setOpen((v) => !v);
             }

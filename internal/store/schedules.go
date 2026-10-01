@@ -22,6 +22,7 @@ type Schedule struct {
 	ScanPolicyID string     `json:"scan_policy_id"`
 	TargetID     string     `json:"target_id"`
 	Cron         string     `json:"cron"`
+	Timezone     string     `json:"timezone"`
 	Enabled      bool       `json:"enabled"`
 	NextRunAt    *time.Time `json:"next_run_at,omitempty"`
 	LastRunAt    *time.Time `json:"last_run_at,omitempty"`
@@ -31,14 +32,14 @@ type Schedule struct {
 	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
-const scheduleCols = `id, name, scan_policy_id, target_id, cron, enabled,
+const scheduleCols = `id, name, scan_policy_id, target_id, cron, timezone, enabled,
 	next_run_at, last_run_at, last_scan_id, created_by, created_at, updated_at`
 
 // scanSchedule reads one schedule row (column order must match scheduleCols).
 func scanSchedule(row pgx.Row) (Schedule, error) {
 	var s Schedule
 	var lastScanID, createdBy *string
-	err := row.Scan(&s.ID, &s.Name, &s.ScanPolicyID, &s.TargetID, &s.Cron, &s.Enabled,
+	err := row.Scan(&s.ID, &s.Name, &s.ScanPolicyID, &s.TargetID, &s.Cron, &s.Timezone, &s.Enabled,
 		&s.NextRunAt, &s.LastRunAt, &lastScanID, &createdBy, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		return Schedule{}, err
@@ -52,11 +53,14 @@ func scanSchedule(row pgx.Row) (Schedule, error) {
 // backend, which owns the cron parser) so no cron logic lives in the store.
 func (s *Store) CreateSchedule(ctx context.Context, in Schedule) (Schedule, error) {
 	in.ID = types.NewID()
+	if in.Timezone == "" {
+		in.Timezone = "UTC"
+	}
 	row := s.pool.QueryRow(ctx,
-		`INSERT INTO schedules (id, name, scan_policy_id, target_id, cron, enabled, next_run_at, created_by)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		`INSERT INTO schedules (id, name, scan_policy_id, target_id, cron, timezone, enabled, next_run_at, created_by)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 RETURNING `+scheduleCols,
-		in.ID, in.Name, in.ScanPolicyID, in.TargetID, in.Cron, in.Enabled, in.NextRunAt, nullStr(in.CreatedBy),
+		in.ID, in.Name, in.ScanPolicyID, in.TargetID, in.Cron, in.Timezone, in.Enabled, in.NextRunAt, nullStr(in.CreatedBy),
 	)
 	out, err := scanSchedule(row)
 	if err != nil {
@@ -113,15 +117,19 @@ func (s *Store) UpdateSchedule(ctx context.Context, id string, in Schedule, enab
 	if enabled != nil {
 		enabledParam = *enabled
 	}
+	timezoneParam := in.Timezone
+	if timezoneParam == "" {
+		timezoneParam = "UTC"
+	}
 	row := s.pool.QueryRow(ctx,
 		`UPDATE schedules
-		 SET name = $2, scan_policy_id = $3, target_id = $4, cron = $5,
-		     enabled = COALESCE($6::boolean, enabled),
-		     next_run_at = CASE WHEN COALESCE($6::boolean, enabled) THEN $7::timestamptz ELSE NULL END,
+		 SET name = $2, scan_policy_id = $3, target_id = $4, cron = $5, timezone = $6,
+		     enabled = COALESCE($7::boolean, enabled),
+		     next_run_at = CASE WHEN COALESCE($7::boolean, enabled) THEN $8::timestamptz ELSE NULL END,
 		     updated_at = now()
 		 WHERE id = $1
 		 RETURNING `+scheduleCols,
-		id, in.Name, in.ScanPolicyID, in.TargetID, in.Cron, enabledParam, in.NextRunAt,
+		id, in.Name, in.ScanPolicyID, in.TargetID, in.Cron, timezoneParam, enabledParam, in.NextRunAt,
 	)
 	out, err := scanSchedule(row)
 	if err != nil {

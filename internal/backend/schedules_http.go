@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
@@ -31,7 +32,7 @@ func (s *Server) handleCreateSchedule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	next, err := scheduleNextRun(in.Cron, in.Enabled, time.Now())
+	next, err := scheduleNextRun(in.Cron, in.Timezone, in.Enabled, time.Now())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -62,6 +63,7 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 		ScanPolicyID string `json:"scan_policy_id"`
 		TargetID     string `json:"target_id"`
 		Cron         string `json:"cron"`
+		Timezone     string `json:"timezone"`
 		Enabled      *bool  `json:"enabled"`
 	}
 	if !decodeJSON(w, r, &req) {
@@ -72,6 +74,17 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 		ScanPolicyID: req.ScanPolicyID,
 		TargetID:     req.TargetID,
 		Cron:         req.Cron,
+		Timezone:     req.Timezone,
+	}
+	// An omitted timezone on PUT preserves the stored zone so enable/disable
+	// and other partial edits cannot silently reset the schedule to UTC.
+	if strings.TrimSpace(in.Timezone) == "" {
+		existing, err := s.store.GetSchedule(r.Context(), id)
+		if err != nil {
+			s.writeStoreErr(w, err)
+			return
+		}
+		in.Timezone = existing.Timezone
 	}
 	if err := validateSchedule(&in); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -79,7 +92,7 @@ func (s *Server) handleUpdateSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	// Recompute the next fire time for the enabled-true case; the store
 	// derives the effective next_run_at atomically from COALESCE(enabled).
-	nextTrue, err := scheduleNextRun(in.Cron, true, time.Now())
+	nextTrue, err := scheduleNextRun(in.Cron, in.Timezone, true, time.Now())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

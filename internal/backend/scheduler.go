@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
+	_ "time/tzdata" // IANA DB for distroless/UBI-micro (no tzdata package)
 
 	"github.com/robfig/cron/v3"
 
@@ -20,14 +22,79 @@ var cronParser = cron.NewParser(
 	cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
 )
 
+// cronTZPrefix reports a robfig TZ= / CRON_TZ= prefix. Parser.Parse applies
+// that prefix to SpecSchedule.Location; the timezone column is the only zone
+// we honor, so callers reject the prefix instead of letting it fight the column.
+func cronTZPrefix(spec string) (zone, rest string, ok bool) {
+	spec = strings.TrimSpace(spec)
+	var prefix string
+	switch {
+	case strings.HasPrefix(spec, "CRON_TZ="):
+		prefix = "CRON_TZ="
+	case strings.HasPrefix(spec, "TZ="):
+		prefix = "TZ="
+	default:
+		return "", spec, false
+	}
+	body := spec[len(prefix):]
+	if i := strings.IndexByte(body, ' '); i >= 0 {
+		return body[:i], strings.TrimSpace(body[i+1:]), true
+	}
+	return body, "", true
+}
+
+func cronTZPrefixError(zone string) error {
+	if zone == "" {
+		return errors.New("cron must not start with TZ= or CRON_TZ=; set timezone instead")
+	}
+	return fmt.Errorf("cron must not start with TZ= or CRON_TZ=; set timezone %q instead", zone)
+}
+
 // parseCron validates a cron expression, returning its compiled schedule.
 func parseCron(spec string) (cron.Schedule, error) {
+	if zone, _, ok := cronTZPrefix(spec); ok {
+		return nil, cronTZPrefixError(zone)
+	}
 	return cronParser.Parse(spec)
 }
 
-// nextRun returns the next fire time of a cron expression strictly after `after`.
-func nextRun(spec string, after time.Time) (time.Time, error) {
+// loadTimezone resolves an IANA timezone name. Empty/omitted names are UTC
+// (the previous process-local behavior in the container). "Local" is rejected
+// because it is process-dependent, not a portable IANA name.
+func loadTimezone(name string) (*time.Location, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return time.UTC, nil
+	}
+	if strings.EqualFold(name, "Local") {
+		return nil, fmt.Errorf("unknown timezone %q", name)
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return nil, fmt.Errorf("unknown timezone %q", name)
+	}
+	return loc, nil
+}
+
+// parseCronIn compiles spec and evaluates it in loc (UTC when loc is nil).
+func parseCronIn(spec string, loc *time.Location) (cron.Schedule, error) {
 	sched, err := parseCron(spec)
+	if err != nil {
+		return nil, err
+	}
+	if loc == nil {
+		loc = time.UTC
+	}
+	if specSched, ok := sched.(*cron.SpecSchedule); ok {
+		specSched.Location = loc
+	}
+	return sched, nil
+}
+
+// nextRun returns the next fire time of a cron expression strictly after `after`,
+// interpreting clock fields in loc.
+func nextRun(spec string, after time.Time, loc *time.Location) (time.Time, error) {
+	sched, err := parseCronIn(spec, loc)
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -118,7 +185,18 @@ func capDueSchedules(due []store.Schedule, max int) []store.Schedule {
 func (s *Scheduler) dispatch(ctx context.Context, sc store.Schedule, now time.Time) {
 	log := s.log.With("schedule_id", sc.ID, "schedule", sc.Name)
 
-	next, err := nextRun(sc.Cron, now)
+	loc, err := loadTimezone(sc.Timezone)
+	if err != nil {
+		log.Error("invalid timezone on due schedule; disabling", "timezone", sc.Timezone, "err", err)
+		sc.Enabled = false
+		sc.NextRunAt = nil
+		disabled := false
+		if _, uerr := s.store.UpdateSchedule(ctx, sc.ID, sc, &disabled); uerr != nil {
+			log.Error("disable broken schedule", "err", uerr)
+		}
+		return
+	}
+	next, err := nextRun(sc.Cron, now, loc)
 	if err != nil {
 		// A bad cron would otherwise be re-selected every tick; disable it.
 		log.Error("invalid cron on due schedule; disabling", "cron", sc.Cron, "err", err)
@@ -165,11 +243,15 @@ func (s *Scheduler) dispatch(ctx context.Context, sc store.Schedule, now time.Ti
 // scheduleNextRun computes a schedule's next_run_at: the next cron fire time when
 // enabled, or nil when disabled (so the ticker's due-query skips it). Used by the
 // create/update handlers.
-func scheduleNextRun(cronSpec string, enabled bool, from time.Time) (*time.Time, error) {
+func scheduleNextRun(cronSpec, timezone string, enabled bool, from time.Time) (*time.Time, error) {
 	if !enabled {
 		return nil, nil
 	}
-	next, err := nextRun(cronSpec, from)
+	loc, err := loadTimezone(timezone)
+	if err != nil {
+		return nil, err
+	}
+	next, err := nextRun(cronSpec, from, loc)
 	if err != nil {
 		return nil, fmt.Errorf("cron %q: %w", cronSpec, err)
 	}

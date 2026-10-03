@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="supported-color-schemes" content="light">
+  <title>{{.Title}}</title>
+  <style>
+    /* Additive-only: everything below degrades gracefully. The layout lives in
+       inline styles; here only the page gutter adapts to mobile width and a
+       dark OS scheme (the white card stays white, so light rendering is never
+       affected). */
+    @media (max-width: 620px) {
+      .nsc-pad { padding-left: 20px !important; padding-right: 20px !important; }
+    }
+    @media (prefers-color-scheme: dark) {
+      body { background-color: #0a0a0a !important; }
+    }
+  </style>
+</head>
+<body style="margin:0;padding:0;background-color:#fafafa;-webkit-text-size-adjust:100%;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#fafafa;">
+    <tr>
+      <td align="center" style="padding:24px 12px;">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background-color:#ffffff;border:1px solid #e5e5e5;border-radius:8px;">
+
+          <tr>{{template "brand" .}}</tr>
+
+          <tr>
+            <td class="nsc-pad" style="padding:24px 32px 20px;">
+              <h1 style="margin:0;font-size:20px;font-weight:600;letter-spacing:-0.01em;color:#171717;">{{.Title}}</h1>
+              {{if .Policy}}<p style="margin:6px 0 0;font-size:13px;color:#737373;">Policy: {{.Policy}}</p>{{end}}
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:16px;">
+                <tr>
+                  <td style="background-color:#4f46e5;border-radius:6px;">
+                    <a href="{{.ScanURL}}" style="display:inline-block;padding:8px 14px;font-size:13px;font-weight:600;color:#ffffff;text-decoration:none;">Open scan</a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="nsc-pad" style="padding:20px 32px;border-top:1px solid #e5e5e5;">
+              <h2 style="margin:0 0 10px;font-size:14px;font-weight:600;color:#171717;">Counts</h2>
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;font-size:13px;color:#171717;">
+                <thead>
+                  <tr>
+                    <th align="left" style="padding:6px 8px 6px 0;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#737373;">Status</th>
+                    <th align="right" style="padding:6px 8px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#b91c1c;">Critical</th>
+                    <th align="right" style="padding:6px 8px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#c2410c;">High</th>
+                    <th align="right" style="padding:6px 8px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#b45309;">Medium</th>
+                    <th align="right" style="padding:6px 8px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#a16207;">Low</th>
+                    <th align="right" style="padding:6px 8px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#0369a1;">Info</th>
+                    <th align="right" style="padding:6px 8px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#737373;">Unknown</th>
+                    <th align="right" style="padding:6px 0 6px 8px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:#737373;">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {{range .Counts}}
+                  <tr>
+                    <td style="padding:8px 8px 8px 0;border-top:1px solid #e5e5e5;font-weight:600;white-space:nowrap;">{{.Status}}</td>
+                    {{range .Cells}}
+                    <td align="right" style="padding:8px;border-top:1px solid #e5e5e5;font-variant-numeric:tabular-nums;{{if .N}}color:{{sevColor .Severity}};font-weight:600;{{else}}color:#a3a3a3;{{end}}">{{.N}}</td>
+                    {{end}}
+                    <td align="right" style="padding:8px 0 8px 8px;border-top:1px solid #e5e5e5;font-variant-numeric:tabular-nums;font-weight:600;">{{.Total}}</td>
+                  </tr>
+                  {{end}}
+                </tbody>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td class="nsc-pad" style="padding:20px 32px 8px;border-top:1px solid #e5e5e5;">
+              <h2 style="margin:0 0 10px;font-size:14px;font-weight:600;color:#171717;">Findings</h2>
+              {{if .Findings}}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;width:100%;">
+                {{range .Findings}}
+                <tr>
+                  <td style="padding:10px 8px 10px 0;border-top:1px solid #e5e5e5;vertical-align:top;white-space:nowrap;">
+                    <span style="display:inline-block;background-color:{{.StatusBG}};color:{{.StatusFG}};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">{{.StatusText}}</span>
+                  </td>
+                  <td style="padding:10px 8px;border-top:1px solid #e5e5e5;vertical-align:top;white-space:nowrap;">
+                    <span style="display:inline-block;background-color:{{.SevBG}};color:{{.SevFG}};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">{{.Severity}}</span>
+                  </td>
+                  <td style="padding:10px 0;border-top:1px solid #e5e5e5;vertical-align:top;">
+                    <a href="{{.URL}}" style="font-size:13px;font-weight:600;color:#4f46e5;text-decoration:none;">{{.LinkText}}</a>
+                    {{if and .TemplateID (ne .LinkText .TemplateID)}}
+                    <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;font-size:12px;color:#737373;">{{.TemplateID}}</span>
+                    {{end}}
+                    {{if .MatchedAt}}
+                    <div style="margin-top:2px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;font-size:12px;color:#737373;word-break:break-all;">{{.MatchedAt}}</div>
+                    {{end}}
+                  </td>
+                </tr>
+                {{end}}
+              </table>
+              {{else}}
+              <p style="margin:0 0 10px;font-size:13px;color:#737373;">The per-finding list was left out of this mail. Open the scan to see the details.</p>
+              {{end}}
+            </td>
+          </tr>
+
+          {{if .ExtraCount}}
+          <tr>
+            <td class="nsc-pad" style="padding:4px 32px 20px;">
+              <a href="{{.ScanURL}}" style="font-size:13px;font-weight:600;color:#4f46e5;text-decoration:none;">View {{.ExtraCount}} more findings in the scan →</a>
+            </td>
+          </tr>
+          {{end}}
+
+          <tr>{{template "footer" .}}</tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

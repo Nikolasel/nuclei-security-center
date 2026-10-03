@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,13 +13,22 @@ import (
 	"github.com/wneessen/go-mail"
 )
 
+// MailImage is an inline image referenced by the HTML part as
+// <img src="cid:Name">. It is sent as a Content-ID MIME part, so the mail
+// still loads nothing from the network.
+type MailImage struct {
+	Name string
+	Data []byte
+}
+
 // MailMessage is one outbound notification. The SMTP client library builds MIME.
 type MailMessage struct {
-	From    string
-	To      []string
-	Subject string
-	Text    string
-	HTML    string
+	From         string
+	To           []string
+	Subject      string
+	Text         string
+	HTML         string
+	InlineImages []MailImage
 }
 
 // MailSender sends one composed message. Tests swap in a recorder.
@@ -123,6 +133,13 @@ func (s *smtpSender) Send(ctx context.Context, msg MailMessage) error {
 	m.SetBodyString(mail.TypeTextPlain, msg.Text)
 	if msg.HTML != "" {
 		m.AddAlternativeString(mail.TypeTextHTML, msg.HTML)
+	}
+	for _, img := range msg.InlineImages {
+		err := m.EmbedReader(img.Name, bytes.NewReader(img.Data),
+			mail.WithFileContentType(mail.ContentType("image/png")))
+		if err != nil {
+			return fmt.Errorf("embed %s: %w", img.Name, err)
+		}
 	}
 
 	opts := []mail.Option{

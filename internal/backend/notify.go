@@ -3,7 +3,6 @@ package backend
 import (
 	"context"
 	"fmt"
-	"html"
 	"log/slog"
 	"strings"
 
@@ -84,13 +83,19 @@ func (n *ScanNotifier) Notify(ctx context.Context, scanID, kind string) error {
 			n.log.Info("scan notification skipped", "scan_id", scanID, "kind", kind, "reason", "empty_delta")
 			return nil
 		}
-		msg = composeDigestMail(n.base, scan, payload)
+		msg, err = composeDigestMail(n.base, scan, payload)
+		if err != nil {
+			return err
+		}
 	case store.NotifyKindFailed:
 		payload, err := store.ParseScanFailedPayload(raw)
 		if err != nil {
 			return err
 		}
-		msg = composeFailedMail(n.base, scan, payload)
+		msg, err = composeFailedMail(n.base, scan, payload)
+		if err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("unknown scan notification kind %q", kind)
 	}
@@ -127,7 +132,7 @@ func (n *ScanNotifier) NotifyUnclaimed(ctx context.Context) error {
 	return first
 }
 
-func composeDigestMail(base string, scan store.ScanRow, p store.ScanDigestPayload) MailMessage {
+func composeDigestMail(base string, scan store.ScanRow, p store.ScanDigestPayload) (MailMessage, error) {
 	scanURL := joinURL(base, "/scans/"+scan.ID)
 	title := "Scan result changes"
 	if scan.TargetName != "" {
@@ -135,6 +140,12 @@ func composeDigestMail(base string, scan store.ScanRow, p store.ScanDigestPayloa
 	}
 	subject := fmt.Sprintf("[NSC] %s: %d new, %d changed, %d fixed",
 		shortScan(scan.ID), p.New.Total(), p.Changed.Total(), p.Fixed.Total())
+
+	listed := p.Findings
+	if len(listed) > maxDigestFindingsInMail {
+		listed = listed[:maxDigestFindingsInMail]
+	}
+	extra := len(p.Findings) - len(listed)
 
 	var text strings.Builder
 	fmt.Fprintf(&text, "%s\nScan: %s\n", title, scanURL)
@@ -146,53 +157,28 @@ func composeDigestMail(base string, scan store.ScanRow, p store.ScanDigestPayloa
 	writeCountsText(&text, "Changed (resurfaced)", p.Changed)
 	writeCountsText(&text, "Fixed", p.Fixed)
 	text.WriteString("\nFindings:\n")
-	listed := p.Findings
-	if len(listed) > maxDigestFindingsInMail {
-		listed = listed[:maxDigestFindingsInMail]
-	}
 	for _, f := range listed {
 		fmt.Fprintf(&text, "- [%s] %s %s  %s  %s\n  %s\n",
 			strings.ToUpper(f.Status), f.Severity, f.TemplateID, f.Name, f.MatchedAt,
 			joinURL(base, fmt.Sprintf("/findings/%d", f.ID)))
 	}
-	if extra := len(p.Findings) - len(listed); extra > 0 {
+	if extra > 0 {
 		fmt.Fprintf(&text, "… and %d more (open the scan in NSC)\n", extra)
 	}
 
-	var htmlBody strings.Builder
-	fmt.Fprintf(&htmlBody, `<p><strong>%s</strong></p><p><a href="%s">Open scan</a></p>`,
-		html.EscapeString(title), html.EscapeString(scanURL))
-	if scan.ScanPolicyName != "" {
-		fmt.Fprintf(&htmlBody, `<p>Policy: %s</p>`, html.EscapeString(scan.ScanPolicyName))
+	html, err := renderMailTemplate("digest.html", newDigestMailData(scan, base, title, subject, p, listed, extra))
+	if err != nil {
+		return MailMessage{}, err
 	}
-	htmlBody.WriteString("<table><thead><tr><th>Status</th><th>Critical</th><th>High</th><th>Medium</th><th>Low</th><th>Info</th><th>Unknown</th></tr></thead><tbody>")
-	writeCountsHTML(&htmlBody, "New", p.New)
-	writeCountsHTML(&htmlBody, "Changed", p.Changed)
-	writeCountsHTML(&htmlBody, "Fixed", p.Fixed)
-	htmlBody.WriteString("</tbody></table><p>Findings:</p><ul>")
-	for _, f := range listed {
-		fmt.Fprintf(&htmlBody, `<li>[%s] %s <a href="%s">%s</a> — %s at %s</li>`,
-			html.EscapeString(strings.ToUpper(f.Status)),
-			html.EscapeString(f.Severity),
-			html.EscapeString(joinURL(base, fmt.Sprintf("/findings/%d", f.ID))),
-			html.EscapeString(f.TemplateID),
-			html.EscapeString(f.Name),
-			html.EscapeString(f.MatchedAt),
-		)
-	}
-	htmlBody.WriteString("</ul>")
-	if extra := len(p.Findings) - len(listed); extra > 0 {
-		fmt.Fprintf(&htmlBody, `<p>… and %d more.</p>`, extra)
-	}
-
 	return MailMessage{
-		Subject: subject,
-		Text:    text.String(),
-		HTML:    htmlBody.String(),
-	}
+		Subject:      subject,
+		Text:         text.String(),
+		HTML:         html,
+		InlineImages: mailLogoInline(),
+	}, nil
 }
 
-func composeFailedMail(base string, scan store.ScanRow, p store.ScanFailedPayload) MailMessage {
+func composeFailedMail(base string, scan store.ScanRow, p store.ScanFailedPayload) (MailMessage, error) {
 	scanURL := joinURL(base, "/scans/"+scan.ID)
 	reason := p.Reason
 	if reason == "" {
@@ -202,10 +188,16 @@ func composeFailedMail(base string, scan store.ScanRow, p store.ScanFailedPayloa
 		reason = "scan failed"
 	}
 	subject := fmt.Sprintf("[NSC] Scan failed %s", shortScan(scan.ID))
+	title := "Scan failed"
+	if scan.TargetName != "" {
+		title = "Scan failed — " + scan.TargetName
+	}
 	text := fmt.Sprintf("A scan failed.\nScan: %s\nReason: %s\n", scanURL, reason)
-	htmlBody := fmt.Sprintf(`<p>A scan failed.</p><p><a href="%s">Open scan</a></p><p>Reason: %s</p>`,
-		html.EscapeString(scanURL), html.EscapeString(reason))
-	return MailMessage{Subject: subject, Text: text, HTML: htmlBody}
+	html, err := renderMailTemplate("failed.html", newFailedMailData(scan, base, title, subject, reason))
+	if err != nil {
+		return MailMessage{}, err
+	}
+	return MailMessage{Subject: subject, Text: text, HTML: html, InlineImages: mailLogoInline()}, nil
 }
 
 func writeCountsText(b *strings.Builder, label string, c store.SeverityCounts) {
@@ -214,11 +206,6 @@ func writeCountsText(b *strings.Builder, label string, c store.SeverityCounts) {
 	}
 	fmt.Fprintf(b, "%s: critical=%d high=%d medium=%d low=%d info=%d unknown=%d (total %d)\n",
 		label, c.Critical, c.High, c.Medium, c.Low, c.Info, c.Unknown, c.Total())
-}
-
-func writeCountsHTML(b *strings.Builder, label string, c store.SeverityCounts) {
-	fmt.Fprintf(b, `<tr><td>%s</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td><td>%d</td></tr>`,
-		html.EscapeString(label), c.Critical, c.High, c.Medium, c.Low, c.Info, c.Unknown)
 }
 
 func joinURL(base, path string) string {

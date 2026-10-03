@@ -8,17 +8,31 @@ must survive with nothing but these attributes.
 Colors mirror the web app's light theme (docs/UI_STYLE_GUIDE.md): neutral
 surfaces, indigo links/buttons, the severity ramp red→orange→amber→yellow→sky
 and the slate-950/cyan brand bar from web/src/components/Brand.tsx.
+
+Typography mirrors web/src/index.css: the system UI sans stack sits inline on
+<body> and every table cell, because many clients ignore <style> blocks and
+Outlook doesn't inherit fonts into tables; the mono stack (docs/
+UI_STYLE_GUIDE.md) is kept inline for machine values only.
 */}}
 
 {{define "brand"}}
-<td style="background-color:#020617;padding:18px 32px;border-radius:8px 8px 0 0;">
-  <span style="font-size:11px;font-weight:700;letter-spacing:0.22em;text-transform:uppercase;color:#67e8f9;">Nuclei</span>
-  <span style="display:block;margin-top:2px;font-size:14px;font-weight:600;letter-spacing:0.02em;color:#ffffff;">Security Center</span>
+<td style="background-color:#020617;padding:18px 32px;border-radius:8px 8px 0 0;font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+    <tr>
+      <td style="padding-right:12px;vertical-align:middle;">
+        <img src="cid:nuclei-logo.png" alt="" width="36" height="36" style="display:block;width:36px;height:36px;border:0;">
+      </td>
+      <td style="vertical-align:middle;font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+        <span style="display:block;font-size:11px;font-weight:700;letter-spacing:0.22em;text-transform:uppercase;color:#67e8f9;">Nuclei</span>
+        <span style="display:block;margin-top:2px;font-size:14px;font-weight:600;letter-spacing:0.02em;color:#ffffff;">Security Center</span>
+      </td>
+    </tr>
+  </table>
 </td>
 {{end}}
 
 {{define "footer"}}
-<td class="nsc-pad" style="padding:16px 32px;background-color:#fafafa;border-top:1px solid #e5e5e5;border-radius:0 0 8px 8px;">
+<td class="nsc-pad" style="padding:16px 32px;background-color:#fafafa;border-top:1px solid #e5e5e5;border-radius:0 0 8px 8px;font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
   <div style="font-size:12px;color:#737373;">
     Scan <span style="font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,'Liberation Mono',monospace;">{{.ScanID}}</span>{{if .Policy}} · Policy {{.Policy}}{{end}}
   </div>

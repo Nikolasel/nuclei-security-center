@@ -191,15 +191,52 @@ func TestMailHTMLHasNoExternalResources(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, html := range map[string]string{"digest": digest.HTML, "failed": failed.HTML} {
-		for _, banned := range []string{"<img", "src=", "url(", "@import", "<link"} {
+		for _, banned := range []string{"url(", "@import", "<link"} {
 			if strings.Contains(html, banned) {
 				t.Errorf("%s mail contains %q; mails must load no external resources", name, banned)
+			}
+		}
+		// The only allowed src is the inline CID logo; anything else would be
+		// a network fetch (remote image) or a broken reference.
+		for _, m := range regexp.MustCompile(`src="([^"]*)"`).FindAllStringSubmatch(html, -1) {
+			if m[1] != mailLogoCID {
+				t.Errorf("%s mail has a non-inline src %q; only %q may load", name, m[1], mailLogoCID)
 			}
 		}
 		for _, m := range regexp.MustCompile(`href="([^"]*)"`).FindAllStringSubmatch(html, -1) {
 			if !strings.HasPrefix(m[1], base) {
 				t.Errorf("%s mail has a non-app link %q", name, m[1])
 			}
+		}
+	}
+}
+
+func TestMailCarriesInlineLogo(t *testing.T) {
+	digest, err := composeDigestMail("https://nsc.example", digestFixtureScan(), digestFixturePayload())
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := composeFailedMail("https://nsc.example", digestFixtureScan(), store.ScanFailedPayload{Reason: "node down"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pngMagic := []byte("\x89PNG\r\n\x1a\n")
+	for name, msg := range map[string]MailMessage{"digest": digest, "failed": failed} {
+		if len(msg.InlineImages) != 1 {
+			t.Fatalf("%s mail carries %d inline images, want 1", name, len(msg.InlineImages))
+		}
+		img := msg.InlineImages[0]
+		if img.Name != "nuclei-logo.png" {
+			t.Errorf("%s mail inline image name = %q", name, img.Name)
+		}
+		if !bytes.HasPrefix(img.Data, pngMagic) {
+			t.Errorf("%s mail inline image is not a PNG", name)
+		}
+		if !strings.Contains(msg.HTML, `src="`+mailLogoCID+`"`) {
+			t.Errorf("%s mail HTML does not reference %s", name, mailLogoCID)
+		}
+		if !strings.Contains(msg.HTML, `width="36" height="36"`) {
+			t.Errorf("%s mail logo lacks fixed dimensions", name)
 		}
 	}
 }

@@ -18,6 +18,23 @@ import (
 //go:embed mailtemplates/*.html
 var mailTemplateFS embed.FS
 
+// The brand logo in the mail header is a PNG rendition (rendered with headless
+// Chrome) of web/public/nuclei-logo.svg — Gmail and Outlook don't render SVG.
+// It rides along as an inline CID part (Content-ID <nuclei-logo.png>, set by
+// go-mail from the file name), so the markup references src="cid:nuclei-logo.png"
+// and the mail still loads nothing from the network.
+//
+//go:embed mailtemplates/nuclei-logo.png
+var mailLogoPNG []byte
+
+// mailLogoCID is the cid: reference the mail templates use for the logo.
+const mailLogoCID = "cid:nuclei-logo.png"
+
+// mailLogoInline is the inline logo attachment carried by both HTML mails.
+func mailLogoInline() []MailImage {
+	return []MailImage{{Name: strings.TrimPrefix(mailLogoCID, "cid:"), Data: mailLogoPNG}}
+}
+
 var mailTemplates = template.Must(template.New("mail").Funcs(template.FuncMap{
 	"sevColor": sevColor,
 }).ParseFS(mailTemplateFS, "mailtemplates/*.html"))

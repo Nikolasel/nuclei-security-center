@@ -10,6 +10,9 @@ import { expiringAcceptancesRows, makeRow, rowsToQuery, type Row } from "./Condi
 
 export const FINDINGS_FILTERS_KEY = "nsc.findings.filters";
 export const FINDINGS_FILTERS_VERSION = 1;
+// The most recent filter that matched no preset, kept apart from the current
+// filter so switching to a preset doesn't lose it (View menu → "Recent custom filter").
+export const FINDINGS_RECENT_CUSTOM_KEY = "nsc.findings.recentCustomFilter";
 
 export interface FindingsFilterPrefs {
   filter: FindingQuery;
@@ -182,6 +185,40 @@ export function writeStoredFindingsFilters(prefs: FindingsFilterPrefs): void {
 export function clearStoredFindingsFilters(): void {
   try {
     localStorage.removeItem(FINDINGS_FILTERS_KEY);
+  } catch {
+    // private mode / storage disabled
+  }
+}
+
+/** isRecentCustomCandidate reports whether `filter` should replace the recent
+ *  custom filter: it must filter something and match none of the presets. */
+export function isRecentCustomCandidate(filter: FindingQuery, now = new Date()): boolean {
+  const hasConditions = filter.groups.some((g) => g.conditions.length > 0);
+  return hasConditions && matchFindingsPreset(filter, now) == null;
+}
+
+export function readRecentCustomFilter(): FindingQuery | null {
+  try {
+    const raw = localStorage.getItem(FINDINGS_RECENT_CUSTOM_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return isFindingQuery(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeRecentCustomFilter(filter: FindingQuery): void {
+  try {
+    localStorage.setItem(FINDINGS_RECENT_CUSTOM_KEY, JSON.stringify(filter));
+  } catch {
+    // private mode / storage disabled — in-memory state still applies
+  }
+}
+
+export function clearRecentCustomFilter(): void {
+  try {
+    localStorage.removeItem(FINDINGS_RECENT_CUSTOM_KEY);
   } catch {
     // private mode / storage disabled
   }

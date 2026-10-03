@@ -288,8 +288,12 @@ overflow actions.
 
 A list with named filter presets offers them in one secondary `View: <name> ▾` dropdown. Each
 item has a label and a one-line description, and the active preset is checked. When the current
-filter matches no preset, the trigger reads "Custom filter". **Reset** is a `link` button placed after
-the active-filter summary and shown **only** when the filter or sort differs from the default.
+filter matches no preset, the trigger reads "Custom filter". Below a separator, a **Recent custom
+filter** entry (with a one-line summary of its conditions) restores the latest filter that matched no
+preset, so trying a preset never loses hand-built work. It's kept in its own localStorage slot and
+only appears once one exists. **Reset** is a `link` button placed after
+the active-filter summary and shown **only** when the filter or sort differs from the default; it
+also forgets the recent custom filter.
 Don't put presets or reset in the toolbar as separate ghost buttons. Example: the findings list
 (`FINDINGS_PRESETS` in `findingsFilters.ts`).
 

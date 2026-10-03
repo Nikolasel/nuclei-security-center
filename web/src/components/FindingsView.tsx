@@ -15,10 +15,14 @@ import {
 import {
   FINDINGS_FILTERS_KEY,
   FINDINGS_PRESETS,
+  clearRecentCustomFilter,
   clearStoredFindingsFilters,
   defaultFindingsRows,
   findingsFilterPrefsAreDefault,
+  isRecentCustomCandidate,
   matchFindingsPreset,
+  readRecentCustomFilter,
+  writeRecentCustomFilter,
   readStoredFindingsFilters,
   resolveFindingsFilterPrefs,
   writeStoredFindingsFilters,
@@ -433,6 +437,7 @@ export function FindingsView() {
   const [sort, setSort] = useState(() => prefsFromLocation(searchParams).sort ?? "");
   const [order, setOrder] = useState<"asc" | "desc" | null>(() => prefsFromLocation(searchParams).order);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [recentCustom, setRecentCustom] = useState(readRecentCustomFilter);
   const [offset, setOffset] = useState(() => Math.max(0, Number(searchParams.get("offset")) || 0));
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const [exportNotice, setExportNotice] = useState<{ kind: "warning" | "error"; text: string } | null>(null);
@@ -464,6 +469,14 @@ export function FindingsView() {
       order: sort ? order : null,
     });
   }, [filter, offset, sort, order, setSearchParams]);
+
+  // Remember the latest applied filter that matches no preset, so picking a
+  // preset from the View menu doesn't lose it.
+  useEffect(() => {
+    if (!isRecentCustomCandidate(filter)) return;
+    writeRecentCustomFilter(filter);
+    setRecentCustom(filter);
+  }, [filter]);
 
   // Another tab editing the same preference updates this table.
   useEffect(() => {
@@ -548,6 +561,8 @@ export function FindingsView() {
     setOrder(null);
     setOffset(0);
     clearStoredFindingsFilters();
+    clearRecentCustomFilter();
+    setRecentCustom(null);
   };
 
   const headerSortField = (id: FindingsColumnId): string | null => {
@@ -583,6 +598,16 @@ export function FindingsView() {
   const crumbs = useMemo(() => rowsToCrumbs(rows, targetOpts), [rows, targetOpts]);
   const activeCount = useMemo(() => countActiveConditions(rows), [rows]);
   const activePreset = useMemo(() => matchFindingsPreset(compiled), [compiled]);
+  const recentCustomSummary = useMemo(
+    () =>
+      recentCustom
+        ? rowsToCrumbs(queryToRows(recentCustom), targetOpts)
+            .map((c) => `${c.connector ? `${c.connector} ` : ""}${c.field} ${c.op}${c.value ? ` ${c.value}` : ""}`)
+            .join(" ")
+        : "",
+    [recentCustom, targetOpts],
+  );
+  const recentCustomActive = recentCustom != null && JSON.stringify(recentCustom) === JSON.stringify(compiled);
   const isDefaultView = findingsFilterPrefsAreDefault({ filter: compiled, sort: sort || null, order: sort ? order : null });
 
   // Changing the applied filter jumps back to page 1 — but not on first mount, so
@@ -714,6 +739,27 @@ export function FindingsView() {
                   </span>
                 </DropdownMenu.Item>
               ))}
+              {recentCustom && (
+                <>
+                  <DropdownMenu.Separator className={menuSeparatorClass} />
+                  <DropdownMenu.Item
+                    onSelect={() => setRows(queryToRows(recentCustom))}
+                    title={recentCustomSummary}
+                    className={cn(menuItemClass, "items-start")}
+                  >
+                    <Check
+                      className={cn("mt-0.5 h-4 w-4 shrink-0", recentCustomActive ? "text-indigo-600 dark:text-indigo-400" : "invisible")}
+                      aria-hidden
+                    />
+                    <span className="min-w-0">
+                      <span className="block">Recent custom filter</span>
+                      <span className="block max-w-xs truncate text-xs text-neutral-500 dark:text-neutral-400">
+                        {recentCustomSummary}
+                      </span>
+                    </span>
+                  </DropdownMenu.Item>
+                </>
+              )}
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>

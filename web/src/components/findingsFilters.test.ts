@@ -1,8 +1,13 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { rowsToQuery } from "./ConditionBuilder";
 import {
   FINDINGS_FILTERS_KEY,
   FINDINGS_PRESETS,
+  FINDINGS_RECENT_CUSTOM_KEY,
+  clearRecentCustomFilter,
+  isRecentCustomCandidate,
+  readRecentCustomFilter,
+  writeRecentCustomFilter,
   matchFindingsPreset,
   FINDINGS_FILTERS_VERSION,
   clearStoredFindingsFilters,
@@ -206,5 +211,34 @@ describe("findings presets", () => {
   it("returns null for a customized filter", () => {
     const custom = { groups: [{ conditions: [{ field: "severity", op: "any_of", values: ["high"] }] }] };
     expect(matchFindingsPreset(custom, now)).toBeNull();
+  });
+});
+
+describe("recent custom filter", () => {
+  const now = new Date("2026-10-03T12:00:00Z");
+  const custom = { groups: [{ conditions: [{ field: "severity", op: "any_of", values: ["high", "critical"] }] }] };
+  beforeEach(() => {
+    globalThis.localStorage = memoryStorage();
+  });
+
+  it("only treats non-empty, non-preset filters as candidates", () => {
+    expect(isRecentCustomCandidate(custom, now)).toBe(true);
+    expect(isRecentCustomCandidate(defaultFindingsFilter(), now)).toBe(false);
+    expect(isRecentCustomCandidate({ groups: [] }, now)).toBe(false);
+  });
+
+  it("round-trips through storage and clears", () => {
+    expect(readRecentCustomFilter()).toBeNull();
+    writeRecentCustomFilter(custom);
+    expect(readRecentCustomFilter()).toEqual(custom);
+    clearRecentCustomFilter();
+    expect(readRecentCustomFilter()).toBeNull();
+  });
+
+  it("ignores a malformed stored value", () => {
+    localStorage.setItem(FINDINGS_RECENT_CUSTOM_KEY, "{not json");
+    expect(readRecentCustomFilter()).toBeNull();
+    localStorage.setItem(FINDINGS_RECENT_CUSTOM_KEY, JSON.stringify({ nope: true }));
+    expect(readRecentCustomFilter()).toBeNull();
   });
 });

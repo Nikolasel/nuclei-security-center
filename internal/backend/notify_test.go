@@ -143,7 +143,7 @@ func TestScanNotifierSendFailureStillClaims(t *testing.T) {
 }
 
 func TestComposeDigestMailCountsAndLinks(t *testing.T) {
-	msg := composeDigestMail("http://nsc.example", store.ScanRow{ID: "abc", TargetName: "prod"}, store.ScanDigestPayload{
+	msg, err := composeDigestMail("http://nsc.example", store.ScanRow{ID: "abc", TargetName: "prod"}, store.ScanDigestPayload{
 		New:     store.SeverityCounts{Critical: 1, Info: 1},
 		Changed: store.SeverityCounts{High: 1},
 		Fixed:   store.SeverityCounts{Low: 2},
@@ -151,6 +151,9 @@ func TestComposeDigestMailCountsAndLinks(t *testing.T) {
 			{ID: 42, Status: "new", Severity: "critical", TemplateID: "cve-1", Name: "RCE", MatchedAt: "https://h/path"},
 		},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(msg.Subject, "2 new, 1 changed, 2 fixed") {
 		t.Errorf("subject = %q", msg.Subject)
 	}

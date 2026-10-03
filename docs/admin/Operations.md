@@ -98,6 +98,13 @@ explicitly enabled. A muted policy still records an outbox row; SMTP is skipped 
 (`notify_disabled`). With the flag off, a failed or orphaned scan alerts no one — only the
 structured log records it.
 
+Both mails are `text/plain` + a styled `text/html` alternative rendered from embedded
+`html/template` documents (`internal/backend/mailtemplates/`, rendered by
+`internal/backend/mailrender.go`) — designed, severity-colored, mobile-friendly, with the text
+part as the complete fallback. The HTML makes no external requests (no images, fonts, or
+tracking pixels); links point at `APP_BASE_URL` and open behind a normal sign-in. The rendered
+documents are pinned by golden-file tests (`internal/backend/testdata/mail/`).
+
 The digest uses the same evidence rules as the findings list:
 
 | Status | Meaning |

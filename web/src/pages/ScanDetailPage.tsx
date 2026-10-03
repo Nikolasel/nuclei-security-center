@@ -223,7 +223,19 @@ export function ScanDetailPage() {
               <p className="mt-4 text-xs text-neutral-400">Waiting for progress from the scanner…</p>
             )}
             {scan.data.error && (
-              <Alert tone="danger" title="Scan failed" className="mt-4">
+              // `error` also carries the cancel reason ("cancelled by …"), so the
+              // banner follows the scan state rather than implying a failure.
+              <Alert
+                tone={scan.data.state === "failed" ? "danger" : "warning"}
+                title={
+                  scan.data.state === "failed"
+                    ? "Scan failed"
+                    : scan.data.state === "cancelled"
+                      ? "Scan cancelled"
+                      : undefined
+                }
+                className="mt-4"
+              >
                 <span className="whitespace-pre-wrap">{scan.data.error}</span>
               </Alert>
             )}

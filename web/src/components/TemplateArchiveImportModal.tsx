@@ -3,7 +3,7 @@ import {
   type TemplateImportConflict,
   type TemplateImportResponse,
 } from "../api";
-import { Button, ErrorText, Field, Modal, Select } from "./ui";
+import { Button, ErrorText, Field, FileInput, Modal, ModalActions, Select } from "./ui";
 
 export function TemplateArchiveImportModal({
   title,
@@ -36,18 +36,18 @@ export function TemplateArchiveImportModal({
   };
 
   return (
-    <Modal open onOpenChange={(open) => !open && onClose()} title={title}>
+    <Modal open onOpenChange={(open) => !open && onClose()} title={title} description={description}>
       <div className="space-y-4">
-        <p className="text-sm text-neutral-500">{description}</p>
-        <Field label="Archive">
-          <input
-            type="file"
+        <Field label="Archive" required>
+          <FileInput
             accept=".tar.gz,.tgz,.json,application/gzip,application/json"
-            className="block w-full text-xs text-neutral-500 file:mr-3 file:rounded-md file:border-0 file:bg-neutral-100 file:px-3 file:py-1.5 file:text-sm file:font-medium dark:file:bg-neutral-800"
             onChange={(event) => setFile(event.target.files?.[0] ?? null)}
           />
         </Field>
-        <Field label="When an ID or set name already exists">
+        <Field
+          label="When an ID or set name already exists"
+          hint="Upstream YAML is reference material only and is never written by import. Set imports require referenced upstream IDs to already exist in this catalog."
+        >
           <Select
             className="w-full"
             value={conflict}
@@ -58,16 +58,13 @@ export function TemplateArchiveImportModal({
             <option value="rename">Import a renamed copy</option>
           </Select>
         </Field>
-        <p className="text-xs text-neutral-500">
-          Upstream YAML is reference material only and is never written by import. Set imports require referenced upstream IDs to already exist in this catalog.
-        </p>
         {error !== undefined && <ErrorText error={error} />}
-        <div className="flex justify-end gap-2">
+        <ModalActions>
           <Button disabled={pending} onClick={onClose}>Cancel</Button>
           <Button variant="primary" disabled={pending || file == null} onClick={() => void submit()}>
             {pending ? "Validating and importing…" : "Import archive"}
           </Button>
-        </div>
+        </ModalActions>
       </div>
     </Modal>
   );

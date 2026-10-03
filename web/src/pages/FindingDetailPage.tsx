@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   api,
@@ -15,41 +15,33 @@ import { hasRole, useMe } from "../auth";
 import { CodeBlock } from "../components/CodeBlock";
 import { ExtractedResults } from "../components/ExtractedResults";
 import { safeHref } from "../util";
-import { Button, Card, ErrorText, FindingStateBadge, Input, Pill, Select, SeverityBadge, Spinner } from "../components/ui";
-
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <Card className="p-4">
-      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">{title}</h2>
-      {children}
-    </Card>
-  );
-}
-
-function Chips({ items, className }: { items?: string[]; className?: string }) {
-  if (!items?.length) return <span className="text-neutral-400">—</span>;
-  return (
-    <div className="flex flex-wrap gap-1">
-      {items.map((x) => (
-        <span
-          key={x}
-          className={`rounded bg-neutral-100 px-1.5 py-0.5 text-xs dark:bg-neutral-800 ${className ?? ""}`}
-        >
-          {x}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function Meta({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div>
-      <dt className="text-xs text-neutral-500">{label}</dt>
-      <dd className="break-all">{children}</dd>
-    </div>
-  );
-}
+import {
+  Button,
+  Card,
+  DescriptionList,
+  ErrorText,
+  Field,
+  FindingStateBadge,
+  FormHint,
+  Input,
+  linkClass,
+  Meta,
+  Muted,
+  OffsetPager,
+  Page,
+  PageHeader,
+  Pill,
+  Section,
+  Select,
+  SeverityBadge,
+  Spinner,
+  Table,
+  TagList,
+  Td,
+  Th,
+  THead,
+  TRow,
+} from "../components/ui";
 
 /** TriagePanel shows the Tenable-style lifecycle (effective + detection state,
  *  mitigation history, disposition + recast audit) and, for operators, lets the
@@ -108,89 +100,101 @@ function TriagePanel({ f }: { f: FindingDetail }) {
   const recastDirty = recast !== (f.recast_severity ?? "") || recastNote.trim() !== "";
 
   return (
-    <Card className="space-y-4 p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <h2 className="mr-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">Lifecycle</h2>
-        <FindingStateBadge state={f.effective_state} />
-        <span className="text-xs text-neutral-500">
-          detection: <span className="font-medium text-neutral-700 dark:text-neutral-300">{STATE_LABELS[f.detection_state]}</span>
-        </span>
-        {f.times_mitigated > 0 && <Pill tone="warn">mitigated ×{f.times_mitigated}</Pill>}
-        {!f.auto_mitigation_eligible && (
-          <Pill tone="warn">
-            <span title="This finding has no network host:port. Scan absence cannot automatically mark it mitigated.">
-              auto-mitigation unavailable
-            </span>
-          </Pill>
-        )}
-        {f.disposition === "accepted" && f.accept_expires_at && (
+    <Section
+      title="Lifecycle"
+      actions={
+        <div className="flex flex-wrap items-center gap-2">
+          <FindingStateBadge state={f.effective_state} />
           <span className="text-xs text-neutral-500">
-            accept expires {new Date(f.accept_expires_at).toLocaleDateString()}
+            detection:{" "}
+            <span className="font-medium text-neutral-700 dark:text-neutral-300">{STATE_LABELS[f.detection_state]}</span>
           </span>
+          {f.times_mitigated > 0 && <Pill tone="warn">mitigated ×{f.times_mitigated}</Pill>}
+          {!f.auto_mitigation_eligible && (
+            <Pill tone="warn" title="This finding has no network host:port. Scan absence cannot automatically mark it mitigated.">
+              auto-mitigation unavailable
+            </Pill>
+          )}
+          {f.disposition === "accepted" && f.accept_expires_at && (
+            <span className="text-xs text-neutral-500">
+              accept expires {new Date(f.accept_expires_at).toLocaleDateString()}
+            </span>
+          )}
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        {(f.disposition_by || f.disposition_note) && (
+          <FormHint>
+            Disposition <span className="font-medium">{DISPOSITION_LABELS[f.disposition]}</span>
+            {f.disposition_by && <> · by {f.disposition_by}</>}
+            {f.disposition_at && <> · {new Date(f.disposition_at).toLocaleString()}</>}
+            {f.disposition_note && <> — “{f.disposition_note}”</>}
+          </FormHint>
+        )}
+        {f.recast_severity && (
+          <FormHint>
+            Severity recast to <span className="font-medium">{f.recast_severity}</span>
+            {f.recast_by && <> · by {f.recast_by}</>}
+            {f.recast_note && <> — “{f.recast_note}”</>}
+          </FormHint>
+        )}
+
+        {canTriage ? (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Card className="space-y-3 p-4 shadow-none">
+              <Field label="Disposition">
+                <Select
+                  value={disposition}
+                  onChange={(e) => setDisposition(e.target.value as Disposition)}
+                  className="w-full"
+                >
+                  {DISPOSITIONS.map((d) => (
+                    <option key={d} value={d}>
+                      {DISPOSITION_LABELS[d]}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              {disposition === "accepted" && (
+                <Field label="Accept until" hint="Optional. An expired acceptance falls back to the detection state.">
+                  <Input type="date" value={expires} onChange={(e) => setExpires(e.target.value)} className="w-full" />
+                </Field>
+              )}
+              <Field label="Note">
+                <Input value={dispNote} onChange={(e) => setDispNote(e.target.value)} placeholder="Optional" className="w-full" />
+              </Field>
+              {dispMut.isError && <ErrorText error={dispMut.error} />}
+              <Button variant="primary" disabled={!dispDirty || dispMut.isPending} onClick={() => dispMut.mutate()}>
+                {dispMut.isPending ? "Saving…" : "Save disposition"}
+              </Button>
+            </Card>
+
+            <Card className="space-y-3 p-4 shadow-none">
+              <Field label="Recast severity">
+                <Select value={recast} onChange={(e) => setRecast(e.target.value)} className="w-full">
+                  <option value="">— no recast (observed: {f.severity}) —</option>
+                  {SEVERITIES.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </Select>
+              </Field>
+              <Field label="Note">
+                <Input value={recastNote} onChange={(e) => setRecastNote(e.target.value)} placeholder="Optional" className="w-full" />
+              </Field>
+              {recastMut.isError && <ErrorText error={recastMut.error} />}
+              <Button variant="primary" disabled={!recastDirty || recastMut.isPending} onClick={() => recastMut.mutate()}>
+                {recastMut.isPending ? "Saving…" : recast ? "Save recast" : "Clear recast"}
+              </Button>
+            </Card>
+          </div>
+        ) : (
+          <FormHint>Operator role required to change disposition or severity.</FormHint>
         )}
       </div>
-
-      {(f.disposition_by || f.disposition_note) && (
-        <p className="text-xs text-neutral-500">
-          Disposition <span className="font-medium">{DISPOSITION_LABELS[f.disposition]}</span>
-          {f.disposition_by && <> · by {f.disposition_by}</>}
-          {f.disposition_at && <> · {new Date(f.disposition_at).toLocaleString()}</>}
-          {f.disposition_note && <> — “{f.disposition_note}”</>}
-        </p>
-      )}
-      {f.recast_severity && (
-        <p className="text-xs text-neutral-500">
-          Severity recast to <span className="font-medium">{f.recast_severity}</span>
-          {f.recast_by && <> · by {f.recast_by}</>}
-          {f.recast_note && <> — “{f.recast_note}”</>}
-        </p>
-      )}
-
-      {canTriage ? (
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2 rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
-            <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Disposition</div>
-            <Select value={disposition} onChange={(e) => setDisposition(e.target.value as Disposition)}>
-              {DISPOSITIONS.map((d) => (
-                <option key={d} value={d}>
-                  {DISPOSITION_LABELS[d]}
-                </option>
-              ))}
-            </Select>
-            {disposition === "accepted" && (
-              <label className="block space-y-1">
-                <span className="block text-xs text-neutral-500">Accept until (optional)</span>
-                <Input type="date" value={expires} onChange={(e) => setExpires(e.target.value)} className="w-full" />
-              </label>
-            )}
-            <Input value={dispNote} onChange={(e) => setDispNote(e.target.value)} placeholder="note (optional)…" className="w-full" />
-            <Button variant="primary" disabled={!dispDirty || dispMut.isPending} onClick={() => dispMut.mutate()}>
-              {dispMut.isPending ? "Saving…" : "Save disposition"}
-            </Button>
-            {dispMut.isError && <ErrorText error={dispMut.error} />}
-          </div>
-
-          <div className="space-y-2 rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
-            <div className="text-xs font-semibold uppercase tracking-wide text-neutral-500">Recast severity</div>
-            <Select value={recast} onChange={(e) => setRecast(e.target.value)}>
-              <option value="">— no recast (observed: {f.severity}) —</option>
-              {SEVERITIES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </Select>
-            <Input value={recastNote} onChange={(e) => setRecastNote(e.target.value)} placeholder="note (optional)…" className="w-full" />
-            <Button variant="primary" disabled={!recastDirty || recastMut.isPending} onClick={() => recastMut.mutate()}>
-              {recastMut.isPending ? "Saving…" : recast ? "Save recast" : "Clear recast"}
-            </Button>
-            {recastMut.isError && <ErrorText error={recastMut.error} />}
-          </div>
-        </div>
-      ) : (
-        <p className="text-xs text-neutral-400">Operator role required to change disposition or severity.</p>
-      )}
-    </Card>
+    </Section>
   );
 }
 
@@ -229,26 +233,22 @@ export function FindingDetailPage() {
   const extracted = f.extracted_results?.length ? f.extracted_results : raw["extracted-results"];
 
   return (
-    <div className="space-y-5">
-      <div>
-        <button
-          type="button"
-          onClick={backToFindings}
-          className="text-sm text-indigo-600 hover:underline dark:text-indigo-400"
-        >
-          ← Findings
-        </button>
-        <div className="mt-1 flex flex-wrap items-center gap-3">
-          <SeverityBadge severity={f.effective_severity} recast={!!f.recast_severity} />
-          <h1 className="text-xl font-semibold">{name}</h1>
-          <FindingStateBadge state={f.effective_state} />
-        </div>
-      </div>
+    <Page>
+      <PageHeader
+        back={{ label: "Findings", onClick: backToFindings }}
+        title={name}
+        badges={
+          <>
+            <SeverityBadge severity={f.effective_severity} recast={!!f.recast_severity} />
+            <FindingStateBadge state={f.effective_state} />
+          </>
+        }
+      />
 
       <TriagePanel f={f} />
 
       <Section title="Overview">
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
+        <DescriptionList>
           <Meta label="Host">{f.host || "—"}</Meta>
           <Meta label="Matched at">
             <span className="font-mono text-xs">{raw["matched-at"] || f.matched_at || "—"}</span>
@@ -261,7 +261,7 @@ export function FindingDetailPage() {
                 {" "}
                 <Link
                   to={`/occurrences/${f.latest_occurrence_id}`}
-                  className="text-indigo-600 hover:underline dark:text-indigo-400"
+                  className={linkClass}
                 >
                   latest
                 </Link>
@@ -276,14 +276,14 @@ export function FindingDetailPage() {
                     key={targetID}
                     to={`/targets?target=${encodeURIComponent(targetID)}`}
                     title={targetID}
-                    className="text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+                    className={`text-xs ${linkClass}`}
                   >
                     {targetNames.get(targetID) ?? targetID}
                   </Link>
                 ))}
               </div>
             ) : (
-              <span className="text-neutral-400">ad-hoc only</span>
+              <Muted>ad-hoc only</Muted>
             )}
           </Meta>
           <Meta label="Template">
@@ -292,7 +292,7 @@ export function FindingDetailPage() {
               target="_blank"
               rel="noopener noreferrer"
               title="Open the NSC template in a new tab"
-              className="font-mono text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+              className={`font-mono text-xs ${linkClass}`}
             >
               {f.template_id}
             </Link>
@@ -303,7 +303,7 @@ export function FindingDetailPage() {
                   href={safeHref(raw["template-url"])}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-xs text-neutral-500 hover:underline"
+                  className="rounded-sm text-xs text-neutral-500 hover:underline"
                 >
                   upstream
                 </a>
@@ -314,7 +314,7 @@ export function FindingDetailPage() {
             {f.first_seen_scan ? (
               <Link
                 to={`/scans/${f.first_seen_scan}`}
-                className="text-indigo-600 hover:underline dark:text-indigo-400"
+                className={linkClass}
                 title={new Date(f.first_seen_at).toLocaleString()}
               >
                 {new Date(f.first_seen_at).toLocaleDateString()}
@@ -327,7 +327,7 @@ export function FindingDetailPage() {
             {f.last_seen_scan ? (
               <Link
                 to={`/scans/${f.last_seen_scan}`}
-                className="text-indigo-600 hover:underline dark:text-indigo-400"
+                className={linkClass}
                 title={new Date(f.last_seen_at).toLocaleString()}
               >
                 {new Date(f.last_seen_at).toLocaleDateString()}
@@ -336,110 +336,88 @@ export function FindingDetailPage() {
               new Date(f.last_seen_at).toLocaleDateString()
             )}
           </Meta>
-        </dl>
+        </DescriptionList>
       </Section>
 
-      <Section title="Occurrences">
-        <p className="mb-3 text-xs text-neutral-500">
-          Retained per-scan observations of this finding, newest first. Occurrences from scans
-          removed by retention are deleted with those scans and are not listed here.
-        </p>
-        {f.latest_occurrence_id != null && (
-          <p className="mb-3 text-sm">
-            <Link
-              to={`/occurrences/${f.latest_occurrence_id}`}
-              className="text-indigo-600 hover:underline dark:text-indigo-400"
-            >
+      <Section
+        title="Occurrences"
+        description="Retained per-scan observations of this finding, newest first. Occurrences from scans removed by retention are deleted with those scans and are not listed here."
+        actions={
+          f.latest_occurrence_id != null && (
+            <Link to={`/occurrences/${f.latest_occurrence_id}`} className={`text-sm ${linkClass}`}>
               Open latest occurrence
             </Link>
-          </p>
-        )}
+          )
+        }
+      >
         {occurrences.isLoading && <Spinner />}
         {occurrences.isError && <ErrorText error={occurrences.error} />}
         {occurrences.data && (
           <>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead className="text-xs uppercase tracking-wide text-neutral-500">
-                  <tr>
-                    <th className="py-1 pr-3 font-medium">Seen</th>
-                    <th className="py-1 pr-3 font-medium">Scan</th>
-                    <th className="py-1 pr-3 font-medium">Target</th>
-                    <th className="py-1 pr-3 font-medium">Host</th>
-                    <th className="py-1 pr-3 font-medium">Matched at</th>
-                    <th className="py-1 font-medium">Occurrence</th>
-                  </tr>
-                </thead>
+            <div className="-mx-4 border-t border-neutral-200 sm:-mx-5 dark:border-neutral-800">
+              <Table>
+                <THead>
+                  <Th>Seen</Th>
+                  <Th>Scan</Th>
+                  <Th>Target</Th>
+                  <Th>Host</Th>
+                  <Th>Matched at</Th>
+                  <Th aria-label="Open" />
+                </THead>
                 <tbody>
                   {occurrences.data.items.map((row) => (
-                    <tr key={row.id} className="border-t border-neutral-200 dark:border-neutral-800">
-                      <td className="py-2 pr-3 whitespace-nowrap">
+                    <TRow key={row.id}>
+                      <Td className="whitespace-nowrap">
                         {new Date(row.created_at).toLocaleString()}
                         {row.id === f.latest_occurrence_id && (
                           <span className="ml-2 text-xs text-neutral-500">latest</span>
                         )}
-                      </td>
-                      <td className="py-2 pr-3">
-                        <Link
-                          to={`/scans/${row.scan_id}`}
-                          className="font-mono text-xs text-indigo-600 hover:underline dark:text-indigo-400"
-                        >
-                          {row.scan_id}
+                      </Td>
+                      <Td>
+                        <Link to={`/scans/${row.scan_id}`} title={row.scan_id} className={`font-mono text-xs ${linkClass}`}>
+                          {row.scan_id.slice(0, 8)}
                         </Link>
-                      </td>
-                      <td className="py-2 pr-3">
+                      </Td>
+                      <Td>
                         {row.target_id ? (
                           <Link
                             to={`/targets?target=${encodeURIComponent(row.target_id)}`}
                             title={row.target_id}
-                            className="text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+                            className={linkClass}
                           >
                             {targetNames.get(row.target_id) ?? row.target_id}
                           </Link>
                         ) : (
-                          <span className="text-neutral-400">ad-hoc</span>
+                          <Muted>ad-hoc</Muted>
                         )}
-                      </td>
-                      <td className="py-2 pr-3 break-all">{row.host || "—"}</td>
-                      <td className="py-2 pr-3">
+                      </Td>
+                      <Td className="break-all">{row.host || <Muted />}</Td>
+                      <Td>
                         <span className="font-mono text-xs">{row.matched_at || "—"}</span>
-                      </td>
-                      <td className="py-2">
-                        <Link
-                          to={`/occurrences/${row.id}`}
-                          className="text-indigo-600 hover:underline dark:text-indigo-400"
-                        >
+                      </Td>
+                      <Td className="text-right">
+                        <Link to={`/occurrences/${row.id}`} className={linkClass}>
                           Open
                         </Link>
-                      </td>
-                    </tr>
+                      </Td>
+                    </TRow>
                   ))}
                 </tbody>
-              </table>
+              </Table>
             </div>
-            {occurrences.data.total > OCCURRENCE_PAGE_SIZE && (
-              <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
-                <span className="text-neutral-500">
-                  {occOffset + 1}–{Math.min(occOffset + OCCURRENCE_PAGE_SIZE, occurrences.data.total)} of{" "}
-                  {occurrences.data.total} retained
-                </span>
-                <Button disabled={occOffset === 0} onClick={() => setOccOffset(Math.max(0, occOffset - OCCURRENCE_PAGE_SIZE))}>
-                  Previous
-                </Button>
-                <Button
-                  disabled={occOffset + OCCURRENCE_PAGE_SIZE >= occurrences.data.total}
-                  onClick={() => setOccOffset(occOffset + OCCURRENCE_PAGE_SIZE)}
-                >
-                  Next
-                </Button>
-              </div>
-            )}
+            <OffsetPager
+              className="mt-3"
+              offset={occOffset}
+              total={occurrences.data.total}
+              pageSize={OCCURRENCE_PAGE_SIZE}
+              onChange={setOccOffset}
+            />
           </>
         )}
       </Section>
 
       <Section title="Result identity">
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
+        <DescriptionList>
           <Meta label="Matcher">
             <span className="font-mono text-xs">{f.matcher_name || raw["matcher-name"] || "—"}</span>
           </Meta>
@@ -447,14 +425,14 @@ export function FindingDetailPage() {
             <span className="font-mono text-xs">{f.extractor_name || raw["extractor-name"] || "—"}</span>
           </Meta>
           <Meta label="Extracted results">
-            {extracted?.length ? <ExtractedResults items={extracted} /> : <span className="text-neutral-400">—</span>}
+            {extracted?.length ? <ExtractedResults items={extracted} /> : <Muted />}
           </Meta>
-        </dl>
+        </DescriptionList>
       </Section>
 
       {(cls["cve-id"]?.length || cls["cwe-id"]?.length || cls["cvss-score"] != null || cls["cvss-metrics"]) && (
         <Section title="Classification">
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
+          <DescriptionList columns={4}>
             <Meta label="CVE">
               {cls["cve-id"]?.length ? (
                 <div className="flex flex-wrap gap-1">
@@ -464,18 +442,18 @@ export function FindingDetailPage() {
                       href={`https://nvd.nist.gov/vuln/detail/${cve}`}
                       target="_blank"
                       rel="noreferrer"
-                      className="rounded bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-800 hover:underline dark:bg-red-950 dark:text-red-300"
+                      className="rounded bg-red-100 px-1.5 py-0.5 font-mono text-xs font-medium text-red-800 hover:underline dark:bg-red-950 dark:text-red-300"
                     >
                       {cve}
                     </a>
                   ))}
                 </div>
               ) : (
-                <span className="text-neutral-400">—</span>
+                <Muted />
               )}
             </Meta>
             <Meta label="CWE">
-              <Chips items={cls["cwe-id"]} />
+              <TagList items={cls["cwe-id"]} />
             </Meta>
             <Meta label="CVSS">
               {cls["cvss-score"] != null ? `${cls["cvss-score"]}` : "—"}
@@ -483,7 +461,7 @@ export function FindingDetailPage() {
             <Meta label="CVSS vector">
               <span className="font-mono text-xs">{cls["cvss-metrics"] || "—"}</span>
             </Meta>
-          </dl>
+          </DescriptionList>
         </Section>
       )}
 
@@ -495,14 +473,14 @@ export function FindingDetailPage() {
 
       {(info.tags?.length || info.author?.length) && (
         <Section title="Metadata">
-          <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+          <DescriptionList columns={2}>
             <Meta label="Tags">
-              <Chips items={info.tags} />
+              <TagList items={info.tags} />
             </Meta>
             <Meta label="Author">
-              <Chips items={info.author} />
+              <TagList items={info.author} />
             </Meta>
-          </dl>
+          </DescriptionList>
         </Section>
       )}
 
@@ -536,12 +514,12 @@ export function FindingDetailPage() {
                       href={href}
                       target="_blank"
                       rel="noreferrer"
-                      className="break-all text-indigo-600 hover:underline dark:text-indigo-400"
+                      className={`break-all ${linkClass}`}
                     >
                       {r}
                     </a>
                   ) : (
-                    <span className="break-all text-slate-600 dark:text-slate-400">{r}</span>
+                    <span className="break-all text-neutral-600 dark:text-neutral-400">{r}</span>
                   )}
                 </li>
               );
@@ -559,13 +537,13 @@ export function FindingDetailPage() {
       {f.raw && (
         <Section title="Raw finding">
           <details>
-            <summary className="cursor-pointer text-sm text-neutral-500">Show raw JSON</summary>
+            <summary className="cursor-pointer text-sm text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200">Show raw JSON</summary>
             <div className="mt-2">
               <CodeBlock text={JSON.stringify(f.raw, null, 2)} />
             </div>
           </details>
         </Section>
       )}
-    </div>
+    </Page>
   );
 }

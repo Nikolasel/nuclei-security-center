@@ -1,6 +1,15 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { rowsToQuery } from "./ConditionBuilder";
 import {
   FINDINGS_FILTERS_KEY,
+  FINDINGS_PRESETS,
+  FINDINGS_RECENT_CUSTOM_KEY,
+  clearRecentCustomFilter,
+  isExpiringAcceptancesWindow,
+  isRecentCustomCandidate,
+  readRecentCustomFilter,
+  writeRecentCustomFilter,
+  matchFindingsPreset,
   FINDINGS_FILTERS_VERSION,
   clearStoredFindingsFilters,
   defaultFindingsFilter,
@@ -185,5 +194,73 @@ describe("localStorage read/write", () => {
     expect(readStoredFindingsFilters()).toBeNull();
     localStorage.setItem(FINDINGS_FILTERS_KEY, JSON.stringify({ nope: true }));
     expect(mergeFindingsFilters(readStoredFindingsFilters())).toBeNull();
+  });
+});
+
+describe("findings presets", () => {
+  const now = new Date("2026-10-03T12:00:00Z");
+  const compiled = (id: string) => rowsToQuery(FINDINGS_PRESETS.find((p) => p.id === id)!.rows(now));
+
+  it("treats the default filter as the open preset", () => {
+    expect(matchFindingsPreset(defaultFindingsFilter(), now)?.id).toBe("open");
+  });
+
+  it("recognizes each preset's own filter", () => {
+    for (const p of FINDINGS_PRESETS) expect(matchFindingsPreset(compiled(p.id), now)?.id).toBe(p.id);
+  });
+
+  it("returns null for a customized filter", () => {
+    const custom = { groups: [{ conditions: [{ field: "severity", op: "any_of", values: ["high"] }] }] };
+    expect(matchFindingsPreset(custom, now)).toBeNull();
+  });
+});
+
+describe("recent custom filter", () => {
+  const now = new Date("2026-10-03T12:00:00Z");
+  const custom = { groups: [{ conditions: [{ field: "severity", op: "any_of", values: ["high", "critical"] }] }] };
+  beforeEach(() => {
+    globalThis.localStorage = memoryStorage();
+  });
+
+  it("only treats non-empty, non-preset filters as candidates", () => {
+    expect(isRecentCustomCandidate(custom, now)).toBe(true);
+    expect(isRecentCustomCandidate(defaultFindingsFilter(), now)).toBe(false);
+    expect(isRecentCustomCandidate({ groups: [] }, now)).toBe(false);
+  });
+
+  it("does not treat a stale Expiring acceptances window as custom", () => {
+    const lastWeek = rowsToQuery(FINDINGS_PRESETS.find((p) => p.id === "expiring")!.rows(new Date("2026-09-20T12:00:00Z")));
+    expect(isExpiringAcceptancesWindow(lastWeek)).toBe(true);
+    expect(isRecentCustomCandidate(lastWeek, now)).toBe(false);
+  });
+
+  it("still treats a hand-edited expiry window as custom", () => {
+    const widened = {
+      groups: [
+        {
+          conditions: [
+            { field: "disposition", op: "any_of", values: ["accepted"] },
+            { field: "accept_expires_at", op: "between", values: ["2026-10-03", "2026-10-31"] },
+          ],
+        },
+      ],
+    };
+    expect(isExpiringAcceptancesWindow(widened)).toBe(false);
+    expect(isRecentCustomCandidate(widened, now)).toBe(true);
+  });
+
+  it("round-trips through storage and clears", () => {
+    expect(readRecentCustomFilter()).toBeNull();
+    writeRecentCustomFilter(custom);
+    expect(readRecentCustomFilter()).toEqual(custom);
+    clearRecentCustomFilter();
+    expect(readRecentCustomFilter()).toBeNull();
+  });
+
+  it("ignores a malformed stored value", () => {
+    localStorage.setItem(FINDINGS_RECENT_CUSTOM_KEY, "{not json");
+    expect(readRecentCustomFilter()).toBeNull();
+    localStorage.setItem(FINDINGS_RECENT_CUSTOM_KEY, JSON.stringify({ nope: true }));
+    expect(readRecentCustomFilter()).toBeNull();
   });
 });

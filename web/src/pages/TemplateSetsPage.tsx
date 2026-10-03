@@ -12,7 +12,35 @@ import {
 } from "../api";
 import { hasRole, useMe } from "../auth";
 import { TemplateArchiveImportModal } from "../components/TemplateArchiveImportModal";
-import { Button, Card, ErrorText, Field, Input, Modal, Pill, Select, SeverityBadge, Spinner } from "../components/ui";
+import {
+  Alert,
+  Button,
+  Card,
+  CardHeader,
+  ErrorText,
+  Field,
+  FormHint,
+  Input,
+  Modal,
+  ModalActions,
+  Page,
+  PageHeader,
+  Pager,
+  Pill,
+  RowActions,
+  Select,
+  SeverityBadge,
+  Spinner,
+  Table,
+  TableEmpty,
+  Td,
+  Th,
+  THead,
+  TRow,
+  useConfirm,
+  focusRing,
+  cn,
+} from "../components/ui";
 import { duplicateName, parseList } from "../util";
 
 const PAGE_SIZE = 20;
@@ -204,12 +232,14 @@ function TemplateSetModal({
               {!readOnly && mode !== "all" && (
                 <>
                   <Button
+                    size="sm"
                     disabled={selection.size === 0 || selectionHydrating}
                     onClick={() => updateSelection((next) => next.clear())}
                   >
                     Clear all
                   </Button>
                   <Button
+                    size="sm"
                     disabled={!templates.data?.items.length || selectionHydrating}
                     onClick={() => updateSelection((next) => {
                       templates.data?.items.forEach((template) => next.add(template.id));
@@ -218,6 +248,7 @@ function TemplateSetModal({
                     {mode === "exclude" ? "Exclude page" : "Select page"}
                   </Button>
                   <Button
+                    size="sm"
                     disabled={!templates.data?.items.some((template) => selection.has(template.id)) || selectionHydrating}
                     onClick={() => updateSelection((next) => {
                       templates.data?.items.forEach((template) => next.delete(template.id));
@@ -226,6 +257,7 @@ function TemplateSetModal({
                     {mode === "exclude" ? "Remove page exclusions" : "Deselect page"}
                   </Button>
                   <Button
+                    size="sm"
                     disabled={selectMatching.isPending || total === 0 || selectionHydrating}
                     onClick={() => selectMatching.mutate("select")}
                   >
@@ -234,6 +266,7 @@ function TemplateSetModal({
                       : mode === "exclude" ? `Exclude all ${total} matching` : `Select all ${total} matching`}
                   </Button>
                   <Button
+                    size="sm"
                     disabled={selectMatching.isPending || total === 0 || selection.size === 0 || selectionHydrating}
                     onClick={() => selectMatching.mutate("deselect")}
                   >
@@ -248,11 +281,13 @@ function TemplateSetModal({
           {mode !== "all" && (
             <div className="flex min-h-0 flex-1 flex-col">
               {selection.size === 0 && (
-                <p className="mb-3 text-xs text-amber-700 dark:text-amber-300">
-                  {mode === "exclude"
-                    ? "No exclusions: every active catalog template will be included."
-                    : "Empty sets can be saved for later curation, but cannot be selected by a scan policy."}
-                </p>
+                <div className="mb-3">
+                  <FormHint tone="warning">
+                    {mode === "exclude"
+                      ? "No exclusions: every active catalog template will be included."
+                      : "Empty sets can be saved for later curation, but cannot be selected by a scan policy."}
+                  </FormHint>
+                </div>
               )}
           {selection.size > 0 && (
             <div className="mb-3 h-20 shrink-0 overflow-y-auto rounded-md bg-neutral-50 p-2 dark:bg-neutral-950/50">
@@ -263,7 +298,7 @@ function TemplateSetModal({
                     {!readOnly && (
                       <button
                         type="button"
-                        className="text-neutral-400 hover:text-red-600"
+                        className={cn("rounded-sm text-neutral-400 hover:text-red-600", focusRing)}
                         aria-label={`${mode === "exclude" ? "Remove exclusion" : "Remove"} ${id}`}
                         onClick={() => updateSelection((next) => next.delete(id))}
                       >
@@ -303,7 +338,7 @@ function TemplateSetModal({
                   <label key={template.id} className="flex cursor-pointer items-start gap-3 border-b border-neutral-100 px-3 py-2 last:border-0 hover:bg-neutral-50 dark:border-neutral-800 dark:hover:bg-neutral-800/50">
                     <input
                       type="checkbox"
-                      className="mt-1"
+                      className="mt-1 h-4 w-4 accent-indigo-600"
                       checked={selection.has(template.id)}
                       disabled={readOnly}
                       onChange={() => updateSelection((next) => {
@@ -320,13 +355,14 @@ function TemplateSetModal({
                 ))}
                 {templates.data.items.length === 0 && <div className="px-3 py-8 text-center text-sm text-neutral-400">No templates match these filters.</div>}
               </div>
-              <div className="mt-2 flex shrink-0 items-center justify-between text-xs text-neutral-500">
-                <span>{total ? `${offset + 1}–${Math.min(offset + PAGE_SIZE, total)} of ${total}` : "0 templates"}</span>
-                <div className="flex gap-2">
-                  <Button disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>Previous</Button>
-                  <Button disabled={offset + PAGE_SIZE >= total} onClick={() => setOffset(offset + PAGE_SIZE)}>Next</Button>
-                </div>
-              </div>
+              <Pager
+                className="mt-2 shrink-0"
+                summary={total ? `${offset + 1}–${Math.min(offset + PAGE_SIZE, total)} of ${total}` : "0 templates"}
+                hasPrev={offset > 0}
+                hasNext={offset + PAGE_SIZE < total}
+                onPrev={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+                onNext={() => setOffset(offset + PAGE_SIZE)}
+              />
             </>
           )}
           </div>
@@ -338,11 +374,11 @@ function TemplateSetModal({
           </div>
         )}
         </div>
-        <div className="shrink-0 border-t border-neutral-200 px-5 py-3 dark:border-neutral-800">
+        <div className="shrink-0 space-y-3 border-t border-neutral-200 px-5 py-3 dark:border-neutral-800">
           {members.isError && <ErrorText error={members.error} />}
           {exclusions.isError && <ErrorText error={exclusions.error} />}
           {save.isError && <ErrorText error={save.error} />}
-          <div className="flex justify-end gap-2">
+          <ModalActions>
             <Button onClick={onClose}>{readOnly ? "Close" : "Cancel"}</Button>
             {!readOnly && (
               <Button
@@ -359,7 +395,7 @@ function TemplateSetModal({
                       : `Save ${selection.size} templates`}
               </Button>
             )}
-          </div>
+          </ModalActions>
         </div>
       </div>
     </Modal>
@@ -371,6 +407,7 @@ export function TemplateSetsPage() {
   const canWrite = hasRole(me.data ?? undefined, "operator");
   const canDelete = hasRole(me.data ?? undefined, "admin");
   const qc = useQueryClient();
+  const confirm = useConfirm();
   const [editing, setEditing] = useState<TemplateSet | "new" | null>(null);
   const [duplicating, setDuplicating] = useState(false);
   const [notice, setNotice] = useState("");
@@ -405,41 +442,44 @@ export function TemplateSetsPage() {
     void qc.invalidateQueries({ queryKey: ["template-sets"] });
   };
 
-  return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-xl font-semibold">Template Sets</h1>
-          <p className="mt-1 text-sm text-neutral-500">
-            Curate exact template IDs, include every active template, or exclude selected IDs while following the active catalog.
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {canWrite && <Button onClick={() => setImporting(true)}>Import set</Button>}
-          {canWrite && (
-            <Button
-              variant="primary"
-              onClick={() => {
-                setDuplicating(false);
-                setEditing("new");
-              }}
-            >
-              New template set
-            </Button>
-          )}
-        </div>
-      </div>
+  const openEditor = (set: TemplateSet | "new", duplicate = false) => {
+    setDuplicating(duplicate);
+    setEditing(set);
+  };
 
-      {notice && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">{notice}</div>}
+  return (
+    <Page>
+      <PageHeader
+        title="Template sets"
+        description="Curate exact template IDs, include every active template, or exclude selected IDs while following the active catalog."
+        actions={
+          canWrite && (
+            <>
+              <Button onClick={() => setImporting(true)}>Import set</Button>
+              <Button variant="primary" onClick={() => openEditor("new")}>
+                New template set
+              </Button>
+            </>
+          )
+        }
+      />
+
+      {notice && (
+        <Alert tone="success" onDismiss={() => setNotice("")}>
+          {notice}
+        </Alert>
+      )}
       {remove.isError && <ErrorText error={remove.error} />}
       {download.isError && <ErrorText error={download.error} />}
 
-      {sets.isLoading ? <Spinner /> : sets.isError ? <ErrorText error={sets.error} /> : (
+      {sets.isLoading ? (
+        <Spinner />
+      ) : sets.isError ? (
+        <ErrorText error={sets.error} />
+      ) : (
         <Card>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
-            <p className="text-xs text-neutral-500">
-              Choose the format used by each row&apos;s Export action.
-            </p>
+          <CardHeader>
+            <p className="text-xs text-neutral-500">Choose the format used by each row&apos;s Export action.</p>
             <label className="flex items-center gap-2 text-xs font-medium text-neutral-600 dark:text-neutral-400">
               <span>Export as</span>
               <Select
@@ -452,76 +492,63 @@ export function TemplateSetsPage() {
                 <option value="json">JSON</option>
               </Select>
             </label>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
-                  <th className="px-3 py-2 font-medium">Name</th>
-                  <th className="px-3 py-2 font-medium">Mode</th>
-                  <th className="px-3 py-2 font-medium">Members</th>
-                  <th className="px-3 py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {(sets.data ?? []).map((set) => (
-                  <tr key={set.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
-                    <td className="px-3 py-2 font-medium">{set.name}</td>
-                    <td className="px-3 py-2"><Pill tone={set.mode === "exact" ? "good" : "neutral"}>{set.mode}</Pill></td>
-                    <td className="px-3 py-2 tabular-nums">
-                      <div>{set.member_count}{set.mode !== "exact" ? " active" : ""}</div>
-                      {set.mode === "exclude" && set.exclusion_count > 0 && (
-                        <div className="text-xs text-amber-700 dark:text-amber-300">
-                          {set.exclusion_count} excluded
-                        </div>
-                      )}
-                    </td>
-                    <td className="whitespace-nowrap px-3 py-2 text-right">
-                        <Button
-                          variant="ghost"
-                          disabled={download.isPending}
-                          onClick={() => download.mutate({ id: set.id })}
-                        >
-                          {download.isPending && download.variables?.id === set.id ? "Exporting…" : "Export"}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          onClick={() => {
-                            setDuplicating(false);
-                            setEditing(set);
-                          }}
-                        >
-                          {canWrite ? "Edit" : "View"}
-                        </Button>
-                        {canWrite && (
-                          <Button
-                            variant="ghost"
-                            onClick={() => {
-                              setDuplicating(true);
-                              setEditing(set);
-                            }}
-                          >
-                            Duplicate
-                          </Button>
-                        )}
-                        {canDelete && (
-                          <Button
-                            variant="ghost"
-                            className="text-red-600 dark:text-red-400"
-                            onClick={() => {
-                              if (confirm(`Delete template set "${set.name}"?`)) remove.mutate(set.id);
-                            }}
-                          >
-                            Delete
-                          </Button>
-                        )}
-                    </td>
-                  </tr>
-                ))}
-                {(sets.data ?? []).length === 0 && <tr><td colSpan={4} className="px-3 py-8 text-center text-neutral-400">No template sets yet.</td></tr>}
-              </tbody>
-            </table>
-          </div>
+          </CardHeader>
+          <Table>
+            <THead>
+              <Th>Name</Th>
+              <Th>Mode</Th>
+              <Th>Members</Th>
+              <Th aria-label="Actions" />
+            </THead>
+            <tbody>
+              {(sets.data ?? []).map((set) => (
+                <TRow key={set.id}>
+                  <Td className="whitespace-nowrap font-medium">{set.name}</Td>
+                  <Td>
+                    <Pill tone={set.mode === "exact" ? "good" : "neutral"}>{set.mode}</Pill>
+                  </Td>
+                  <Td className="tabular-nums">
+                    <div>
+                      {set.member_count}
+                      {set.mode !== "exact" ? " active" : ""}
+                    </div>
+                    {set.mode === "exclude" && set.exclusion_count > 0 && (
+                      <div className="text-xs text-amber-700 dark:text-amber-300">{set.exclusion_count} excluded</div>
+                    )}
+                  </Td>
+                  <RowActions
+                    label={set.name}
+                    actions={[
+                      { label: canWrite ? "Edit" : "View", primary: true, onSelect: () => openEditor(set) },
+                      {
+                        label: download.isPending && download.variables?.id === set.id ? "Exporting…" : "Export",
+                        primary: true,
+                        disabled: download.isPending,
+                        onSelect: () => download.mutate({ id: set.id }),
+                      },
+                      { label: "Duplicate", hidden: !canWrite, onSelect: () => openEditor(set, true) },
+                      {
+                        label: "Delete",
+                        danger: true,
+                        hidden: !canDelete,
+                        onSelect: async () => {
+                          if (
+                            await confirm({
+                              title: `Delete template set “${set.name}”?`,
+                              description: "Deletion is refused while a scan policy still uses this set.",
+                              confirmLabel: "Delete set",
+                            })
+                          )
+                            remove.mutate(set.id);
+                        },
+                      },
+                    ]}
+                  />
+                </TRow>
+              ))}
+              {(sets.data ?? []).length === 0 && <TableEmpty colSpan={4}>No template sets yet.</TableEmpty>}
+            </tbody>
+          </Table>
         </Card>
       )}
 
@@ -543,6 +570,6 @@ export function TemplateSetsPage() {
           onClose={() => setImporting(false)}
         />
       )}
-    </div>
+    </Page>
   );
 }

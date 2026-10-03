@@ -11,6 +11,8 @@ Repo: `git@github.com:Nikolasel/nuclei-security-center.git`.
 **`docs/ARCHITECTURE.md` is the source of truth for design decisions.** Read it before making
 architectural changes. `README.md` is the visitor-facing overview; the practical guides live
 under `docs/` (`admin/` plus an `ADMIN_GUIDE.md` index, `API.md`, `DEVELOPMENT.md`).
+**`docs/UI_STYLE_GUIDE.md` is the contract for the web UI** — read it before adding or changing a
+screen in `web/`.
 
 The product is a working beta: a logged-in user manages targets/template-sets, runs scans
 (on demand or on a cron **schedule**), and triages a **Tenable-style finding lifecycle** (dedup +
@@ -268,7 +270,7 @@ web/               React + TS + Vite SPA; embedded into the backend via go:embed
 deploy/            Dockerfile.backend (SPA build + distroless), Dockerfile.scanner, keycloak/ (seeded realm), garage/ (local S3 config)
 docker-compose.yml postgres + garage + keycloak + scanner + backend
 .github/workflows/ CI (build/vet/test + SPA), release (images → GHCR), wiki (`docs/admin/` → GitHub wiki)
-docs/ARCHITECTURE.md   design decisions (source of truth); docs/admin/ is the administration guide (published to the GitHub wiki); API.md, DEVELOPMENT.md are the other practical guides
+docs/ARCHITECTURE.md   design decisions (source of truth); docs/admin/ is the administration guide (published to the GitHub wiki); API.md, DEVELOPMENT.md are the other practical guides; UI_STYLE_GUIDE.md is the web UI design system
 ```
 
 The frontend build output `web/dist` is git-ignored except a committed empty `.gitkeep`,
@@ -329,6 +331,12 @@ dev mode used in headless `curl` testing.
 ## Conventions
 
 - Structured logging via `log/slog` (JSON handler).
+- **Web UI follows `docs/UI_STYLE_GUIDE.md`.** Pages compose the primitives in
+  `web/src/components/ui.tsx` (`Page`/`PageHeader`, `Button` variants, `Table`/`RowActions`,
+  `Field`, `Modal`/`useConfirm`, `Alert`, `Badge`, …) instead of hand-writing Tailwind for things
+  that already have a component: one primary button per view, destructive actions in the row's
+  "⋯" menu behind `useConfirm` (never `window.confirm`), no raw styled `<select>`/`<textarea>`.
+  A missing pattern is added to `ui.tsx` **and** documented in the guide in the same change.
 - Agent instructions live in this file. `CLAUDE.md` is a one-line Claude Code import (`@AGENTS.md`) so Claude Code loads it without other tools (Cursor) ingesting a second copy. Do not replace `CLAUDE.md` with a symlink or a duplicate of this document.
 - Agent-created branches use `feature/<name>` for feature work and `fix/<name>` for bug fixes; do not use the `codex/` prefix in this repository.
 - Config via environment variables (see the table in `docs/admin/Configuration.md`); required vars fail fast.

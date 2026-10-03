@@ -1,10 +1,14 @@
 import { FindingsView } from "../components/FindingsView";
+import { Page, PageHeader } from "../components/ui";
 
 export function FindingsPage() {
   return (
-    <div className="space-y-4">
-      <h1 className="text-xl font-semibold">Findings</h1>
+    <Page>
+      <PageHeader
+        title="Findings"
+        description="Deduplicated results across every scan, with detection state and analyst dispositions."
+      />
       <FindingsView />
-    </div>
+    </Page>
   );
 }

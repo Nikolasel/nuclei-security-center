@@ -6,8 +6,9 @@ import {
   STATE_LABELS,
   type FindingQuery,
 } from "../api";
+import { Plus, X } from "lucide-react";
 import { MultiSelect, TokenInput, type Option } from "./filters";
-import { Button, Input, Select } from "./ui";
+import { Button, IconButton, Input, Select } from "./ui";
 
 type ValueKind = "enum" | "tags" | "text" | "time" | "number" | "boolean";
 
@@ -356,20 +357,21 @@ export function ConditionBuilder({
                 )}
               </div>
 
-              <Button variant="ghost" aria-label="Remove condition" onClick={() => removeRow(r.id)} className="px-2 text-neutral-500">
-                ✕
-              </Button>
+              <IconButton label="Remove condition" onClick={() => removeRow(r.id)}>
+                <X className="h-4 w-4" aria-hidden />
+              </IconButton>
             </div>
           );
         })}
       </div>
 
       <div className="mt-3 flex items-center gap-2">
-        <Button variant="ghost" onClick={addRow} className="text-sm text-indigo-600 dark:text-indigo-400">
-          + Add condition
+        <Button variant="ghost" size="sm" onClick={addRow}>
+          <Plus className="h-4 w-4" aria-hidden />
+          Add condition
         </Button>
         {rows.length > 0 && (
-          <Button variant="ghost" onClick={clearAll} className="text-sm text-neutral-500">
+          <Button variant="ghost" size="sm" onClick={clearAll}>
             Clear all
           </Button>
         )}

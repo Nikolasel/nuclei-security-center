@@ -6,10 +6,13 @@
 // list is scoped to one scan and is not the lifecycle triage view.
 
 import type { FindingQuery } from "../api";
-import { makeRow, type Row } from "./ConditionBuilder";
+import { expiringAcceptancesRows, makeRow, rowsToQuery, type Row } from "./ConditionBuilder";
 
 export const FINDINGS_FILTERS_KEY = "nsc.findings.filters";
 export const FINDINGS_FILTERS_VERSION = 1;
+// The most recent filter that matched no preset, kept apart from the current
+// filter so switching to a preset doesn't lose it (View menu → "Recent custom filter").
+export const FINDINGS_RECENT_CUSTOM_KEY = "nsc.findings.recentCustomFilter";
 
 export interface FindingsFilterPrefs {
   filter: FindingQuery;
@@ -25,6 +28,40 @@ export function defaultFindingsFilter(): FindingQuery {
   return {
     groups: [{ conditions: [{ field: "state", op: "any_of", values: ["new", "active", "resurfaced"] }] }],
   };
+}
+
+export type FindingsPresetId = "open" | "expiring" | "all";
+
+export interface FindingsPreset {
+  id: FindingsPresetId;
+  label: string;
+  description: string;
+  rows: (now?: Date) => Row[];
+}
+
+/** FINDINGS_PRESETS are the named views offered by the findings "View" menu.
+ *  "open" is the default filter, so choosing it is the filter half of a reset. */
+export const FINDINGS_PRESETS: FindingsPreset[] = [
+  {
+    id: "open",
+    label: "Open findings",
+    description: "New, active and resurfaced findings (the default)",
+    rows: () => defaultFindingsRows(),
+  },
+  {
+    id: "expiring",
+    label: "Expiring acceptances",
+    description: "Accepted findings whose accept-risk expiry falls in the next 7 days (UTC)",
+    rows: (now) => expiringAcceptancesRows(now),
+  },
+  { id: "all", label: "All findings", description: "No filter, every lifecycle finding", rows: () => [] },
+];
+
+/** matchFindingsPreset returns the preset whose compiled query equals `filter`,
+ *  or null when the filter has been customized. */
+export function matchFindingsPreset(filter: FindingQuery, now = new Date()): FindingsPreset | null {
+  const key = JSON.stringify(filter);
+  return FINDINGS_PRESETS.find((p) => JSON.stringify(rowsToQuery(p.rows(now))) === key) ?? null;
 }
 
 export function defaultFindingsFilterPrefs(): FindingsFilterPrefs {
@@ -148,6 +185,53 @@ export function writeStoredFindingsFilters(prefs: FindingsFilterPrefs): void {
 export function clearStoredFindingsFilters(): void {
   try {
     localStorage.removeItem(FINDINGS_FILTERS_KEY);
+  } catch {
+    // private mode / storage disabled
+  }
+}
+
+/** isRecentCustomCandidate reports whether `filter` should replace the recent
+ *  custom filter: it must filter something and match none of the presets. */
+export function isRecentCustomCandidate(filter: FindingQuery, now = new Date()): boolean {
+  const hasConditions = filter.groups.some((g) => g.conditions.length > 0);
+  return hasConditions && matchFindingsPreset(filter, now) == null && !isExpiringAcceptancesWindow(filter);
+}
+
+/** isExpiringAcceptancesWindow recognizes the "Expiring acceptances" preset
+ *  from any day. The preset is persisted as a concrete 7-day window, so on a
+ *  later UTC day it no longer equals today's preset; it is still that preset,
+ *  not hand-built work, and must not replace the recent custom filter. */
+export function isExpiringAcceptancesWindow(filter: FindingQuery): boolean {
+  const window = filter.groups[0]?.conditions.find((c) => c.field === "accept_expires_at");
+  const start = window?.op === "between" ? window.values?.[0] : undefined;
+  if (filter.groups.length !== 1 || !start || !/^\d{4}-\d{2}-\d{2}$/.test(start)) return false;
+  const thatDay = new Date(`${start}T12:00:00Z`);
+  if (Number.isNaN(thatDay.getTime())) return false;
+  return JSON.stringify(rowsToQuery(expiringAcceptancesRows(thatDay))) === JSON.stringify(filter);
+}
+
+export function readRecentCustomFilter(): FindingQuery | null {
+  try {
+    const raw = localStorage.getItem(FINDINGS_RECENT_CUSTOM_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return isFindingQuery(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeRecentCustomFilter(filter: FindingQuery): void {
+  try {
+    localStorage.setItem(FINDINGS_RECENT_CUSTOM_KEY, JSON.stringify(filter));
+  } catch {
+    // private mode / storage disabled — in-memory state still applies
+  }
+}
+
+export function clearRecentCustomFilter(): void {
+  try {
+    localStorage.removeItem(FINDINGS_RECENT_CUSTOM_KEY);
   } catch {
     // private mode / storage disabled
   }

@@ -4,7 +4,26 @@ import { CircleHelp } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, type EnvVariable } from "../api";
 import { hasRole, useMe } from "../auth";
-import { Button, Card, cn, ErrorText, Field, Input, Spinner } from "../components/ui";
+import {
+  Button,
+  Checkbox,
+  cn,
+  EmptyState,
+  ErrorText,
+  Field,
+  focusRing,
+  Input,
+  Muted,
+  Page,
+  PageHeader,
+  Section,
+  Spinner,
+  Table,
+  Td,
+  Th,
+  THead,
+  TRow,
+} from "../components/ui";
 
 function groupEnvVariables(vars: EnvVariable[]): { group: string; items: EnvVariable[] }[] {
   const order: string[] = [];
@@ -32,60 +51,50 @@ function EnvConfigTable({ variables }: { variables: EnvVariable[] }) {
   const groups = groupEnvVariables(variables);
   return (
     <Tooltip.Provider delayDuration={0}>
-      <div className="overflow-x-auto">
-        <table className="w-full table-fixed text-sm">
-          <colgroup>
-            <col className="w-[34%]" />
-            <col className="w-[10%]" />
-            <col className="w-[32%]" />
-            <col className="w-[24%]" />
-          </colgroup>
-          <thead>
-            <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
-              <th className="px-2 py-1.5 font-medium">Variable</th>
-              <th className="px-2 py-1.5 font-medium">Status</th>
-              <th className="px-2 py-1.5 font-medium">Effective</th>
-              <th className="px-2 py-1.5 font-medium">Default</th>
+      <Table className="table-fixed">
+        <colgroup>
+          <col className="w-[34%]" />
+          <col className="w-[10%]" />
+          <col className="w-[32%]" />
+          <col className="w-[24%]" />
+        </colgroup>
+        <THead>
+          <Th>Variable</Th>
+          <Th>Status</Th>
+          <Th>Effective</Th>
+          <Th>Default</Th>
+        </THead>
+        {groups.map(({ group, items }) => (
+          <tbody key={group}>
+            <tr>
+              <th
+                scope="colgroup"
+                colSpan={4}
+                className="px-4 pb-1.5 pt-4 text-left text-sm font-semibold text-neutral-900 dark:text-neutral-100"
+              >
+                {group}
+              </th>
             </tr>
-          </thead>
-          {groups.map(({ group, items }, i) => (
-            <tbody key={group}>
-              <tr>
-                <th
-                  scope="colgroup"
-                  colSpan={4}
-                  className={cn(
-                    "px-2 text-left text-sm font-semibold text-neutral-900 dark:text-neutral-100",
-                    i === 0 ? "pb-1.5 pt-3" : "pb-1.5 pt-5",
-                  )}
-                >
-                  {group}
-                </th>
-              </tr>
-              {items.map((v) => (
-                <tr key={v.name} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
-                  <td className="px-2 py-1.5">
-                    <div className="flex min-w-0 items-center gap-1">
-                      <span className="truncate font-mono text-xs">{v.name}</span>
-                      <EnvVarInfo name={v.name} description={v.description} />
-                    </div>
-                  </td>
-                  <td className="px-2 py-1.5 text-neutral-500">{v.set ? "set" : "unset"}</td>
-                  <td
-                    className="truncate px-2 py-1.5 font-mono text-xs text-neutral-700 dark:text-neutral-300"
-                    title={effectiveDisplay(v)}
-                  >
-                    {effectiveDisplay(v)}
-                  </td>
-                  <td className="truncate px-2 py-1.5 font-mono text-xs text-neutral-500" title={v.default || "—"}>
-                    {v.default || "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          ))}
-        </table>
-      </div>
+            {items.map((v) => (
+              <TRow key={v.name}>
+                <Td>
+                  <div className="flex min-w-0 items-center gap-1">
+                    <span className="truncate font-mono text-xs">{v.name}</span>
+                    <EnvVarInfo name={v.name} description={v.description} />
+                  </div>
+                </Td>
+                <Td className="text-neutral-500">{v.set ? "set" : "unset"}</Td>
+                <Td className="truncate font-mono text-xs text-neutral-700 dark:text-neutral-300" title={effectiveDisplay(v)}>
+                  {effectiveDisplay(v)}
+                </Td>
+                <Td className="truncate font-mono text-xs text-neutral-500" title={v.default || "—"}>
+                  {v.default || <Muted />}
+                </Td>
+              </TRow>
+            ))}
+          </tbody>
+        ))}
+      </Table>
     </Tooltip.Provider>
   );
 }
@@ -101,7 +110,7 @@ function EnvVarInfo({ name, description }: { name: string; description: string }
           type="button"
           aria-label={`About ${name}`}
           aria-expanded={open}
-          className="shrink-0 rounded p-0.5 text-neutral-400 hover:text-neutral-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-indigo-500 dark:hover:text-neutral-200"
+          className={cn("shrink-0 rounded p-0.5 text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200", focusRing)}
           onPointerDown={(e) => {
             lastPointerType.current = e.pointerType;
           }}
@@ -181,95 +190,70 @@ export function SettingsPage() {
   });
 
   if (!isAdmin) {
-    return (
-      <div className="space-y-4">
-        <h1 className="text-xl font-semibold">Settings</h1>
-        <p className="text-sm text-neutral-500">Settings are available to administrators only.</p>
-      </div>
-    );
+    return <EmptyState>Settings are available to administrators only.</EmptyState>;
   }
 
   return (
-    <div className="max-w-4xl space-y-5">
-      <div>
-        <h1 className="text-xl font-semibold">Settings</h1>
-        <p className="mt-1 text-sm text-neutral-500">Global configuration for this Nuclei Security Center.</p>
-      </div>
+    <Page narrow>
+      <PageHeader title="Settings" description="Global configuration for this Nuclei Security Center." />
 
       {settings.isLoading ? (
         <Spinner />
       ) : settings.isError ? (
         <ErrorText error={settings.error} />
       ) : (
-        <Card className="space-y-4 p-5">
-          <div>
-            <h2 className="text-sm font-semibold">Scan retention</h2>
-            <p className="mt-1 text-sm text-neutral-500">
-              Automatically delete scans (and their findings occurrences and archived output) older than a
-              set number of days. Each target&apos;s most recent scan is always kept. Deletion is
-              evidence-preserving — a finding&apos;s lifecycle is recomputed from the scans that remain.
-            </p>
-          </div>
+        <Section
+          title="Scan retention"
+          description={
+            <>
+              Automatically delete scans (and their findings occurrences and archived output) older than a set number of
+              days. Each target&apos;s most recent scan is always kept. Deletion is evidence-preserving — a finding&apos;s
+              lifecycle is recomputed from the scans that remain.
+            </>
+          }
+        >
+          <div className="space-y-4">
+            <Checkbox label="Enable automatic scan deletion" checked={enabled} onChange={setEnabled} />
 
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={enabled}
-              onChange={(e) => setEnabled(e.target.checked)}
-              className="h-4 w-4 rounded border-neutral-300 dark:border-neutral-700"
-            />
-            Enable automatic scan deletion
-          </label>
+            <Field
+              label="Delete scans older than (days)"
+              error={enabled && !daysValid && "Enter a whole number between 1 and 36500."}
+            >
+              <Input
+                type="number"
+                min={1}
+                max={36500}
+                value={days}
+                disabled={!enabled}
+                placeholder="e.g. 90"
+                onChange={(e) => setDays(e.target.value)}
+                className="w-full max-w-[12rem]"
+              />
+            </Field>
 
-          <Field label="Delete scans older than (days)">
-            <Input
-              type="number"
-              min={1}
-              max={36500}
-              value={days}
-              disabled={!enabled}
-              placeholder="e.g. 90"
-              onChange={(e) => setDays(e.target.value)}
-              className="w-full max-w-[12rem]"
-            />
-          </Field>
-          {enabled && !daysValid && (
-            <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
-              Enter a whole number between 1 and 36500.
-            </p>
-          )}
-
-          <label className="flex items-start gap-2 text-sm">
-            <input
-              type="checkbox"
+            <Checkbox
+              label="Also delete ad-hoc scans (not tied to a target)"
+              description="Ad-hoc scans have no target history to anchor, so when included they're deleted purely on age. Off by default — only target-linked scans are swept."
               checked={includeAdhoc}
               disabled={!enabled}
-              onChange={(e) => setIncludeAdhoc(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-neutral-300 dark:border-neutral-700"
+              onChange={setIncludeAdhoc}
             />
-            <span>
-              Also delete ad-hoc scans (not tied to a target)
-              <span className="mt-0.5 block text-xs text-neutral-500">
-                Ad-hoc scans have no target history to anchor, so when included they&apos;re deleted purely
-                on age. Off by default — only target-linked scans are swept.
-              </span>
-            </span>
-          </label>
 
-          {save.isError && <ErrorText error={save.error} />}
+            {save.isError && <ErrorText error={save.error} />}
 
-          <div className="flex items-center gap-3">
-            <Button variant="primary" disabled={invalid || save.isPending} onClick={() => save.mutate()}>
-              {save.isPending ? "Saving…" : "Save"}
-            </Button>
-            {settings.data?.updated_at && (
-              <span className="text-xs text-neutral-400">
-                Last updated {new Date(settings.data.updated_at).toLocaleString()}
-                {settings.data.updated_by ? ` by ${settings.data.updated_by}` : ""}
-              </span>
-            )}
+            <div className="flex flex-wrap items-center gap-3 border-t border-neutral-200 pt-4 dark:border-neutral-800">
+              <Button variant="primary" disabled={invalid || save.isPending} onClick={() => save.mutate()}>
+                {save.isPending ? "Saving…" : "Save retention"}
+              </Button>
+              {settings.data?.updated_at && (
+                <span className="text-xs text-neutral-500">
+                  Last updated {new Date(settings.data.updated_at).toLocaleString()}
+                  {settings.data.updated_by ? ` by ${settings.data.updated_by}` : ""}
+                </span>
+              )}
+            </div>
           </div>
-        </Card>
+        </Section>
       )}
 
       {environment.isLoading ? (
@@ -277,17 +261,15 @@ export function SettingsPage() {
       ) : environment.isError ? (
         <ErrorText error={environment.error} />
       ) : (
-        <Card className="space-y-4 p-5">
-          <div>
-            <h2 className="text-sm font-semibold">Environment configuration</h2>
-            <p className="mt-1 text-sm text-neutral-500">
-              Read-only view of this backend process&apos;s allowlisted environment. Secrets are never
-              shown. Changing a value requires a redeploy or restart — this page cannot edit env.
-            </p>
+        <Section
+          title="Environment configuration"
+          description="Read-only view of this backend process's allowlisted environment. Secrets are never shown. Changing a value requires a redeploy or restart — this page cannot edit env."
+        >
+          <div className="-mx-4 sm:-mx-5">
+            <EnvConfigTable variables={environment.data?.variables ?? []} />
           </div>
-          <EnvConfigTable variables={environment.data?.variables ?? []} />
-        </Card>
+        </Section>
       )}
-    </div>
+    </Page>
   );
 }

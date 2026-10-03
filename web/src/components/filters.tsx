@@ -1,13 +1,9 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { useState, type KeyboardEvent } from "react";
-import { cn } from "./ui";
+import { buttonClass, cn, focusRing, menuContentClass, menuItemClass, menuSeparatorClass } from "./ui";
 
-const triggerCls =
-  "inline-flex items-center gap-1.5 rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm font-medium text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700";
-const contentCls =
-  "z-50 max-h-72 min-w-44 overflow-y-auto rounded-md border border-neutral-200 bg-white p-1 shadow-lg dark:border-neutral-800 dark:bg-neutral-900";
-const itemCls =
-  "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none hover:bg-neutral-100 dark:hover:bg-neutral-800";
+const contentCls = cn(menuContentClass, "max-h-72 overflow-y-auto");
+const itemCls = menuItemClass;
 
 export interface Option {
   value: string;
@@ -36,7 +32,7 @@ export function MultiSelect({
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>
-        <button type="button" className={cn(triggerCls, selected.length > 0 && "border-indigo-400 dark:border-indigo-600", className)}>
+        <button type="button" className={cn(buttonClass("secondary", "md", selected.length > 0), className)}>
           <span>{label}</span>
           {selected.length > 0 && (
             <span className="rounded bg-indigo-100 px-1.5 text-xs font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
@@ -65,7 +61,7 @@ export function MultiSelect({
           ))}
           {selected.length > 0 && (
             <>
-              <DropdownMenu.Separator className="my-1 h-px bg-neutral-200 dark:bg-neutral-800" />
+              <DropdownMenu.Separator className={menuSeparatorClass} />
               <DropdownMenu.Item
                 onSelect={() => onChange([])}
                 className={cn(itemCls, "text-neutral-500")}
@@ -115,7 +111,7 @@ export function TokenInput({
   return (
     <div
       className={cn(
-        "flex min-h-[34px] flex-wrap items-center gap-1 rounded-md border border-neutral-300 bg-white px-1.5 py-1 dark:border-neutral-700 dark:bg-neutral-800",
+        "flex min-h-9 flex-wrap items-center gap-1 rounded-md border border-neutral-300 bg-white px-1.5 py-1 focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500 dark:border-neutral-700 dark:bg-neutral-800",
         className,
       )}
     >
@@ -128,7 +124,7 @@ export function TokenInput({
           <button
             type="button"
             onClick={() => removeAt(i)}
-            className="text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200"
+            className={cn("rounded-sm text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200", focusRing)}
             aria-label={`Remove ${v}`}
           >
             ×

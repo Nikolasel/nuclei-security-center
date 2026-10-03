@@ -98,6 +98,7 @@ docker-compose.yml   postgres + garage + keycloak + scanner + backend
 - **[API reference](docs/API.md)** — REST endpoints for scans, findings, dispositions, exports, and schedules.
 - **[Administration guide](docs/ADMIN_GUIDE.md)** — deployment, environment variables, authentication, bootstrap, operations, audit, and troubleshooting. Chapters live in [`docs/admin/`](docs/admin/) and are published to the [GitHub wiki](https://github.com/Nikolasel/nuclei-security-center/wiki) from `main` and each `v*` tag.
 - **[Development](docs/DEVELOPMENT.md)** — local dev workflow, auth-disabled mode, tests, and CI/CD.
+- **[UI style guide](docs/UI_STYLE_GUIDE.md)** — design system for the web app: layout, buttons, tables, forms, dialogs, and feedback.
 - **[Contributing](CONTRIBUTING.md)** — setup, verification gates, invariants, and PR conventions.
 - **[Code of Conduct](CODE_OF_CONDUCT.md)** · **[Security Policy](SECURITY.md)** — community standards; private vulnerability reporting.
 

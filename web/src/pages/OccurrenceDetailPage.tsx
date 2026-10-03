@@ -1,42 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
-import { type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, type NucleiRaw } from "../api";
 import { CodeBlock } from "../components/CodeBlock";
 import { ExtractedResults } from "../components/ExtractedResults";
 import { safeHref } from "../util";
-import { Card, ErrorText, SeverityBadge, Spinner } from "../components/ui";
-
-function Section({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <Card className="p-4">
-      <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-500">{title}</h2>
-      {children}
-    </Card>
-  );
-}
-
-function Meta({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div>
-      <dt className="text-xs text-neutral-500">{label}</dt>
-      <dd className="break-all">{children}</dd>
-    </div>
-  );
-}
-
-function Chips({ items }: { items?: string[] }) {
-  if (!items?.length) return <span className="text-neutral-400">—</span>;
-  return (
-    <div className="flex flex-wrap gap-1">
-      {items.map((item, index) => (
-        <span key={`${item}-${index}`} className="rounded bg-neutral-100 px-1.5 py-0.5 text-xs dark:bg-neutral-800">
-          {item}
-        </span>
-      ))}
-    </div>
-  );
-}
+import {
+  Badge,
+  DescriptionList,
+  ErrorText,
+  linkClass,
+  Meta,
+  Muted,
+  Page,
+  PageHeader,
+  Section,
+  SeverityBadge,
+  Spinner,
+  TagList,
+} from "../components/ui";
 
 /** One immutable result exactly as its scan produced it. This page deliberately
  * does not substitute or redirect to the globally merged lifecycle finding. */
@@ -63,28 +44,22 @@ export function OccurrenceDetailPage() {
   };
 
   return (
-    <div className="space-y-5">
-      <div>
-        <button
-          type="button"
-          onClick={back}
-          className="text-sm text-indigo-600 hover:underline dark:text-indigo-400"
-        >
-          ← Scan results
-        </button>
-        <div className="mt-1 flex flex-wrap items-center gap-3">
-          <SeverityBadge severity={occurrence.severity} />
-          <h1 className="text-xl font-semibold">{name}</h1>
-          <span className="rounded bg-neutral-100 px-2 py-1 text-xs text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
-            exact scan occurrence
-          </span>
-        </div>
-      </div>
+    <Page>
+      <PageHeader
+        back={{ label: "Scan results", onClick: back }}
+        title={name}
+        badges={
+          <>
+            <SeverityBadge severity={occurrence.severity} />
+            <Badge>exact scan occurrence</Badge>
+          </>
+        }
+      />
 
       <Section title="Occurrence">
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
+        <DescriptionList>
           <Meta label="Scan">
-            <Link to={`/scans/${occurrence.scan_id}`} className="font-mono text-xs text-indigo-600 hover:underline dark:text-indigo-400">
+            <Link to={`/scans/${occurrence.scan_id}`} className={`font-mono text-xs ${linkClass}`}>
               {occurrence.scan_id}
             </Link>
           </Meta>
@@ -93,12 +68,12 @@ export function OccurrenceDetailPage() {
             {occurrence.finding_id != null ? (
               <Link
                 to={`/findings/${occurrence.finding_id}`}
-                className="text-indigo-600 hover:underline dark:text-indigo-400"
+                className={linkClass}
               >
                 Open merged finding
               </Link>
             ) : (
-              <span className="text-neutral-400">—</span>
+              <Muted />
             )}
           </Meta>
           <Meta label="Target">
@@ -106,12 +81,12 @@ export function OccurrenceDetailPage() {
               <Link
                 to={`/targets?target=${encodeURIComponent(occurrence.target_id)}`}
                 title={occurrence.target_id}
-                className="text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+                className={`text-xs ${linkClass}`}
               >
                 {targetName ?? occurrence.target_id}
               </Link>
             ) : (
-              <span className="text-neutral-400">ad-hoc</span>
+              <Muted>ad-hoc</Muted>
             )}
           </Meta>
           <Meta label="Host">{occurrence.host || raw.host || "—"}</Meta>
@@ -124,7 +99,7 @@ export function OccurrenceDetailPage() {
               to={`/templates?template=${encodeURIComponent(occurrence.template_id)}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="font-mono text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+              className={`font-mono text-xs ${linkClass}`}
             >
               {occurrence.template_id}
             </Link>
@@ -135,7 +110,7 @@ export function OccurrenceDetailPage() {
                   href={safeHref(raw["template-url"])}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-xs text-neutral-500 hover:underline"
+                  className="rounded-sm text-xs text-neutral-500 hover:underline"
                 >
                   upstream
                 </a>
@@ -148,7 +123,7 @@ export function OccurrenceDetailPage() {
           <Meta label="Extractor">
             <span className="font-mono text-xs">{occurrence.extractor_name || raw["extractor-name"] || "—"}</span>
           </Meta>
-        </dl>
+        </DescriptionList>
       </Section>
 
       {(classification["cve-id"]?.length ||
@@ -156,14 +131,14 @@ export function OccurrenceDetailPage() {
         classification["cvss-score"] != null ||
         classification["cvss-metrics"]) && (
         <Section title="Classification">
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
-            <Meta label="CVE"><Chips items={classification["cve-id"]} /></Meta>
-            <Meta label="CWE"><Chips items={classification["cwe-id"]} /></Meta>
+          <DescriptionList columns={4}>
+            <Meta label="CVE"><TagList items={classification["cve-id"]} /></Meta>
+            <Meta label="CWE"><TagList items={classification["cwe-id"]} /></Meta>
             <Meta label="CVSS">{classification["cvss-score"] ?? "—"}</Meta>
             <Meta label="CVSS vector">
               <span className="font-mono text-xs">{classification["cvss-metrics"] || "—"}</span>
             </Meta>
-          </dl>
+          </DescriptionList>
         </Section>
       )}
 
@@ -191,11 +166,11 @@ export function OccurrenceDetailPage() {
               return (
                 <li key={reference}>
                   {href ? (
-                    <a href={href} target="_blank" rel="noreferrer" className="break-all text-indigo-600 hover:underline dark:text-indigo-400">
+                    <a href={href} target="_blank" rel="noreferrer" className={`break-all ${linkClass}`}>
                       {reference}
                     </a>
                   ) : (
-                    <span className="break-all text-slate-600 dark:text-slate-400">{reference}</span>
+                    <span className="break-all text-neutral-600 dark:text-neutral-400">{reference}</span>
                   )}
                 </li>
               );
@@ -212,10 +187,10 @@ export function OccurrenceDetailPage() {
 
       <Section title="Raw occurrence">
         <details>
-          <summary className="cursor-pointer text-sm text-neutral-500">Show exact raw JSON</summary>
+          <summary className="cursor-pointer text-sm text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200">Show exact raw JSON</summary>
           <div className="mt-2"><CodeBlock text={JSON.stringify(occurrence.raw, null, 2)} /></div>
         </details>
       </Section>
-    </div>
+    </Page>
   );
 }

@@ -3,7 +3,31 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { hasRole, useMe } from "../auth";
-import { Button, Card, ErrorText, Field, Modal, ProgressBar, Spinner, StateBadge } from "../components/ui";
+import {
+  Button,
+  Card,
+  ErrorText,
+  Field,
+  FormHint,
+  linkClass,
+  Modal,
+  ModalActions,
+  Muted,
+  Page,
+  PageHeader,
+  ProgressBar,
+  RowActions,
+  Select,
+  Spinner,
+  StateBadge,
+  Table,
+  TableEmpty,
+  Td,
+  Th,
+  THead,
+  TRow,
+  useConfirm,
+} from "../components/ui";
 import { ImportBundleModal } from "./ImportBundleModal";
 
 function RunScanModal({ onClose }: { onClose: () => void }) {
@@ -27,34 +51,31 @@ function RunScanModal({ onClose }: { onClose: () => void }) {
     },
   });
 
-  const selectCls =
-    "w-full rounded-md border border-neutral-300 bg-white px-3 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-800";
-
   return (
     <Modal open onOpenChange={(v) => !v && onClose()} title="Run scan">
       <div className="space-y-4">
         <Field label="Scan policy">
-          <select value={scanPolicyId} onChange={(e) => setScanPolicyId(e.target.value)} className={selectCls}>
+          <Select value={scanPolicyId} onChange={(e) => setScanPolicyId(e.target.value)} className="w-full">
             <option value="">Select a scan policy…</option>
             {policies.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
               </option>
             ))}
-          </select>
+          </Select>
         </Field>
         <Field label="Target (approved scope)">
-          <select value={targetId} onChange={(e) => setTargetId(e.target.value)} className={selectCls}>
+          <Select value={targetId} onChange={(e) => setTargetId(e.target.value)} className="w-full">
             <option value="">Select a target…</option>
             {(targets.data ?? []).map((target) => (
               <option key={target.id} value={target.id}>
                 {target.name} ({target.host_count} host{target.host_count === 1 ? "" : "s"})
               </option>
             ))}
-          </select>
+          </Select>
         </Field>
         {selectedPolicy && (
-          <div className="-mt-2 space-y-1 text-xs text-neutral-500">
+          <div className="space-y-1 text-xs text-neutral-500">
             <p>
               Runs the <span className="font-medium">{selectedPolicy.name}</span> policy
               {targetId ? (
@@ -68,22 +89,18 @@ function RunScanModal({ onClose }: { onClose: () => void }) {
           </div>
         )}
         {!scanPolicies.isLoading && policies.length === 0 && (
-          <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
-            No scan policies yet — create one under Scan Policies first.
-          </p>
+          <FormHint tone="warning">No scan policies yet — create one under Scan policies first.</FormHint>
         )}
         {!targets.isLoading && (targets.data ?? []).length === 0 && (
-          <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
-            No approved targets yet — create one under Targets before running a scan.
-          </p>
+          <FormHint tone="warning">No approved targets yet — create one under Targets before running a scan.</FormHint>
         )}
         {run.isError && <ErrorText error={run.error} />}
-        <div className="flex justify-end gap-2">
+        <ModalActions>
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" disabled={!scanPolicyId || !targetId || run.isPending} onClick={() => run.mutate()}>
             {run.isPending ? "Starting…" : "Run scan"}
           </Button>
-        </div>
+        </ModalActions>
       </div>
     </Modal>
   );
@@ -98,6 +115,7 @@ export function ScansPage() {
   const [runOpen, setRunOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const qc = useQueryClient();
+  const confirm = useConfirm();
 
   const scans = useQuery({
     queryKey: ["scans"],
@@ -114,20 +132,23 @@ export function ScansPage() {
   const colCount = 7 + (showActions ? 1 : 0);
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold">Scans</h1>
-        {canRun && (
-          <Button variant="primary" onClick={() => setRunOpen(true)}>
-            Run scan
-          </Button>
-        )}
-        {canRun && (
-          <Button variant="ghost" onClick={() => setImportOpen(true)}>
-            Import bundle
-          </Button>
-        )}
-      </div>
+    <Page>
+      <PageHeader
+        title="Scans"
+        description="On-demand and scheduled scan runs, newest first."
+        actions={
+          canRun && (
+            <>
+              <Button onClick={() => setImportOpen(true)}>Import bundle</Button>
+              <Button variant="primary" onClick={() => setRunOpen(true)}>
+                Run scan
+              </Button>
+            </>
+          )
+        }
+      />
+
+      {(cancel.isError || del.isError) && <ErrorText error={cancel.error ?? del.error} />}
 
       {scans.isLoading ? (
         <Spinner />
@@ -135,32 +156,29 @@ export function ScansPage() {
         <ErrorText error={scans.error} />
       ) : (
         <Card>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
-                  <th className="px-3 py-2 font-medium">Scan</th>
-                  <th className="px-3 py-2 font-medium">Target</th>
-                  <th className="px-3 py-2 font-medium">Node</th>
-                  <th className="px-3 py-2 font-medium">State</th>
-                  <th className="px-3 py-2 font-medium">Started</th>
-                  <th className="px-3 py-2 font-medium">Finished</th>
-                  <th className="px-3 py-2 font-medium">Nuclei</th>
-                  {showActions && <th className="px-3 py-2" />}
-                </tr>
-              </thead>
-              <tbody>
-                {(scans.data ?? []).map((s) => (
-                  <tr
-                    key={s.id}
-                    className="border-b border-neutral-100 last:border-0 hover:bg-neutral-50 dark:border-neutral-800/60 dark:hover:bg-neutral-800/40"
-                  >
-                    <td className="px-3 py-2">
-                      <Link to={`/scans/${s.id}`} className="font-mono text-xs text-indigo-600 hover:underline dark:text-indigo-400">
-                        {s.id.slice(0, 8)}
+          <Table>
+            <THead>
+              <Th>Scan</Th>
+              <Th>Target</Th>
+              <Th>Node</Th>
+              <Th>State</Th>
+              <Th>Started</Th>
+              <Th>Finished</Th>
+              <Th>Nuclei</Th>
+              {showActions && <Th aria-label="Actions" />}
+            </THead>
+            <tbody>
+              {(scans.data ?? []).map((s) => {
+                const active = s.state === "queued" || s.state === "running";
+                const short = s.id.slice(0, 8);
+                return (
+                  <TRow key={s.id}>
+                    <Td>
+                      <Link to={`/scans/${s.id}`} className={`font-mono text-xs ${linkClass}`}>
+                        {short}
                       </Link>
-                    </td>
-                    <td className="px-3 py-2">
+                    </Td>
+                    <Td>
                       {s.target_name ? (
                         <span>
                           {s.target_name}
@@ -172,74 +190,74 @@ export function ScansPage() {
                           ) : null}
                         </span>
                       ) : (
-                        <span className="text-neutral-400">ad-hoc</span>
+                        <Muted>ad-hoc</Muted>
                       )}
-                    </td>
-                    <td className="px-3 py-2">
-                      {s.node_name ? (
-                        <span className="text-neutral-600 dark:text-neutral-300">{s.node_name}</span>
-                      ) : (
-                        <span className="text-neutral-400">—</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2">
+                    </Td>
+                    <Td className="text-neutral-600 dark:text-neutral-300">{s.node_name || <Muted />}</Td>
+                    <Td>
                       <StateBadge state={s.state} />
                       {s.state === "running" && s.progress && (
                         <div className="mt-1 w-40">
                           <ProgressBar percent={s.progress.percent} />
                         </div>
                       )}
-                    </td>
-                    <td className="px-3 py-2 text-neutral-500">{new Date(s.created_at).toLocaleString()}</td>
-                    <td className="px-3 py-2 text-neutral-500">
-                      {s.finished_at ? new Date(s.finished_at).toLocaleString() : "—"}
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs text-neutral-500">{s.nuclei_version || "—"}</td>
+                    </Td>
+                    <Td className="whitespace-nowrap text-neutral-500">{new Date(s.created_at).toLocaleString()}</Td>
+                    <Td className="whitespace-nowrap text-neutral-500">
+                      {s.finished_at ? new Date(s.finished_at).toLocaleString() : <Muted />}
+                    </Td>
+                    <Td className="font-mono text-xs text-neutral-500">{s.nuclei_version || <Muted />}</Td>
                     {showActions && (
-                      <td className="px-3 py-2 text-right whitespace-nowrap">
-                        {canCancel && (s.state === "queued" || s.state === "running") && (
-                          <Button
-                            variant="ghost"
-                            disabled={cancel.isPending}
-                            onClick={() => {
-                              if (confirm(`Stop scan ${s.id.slice(0, 8)}?`)) cancel.mutate(s.id);
-                            }}
-                          >
-                            Stop
-                          </Button>
-                        )}
-                        {canDelete && s.state !== "queued" && s.state !== "running" && (
-                          <Button
-                            variant="ghost"
-                            className="text-red-600 dark:text-red-400"
-                            disabled={del.isPending}
-                            onClick={() => {
-                              if (confirm(`Delete scan ${s.id.slice(0, 8)}? This removes its findings occurrences and archived output.`))
+                      <RowActions
+                        label={`scan ${short}`}
+                        actions={[
+                          {
+                            label: "Stop",
+                            primary: true,
+                            hidden: !canCancel || !active,
+                            disabled: cancel.isPending,
+                            onSelect: async () => {
+                              if (
+                                await confirm({
+                                  title: `Stop scan ${short}?`,
+                                  description: "The scanner node cancels the run. Results collected so far are not ingested.",
+                                  confirmLabel: "Stop scan",
+                                })
+                              )
+                                cancel.mutate(s.id);
+                            },
+                          },
+                          {
+                            label: "Delete",
+                            danger: true,
+                            hidden: !canDelete || active,
+                            disabled: del.isPending,
+                            onSelect: async () => {
+                              if (
+                                await confirm({
+                                  title: `Delete scan ${short}?`,
+                                  description:
+                                    "This removes its finding occurrences and archived output. Finding lifecycles are recomputed from the scans that remain.",
+                                  confirmLabel: "Delete scan",
+                                })
+                              )
                                 del.mutate(s.id);
-                            }}
-                          >
-                            Delete
-                          </Button>
-                        )}
-                      </td>
+                            },
+                          },
+                        ]}
+                      />
                     )}
-                  </tr>
-                ))}
-                {(scans.data ?? []).length === 0 && (
-                  <tr>
-                    <td colSpan={colCount} className="px-3 py-8 text-center text-neutral-400">
-                      No scans yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                  </TRow>
+                );
+              })}
+              {(scans.data ?? []).length === 0 && <TableEmpty colSpan={colCount}>No scans yet.</TableEmpty>}
+            </tbody>
+          </Table>
         </Card>
       )}
 
       {runOpen && <RunScanModal onClose={() => setRunOpen(false)} />}
       {importOpen && <ImportBundleModal onClose={() => setImportOpen(false)} />}
-    </div>
+    </Page>
   );
 }

@@ -9,15 +9,29 @@ import {
 } from "../api";
 import { hasRole, useMe } from "../auth";
 import {
+  Alert,
+  Badge,
   Button,
   Card,
+  EmptyState,
   ErrorText,
   Field,
+  FormHint,
   Input,
   Modal,
-  Pill,
+  ModalActions,
+  Page,
+  PageHeader,
+  RowActions,
   Select,
   Spinner,
+  Table,
+  TableEmpty,
+  Td,
+  Th,
+  THead,
+  TRow,
+  useConfirm,
 } from "../components/ui";
 
 function fmtTime(s?: string) {
@@ -53,10 +67,10 @@ function TokenReveal({ result, onClose }: { result: ServiceAccountWithToken; onC
   return (
     <Modal open dismissible={false} onOpenChange={() => {}} title={`Token for “${result.name}”`}>
       <div className="space-y-4">
-        <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+        <Alert tone="warning">
           Copy this token now — it is shown <strong>once</strong> and cannot be retrieved
           afterwards. If you lose it, rotate the account to mint a new one.
-        </div>
+        </Alert>
 
         <div className="break-all rounded-md border border-neutral-300 bg-neutral-50 p-3 font-mono text-sm select-all dark:border-neutral-700 dark:bg-neutral-800">
           {result.token}
@@ -70,20 +84,18 @@ function TokenReveal({ result, onClose }: { result: ServiceAccountWithToken; onC
           </span>
         </div>
         {copyFailed && (
-          <p className="text-xs text-red-600 dark:text-red-400">
-            Couldn’t copy automatically — select the token above and copy it manually.
-          </p>
+          <FormHint tone="danger">Couldn’t copy automatically — select the token above and copy it manually.</FormHint>
         )}
 
-        <p className="text-xs text-neutral-500">
+        <FormHint>
           Use it as <code>Authorization: Bearer &lt;token&gt;</code> on <code>/api</code> requests.
-        </p>
+        </FormHint>
 
-        <div className="flex justify-end">
+        <ModalActions>
           <Button variant="primary" onClick={onClose}>
             I’ve saved it
           </Button>
-        </div>
+        </ModalActions>
       </div>
     </Modal>
   );
@@ -113,7 +125,7 @@ function CreateModal({
   return (
     <Modal open onOpenChange={(v) => !v && onClose()} title="New service account">
       <div className="space-y-4">
-        <Field label="Name">
+        <Field label="Name" required>
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -122,7 +134,14 @@ function CreateModal({
           />
         </Field>
 
-        <Field label="Role">
+        <Field
+          label="Role"
+          hint={
+            <>
+              Grant the least role the automation needs — <code>viewer</code> is enough to read and export findings.
+            </>
+          }
+        >
           <Select value={role} onChange={(e) => setRole(e.target.value)} className="w-full">
             {ASSIGNABLE_ROLES.map((r) => (
               <option key={r} value={r}>
@@ -131,12 +150,8 @@ function CreateModal({
             ))}
           </Select>
         </Field>
-        <p className="-mt-2 text-xs text-neutral-500">
-          Grant the least role the automation needs — <code>viewer</code> is enough to read and
-          export findings.
-        </p>
 
-        <Field label="Expires in (days — 0 for no expiry)">
+        <Field label="Expires in (days)" hint="0 for no expiry." error={ttlInvalid && "Enter a whole number of days (0 or more)."}>
           <Input
             type="number"
             min={0}
@@ -147,23 +162,21 @@ function CreateModal({
           />
         </Field>
         {ttlNum === 0 && !ttlInvalid && (
-          <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
-            A token with no expiry stays valid until it is rotated or revoked.
-          </p>
+          <FormHint tone="warning">A token with no expiry stays valid until it is rotated or revoked.</FormHint>
         )}
 
         {create.isError && <ErrorText error={create.error} />}
 
-        <div className="flex justify-end gap-2">
+        <ModalActions>
           <Button onClick={onClose}>Cancel</Button>
           <Button
             variant="primary"
             disabled={create.isPending || !name.trim() || ttlInvalid}
             onClick={() => create.mutate()}
           >
-            {create.isPending ? "Creating…" : "Create"}
+            {create.isPending ? "Creating…" : "Create service account"}
           </Button>
-        </div>
+        </ModalActions>
       </div>
     </Modal>
   );
@@ -173,6 +186,7 @@ export function ServiceAccountsPage() {
   const me = useMe();
   const isAdmin = hasRole(me.data ?? undefined, "admin");
   const qc = useQueryClient();
+  const confirm = useConfirm();
   const [creating, setCreating] = useState(false);
   const [revealed, setRevealed] = useState<ServiceAccountWithToken | null>(null);
 
@@ -197,27 +211,20 @@ export function ServiceAccountsPage() {
   });
 
   if (!me.isLoading && !isAdmin) {
-    return (
-      <Card className="p-8 text-center text-sm text-neutral-500">
-        Service accounts are managed by admins.
-      </Card>
-    );
+    return <EmptyState>Service accounts are managed by admins.</EmptyState>;
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Service Accounts</h1>
-          <p className="mt-1 text-sm text-neutral-500">
-            API tokens for headless automation (cron, CI, exports). Interactive users sign in with
-            SSO instead.
-          </p>
-        </div>
-        <Button variant="primary" onClick={() => setCreating(true)}>
-          New service account
-        </Button>
-      </div>
+    <Page>
+      <PageHeader
+        title="Service accounts"
+        description="API tokens for headless automation (cron, CI, exports). Interactive users sign in with SSO instead."
+        actions={
+          <Button variant="primary" onClick={() => setCreating(true)}>
+            New service account
+          </Button>
+        }
+      />
 
       {rotate.isError && <ErrorText error={rotate.error} />}
       {del.isError && <ErrorText error={del.error} />}
@@ -228,81 +235,69 @@ export function ServiceAccountsPage() {
         <ErrorText error={q.error} />
       ) : (
         <Card>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
-                  <th className="px-3 py-2 font-medium">Name</th>
-                  <th className="px-3 py-2 font-medium">Role</th>
-                  <th className="px-3 py-2 font-medium">Token</th>
-                  <th className="px-3 py-2 font-medium">Created</th>
-                  <th className="px-3 py-2 font-medium">Expires</th>
-                  <th className="px-3 py-2 font-medium">Last used</th>
-                  <th className="px-3 py-2" />
-                </tr>
-              </thead>
-              <tbody>
-                {(q.data ?? []).map((sa) => (
-                  <tr
-                    key={sa.id}
-                    className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60"
-                  >
-                    <td className="px-3 py-2 font-medium">{sa.name}</td>
-                    <td className="px-3 py-2 text-neutral-500">{sa.role}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">
-                      {sa.token_prefix}…
-                    </td>
-                    <td className="px-3 py-2 text-neutral-500">{fmtTime(sa.created_at)}</td>
-                    <td className="px-3 py-2 text-neutral-500">
-                      {isExpired(sa) ? (
-                        <Pill tone="warn">expired</Pill>
-                      ) : (
-                        (sa.expires_at ? fmtTime(sa.expires_at) : "never")
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-neutral-500">{fmtTime(sa.last_used_at)}</td>
-                    <td className="px-3 py-2 text-right whitespace-nowrap">
-                      <Button
-                        variant="ghost"
-                        disabled={rotate.isPending}
-                        onClick={() => {
+          <Table>
+            <THead>
+              <Th>Name</Th>
+              <Th>Role</Th>
+              <Th>Token</Th>
+              <Th>Created</Th>
+              <Th>Expires</Th>
+              <Th>Last used</Th>
+              <Th aria-label="Actions" />
+            </THead>
+            <tbody>
+              {(q.data ?? []).map((sa) => (
+                <TRow key={sa.id}>
+                  <Td className="font-medium">{sa.name}</Td>
+                  <Td>
+                    <Badge>{sa.role}</Badge>
+                  </Td>
+                  <Td className="font-mono text-xs text-neutral-600 dark:text-neutral-400">{sa.token_prefix}…</Td>
+                  <Td className="whitespace-nowrap text-neutral-500">{fmtTime(sa.created_at)}</Td>
+                  <Td className="whitespace-nowrap text-neutral-500">
+                    {isExpired(sa) ? <Badge tone="danger">expired</Badge> : sa.expires_at ? fmtTime(sa.expires_at) : "never"}
+                  </Td>
+                  <Td className="whitespace-nowrap text-neutral-500">{fmtTime(sa.last_used_at)}</Td>
+                  <RowActions
+                    label={sa.name}
+                    actions={[
+                      {
+                        label: "Rotate",
+                        primary: true,
+                        disabled: rotate.isPending,
+                        onSelect: async () => {
                           if (
-                            confirm(
-                              `Rotate "${sa.name}"?\n\nA new token is minted and the current one stops working immediately.`,
-                            )
+                            await confirm({
+                              title: `Rotate “${sa.name}”?`,
+                              description: "A new token is minted and the current one stops working immediately.",
+                              confirmLabel: "Rotate token",
+                              tone: "primary",
+                            })
                           )
                             rotate.mutate(sa.id);
-                        }}
-                      >
-                        Rotate
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        className="text-red-600 dark:text-red-400"
-                        onClick={() => {
+                        },
+                      },
+                      {
+                        label: "Revoke",
+                        danger: true,
+                        onSelect: async () => {
                           if (
-                            confirm(
-                              `Revoke "${sa.name}"?\n\nIts token stops working immediately and anything using it will start failing.`,
-                            )
+                            await confirm({
+                              title: `Revoke “${sa.name}”?`,
+                              description: "Its token stops working immediately and anything using it will start failing.",
+                              confirmLabel: "Revoke",
+                            })
                           )
                             del.mutate(sa.id);
-                        }}
-                      >
-                        Revoke
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-                {(q.data ?? []).length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="px-3 py-8 text-center text-neutral-400">
-                      No service accounts yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                        },
+                      },
+                    ]}
+                  />
+                </TRow>
+              ))}
+              {(q.data ?? []).length === 0 && <TableEmpty colSpan={7}>No service accounts yet.</TableEmpty>}
+            </tbody>
+          </Table>
         </Card>
       )}
 
@@ -317,6 +312,6 @@ export function ServiceAccountsPage() {
         />
       )}
       {revealed && <TokenReveal result={revealed} onClose={() => setRevealed(null)} />}
-    </div>
+    </Page>
   );
 }

@@ -27,7 +27,7 @@ import type { Identity } from "../api";
 import { hasRole, useVersion } from "../auth";
 import { useTheme } from "../theme";
 import { Brand } from "./Brand";
-import { cn } from "./ui";
+import { Badge, cn, focusRing, menuContentClass, menuItemClass, menuSeparatorClass } from "./ui";
 
 // Nav data model. Categories are an IA hint; routes are unchanged. The `role`
 // gate on a category hides it from users who don't hold the role — purely
@@ -44,10 +44,10 @@ const categories: Category[] = [
     panes: [
       { to: "/scans", label: "Scans", icon: Radar },
       { to: "/schedules", label: "Schedules", icon: CalendarClock },
-      { to: "/scan-policies", label: "Scan Policies", icon: Gauge },
+      { to: "/scan-policies", label: "Scan policies", icon: Gauge },
       { to: "/targets", label: "Targets", icon: Target },
       { to: "/templates", label: "Templates", icon: Library },
-      { to: "/template-sets", label: "Template Sets", icon: Layers },
+      { to: "/template-sets", label: "Template sets", icon: Layers },
     ],
   },
   {
@@ -55,8 +55,8 @@ const categories: Category[] = [
     label: "Admin",
     role: "admin",
     panes: [
-      { to: "/nodes", label: "Scanner Nodes", icon: Server },
-      { to: "/service-accounts", label: "Service Accounts", icon: KeyRound },
+      { to: "/nodes", label: "Scanner nodes", icon: Server },
+      { to: "/service-accounts", label: "Service accounts", icon: KeyRound },
       { to: "/sessions", label: "Sessions", icon: ShieldCheck },
       { to: "/settings", label: "Settings", icon: SlidersHorizontal },
     ],
@@ -102,7 +102,8 @@ function isPaneActive(pane: Pane, currentPath: string): boolean {
 
 function paneLinkClass(isActive: boolean, collapsed: boolean) {
   return cn(
-    "flex items-center gap-2 rounded-md text-sm font-medium",
+    "flex items-center gap-2 rounded-md text-sm font-medium transition",
+    focusRing,
     collapsed ? "justify-center px-0 py-2" : "px-3 py-1.5",
     isActive
       ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
@@ -338,19 +339,14 @@ export function Layout({
                 <DropdownMenu.Content
                   align="end"
                   sideOffset={6}
-                  className="min-w-52 rounded-md border border-neutral-200 bg-white p-1 shadow-lg dark:border-neutral-800 dark:bg-neutral-900"
+                  className={cn(menuContentClass, "min-w-52")}
                 >
                   <div className="px-2 py-1.5 text-xs text-neutral-500">
                     {identity.email || identity.subject}
                     <div className="mt-1 flex flex-wrap gap-1">
                       {identity.roles.length ? (
                         identity.roles.map((r) => (
-                          <span
-                            key={r}
-                            className="rounded bg-neutral-100 px-1.5 py-0.5 font-medium text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
-                          >
-                            {r}
-                          </span>
+                          <Badge key={r}>{r}</Badge>
                         ))
                       ) : (
                         <span className="text-neutral-400">no roles</span>
@@ -358,10 +354,10 @@ export function Layout({
                     </div>
                     <AccountVersion />
                   </div>
-                  <DropdownMenu.Separator className="my-1 h-px bg-neutral-200 dark:bg-neutral-800" />
+                  <DropdownMenu.Separator className={menuSeparatorClass} />
                   <DropdownMenu.Item
                     onSelect={() => void logout()}
-                    className="cursor-pointer rounded px-2 py-1.5 text-sm outline-none hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                    className={menuItemClass}
                   >
                     Log out
                   </DropdownMenu.Item>

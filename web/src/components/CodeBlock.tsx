@@ -16,15 +16,14 @@ export function CodeBlock({ text }: { text: string }) {
   return (
     <div className="relative">
       <Button
-        variant="secondary"
-        type="button"
+        size="sm"
         aria-label={copied ? "Copied code to clipboard" : "Copy code to clipboard"}
         onClick={copy}
-        className="absolute right-2 top-2 px-2 py-1 text-xs"
+        className="absolute right-2 top-2"
       >
         {copied ? "Copied" : "Copy"}
       </Button>
-      <pre className="max-h-96 overflow-auto whitespace-pre rounded-md bg-neutral-950 p-3 pr-16 text-xs leading-relaxed text-neutral-200">
+      <pre className="max-h-96 overflow-auto whitespace-pre rounded-md bg-neutral-950 p-3 pr-20 text-xs leading-relaxed text-neutral-200">
         {text}
       </pre>
     </div>

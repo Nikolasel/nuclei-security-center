@@ -2,7 +2,28 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, type SessionInfo } from "../api";
 import { hasRole, useMe } from "../auth";
-import { Button, Card, ErrorText, Input, Spinner } from "../components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  EmptyState,
+  ErrorText,
+  FormHint,
+  Input,
+  Muted,
+  Page,
+  PageHeader,
+  Pager,
+  RowActions,
+  Spinner,
+  Table,
+  Td,
+  Th,
+  THead,
+  TRow,
+  useConfirm,
+} from "../components/ui";
 
 function fmtTime(s?: string) {
   return s ? new Date(s).toLocaleString() : "—";
@@ -22,6 +43,7 @@ export function SessionsPage() {
   const me = useMe();
   const isAdmin = hasRole(me.data ?? undefined, "admin");
   const qc = useQueryClient();
+  const confirm = useConfirm();
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState("");
   const [stack, setStack] = useState<string[]>([]);
@@ -58,88 +80,75 @@ export function SessionsPage() {
   });
 
   if (!me.isLoading && !isAdmin) {
-    return (
-      <Card className="p-8 text-center text-sm text-neutral-500">
-        Sessions are managed by admins.
-      </Card>
-    );
+    return <EmptyState>Sessions are managed by admins.</EmptyState>;
   }
 
+  const goPrev = () => {
+    if (!hasPrev) return;
+    const prev = stack[stack.length - 1];
+    setStack((s) => s.slice(0, -1));
+    setCursor(prev);
+  };
+  const goFirst = () => {
+    setStack([]);
+    setCursor("");
+  };
+
   const paginationBar = (
-    <div className="flex items-center justify-between text-xs text-neutral-500">
-      <Button
-        variant="secondary"
-        disabled={!hasPrev}
-        onClick={() => {
-          if (!hasPrev) return;
-          const prev = stack[stack.length - 1];
-          setStack((s) => s.slice(0, -1));
-          setCursor(prev);
-        }}
-      >
-        Previous
-      </Button>
-      <span>
-        {q.data ? `${sessions.length} on this page · ${total} total${stack.length ? ` · page ${stack.length + 1}` : ""}` : ""}
-      </span>
-      <Button
-        variant="secondary"
-        disabled={!hasNext}
-        onClick={() => {
-          if (!hasNext) return;
-          setStack((s) => [...s, cursor]);
-          setCursor(nextCursor);
-        }}
-      >
-        Next
-      </Button>
-    </div>
+    <Pager
+      summary={
+        q.data
+          ? `${sessions.length} on this page · ${total} total${stack.length ? ` · page ${stack.length + 1}` : ""}`
+          : ""
+      }
+      hasPrev={hasPrev}
+      hasNext={hasNext}
+      onPrev={goPrev}
+      onNext={() => {
+        if (!hasNext) return;
+        setStack((s) => [...s, cursor]);
+        setCursor(nextCursor);
+      }}
+    />
   );
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Sessions</h1>
-          <p className="mt-1 max-w-2xl text-sm text-neutral-500">
-            Active browser sessions (server-side BFF). Roles are frozen for the life of each
-            session — at most <code>SESSION_TTL</code> (default 12h, max 24h). Revoke a user&apos;s
-            sessions immediately on offboarding or role change instead of waiting for expiry. The
-            grouping key is the OIDC <code>sub</code> (opaque, often a UUID) — copy it from the mono
-            line below, not the email.
-          </p>
-        </div>
-        <Button variant="secondary" onClick={() => void qc.invalidateQueries({ queryKey: ["sessions"] })}>
-          Refresh
-        </Button>
-      </div>
+    <Page>
+      <PageHeader
+        title="Sessions"
+        description={
+          <>
+            Active browser sessions (server-side BFF). Roles are frozen for the life of each session — at most{" "}
+            <code>SESSION_TTL</code> (default 12h, max 24h). Revoke a user&apos;s sessions on offboarding or role change
+            instead of waiting for expiry.
+          </>
+        }
+        actions={<Button onClick={() => void qc.invalidateQueries({ queryKey: ["sessions"] })}>Refresh</Button>}
+      />
 
       <Card className="space-y-3 p-4">
         <div className="flex flex-wrap items-center gap-3">
           <Input
             value={query}
             onChange={(e) => {
-              const v = e.target.value;
-              setQuery(v);
+              setQuery(e.target.value);
               // Server-side search is global — reset pagination to first page.
-              setCursor("");
-              setStack([]);
+              goFirst();
             }}
             placeholder="Filter by subject, email or role…"
+            aria-label="Filter sessions"
             className="w-full max-w-sm"
           />
-          <span className="text-xs text-neutral-400">
+          <span className="text-xs text-neutral-500">
             {q.data ? (search ? `${total} match${total === 1 ? "" : "es"} for “${search}”` : `${total} total`) : ""}
           </span>
         </div>
-        <p className="text-xs text-neutral-500">
-          Each row is one live server-side session. Its <code>id</code> is the stored hash, not the
-          raw cookie value. &ldquo;Subject&rdquo; is the OIDC <code>sub</code> claim (opaque, often a
-          UUID) — not the email. Revoking by subject is the offboarding path — it terminates every
-          live session for that <code>sub</code> at once (404 if no live session matches, so a typo
-          or email-instead-of-<code>sub</code> does not silently no-op). Single-session revoke is for
-          targeted termination. Filtering is server-side and global across all pages.
-        </p>
+        <FormHint>
+          Each row is one live server-side session. Its <code>id</code> is the stored hash, not the raw cookie value.
+          &ldquo;Subject&rdquo; is the OIDC <code>sub</code> claim (opaque, often a UUID) — not the email. Revoking by
+          subject is the offboarding path: it terminates every live session for that <code>sub</code> at once (404 if no
+          live session matches, so a typo does not silently no-op). Filtering is server-side and global across all pages.
+        </FormHint>
       </Card>
 
       {(revokeOne.isError || revokeSubject.isError) && (
@@ -158,45 +167,24 @@ export function SessionsPage() {
           {(total > limit || hasPrev || hasNext) && paginationBar}
 
           {sessions.length === 0 ? (
-            <Card className="p-8 text-center text-sm text-neutral-500">
-              <div>{total === 0 ? (search ? `No sessions match “${search}”.` : "No active sessions.") : isSearchEmpty ? `No sessions on this page match “${search}”.` : "No sessions on this page."}</div>
-              {isEmptyPage && hasPrev && (
-                <div className="mt-3 flex justify-center gap-2">
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      const prev = stack[stack.length - 1];
-                      setStack((s) => s.slice(0, -1));
-                      setCursor(prev);
-                    }}
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      setStack([]);
-                      setCursor("");
-                    }}
-                  >
-                    First page
-                  </Button>
-                </div>
-              )}
-              {isEmptyPage && !hasPrev && (
-                <div className="mt-3">
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      setStack([]);
-                      setCursor("");
-                    }}
-                  >
-                    First page
-                  </Button>
-                </div>
-              )}
-            </Card>
+            <EmptyState
+              action={
+                isEmptyPage && (
+                  <>
+                    {hasPrev && <Button onClick={goPrev}>Previous</Button>}
+                    <Button onClick={goFirst}>First page</Button>
+                  </>
+                )
+              }
+            >
+              {total === 0
+                ? search
+                  ? `No sessions match “${search}”.`
+                  : "No active sessions."
+                : isSearchEmpty
+                  ? `No sessions on this page match “${search}”.`
+                  : "No sessions on this page."}
+            </EmptyState>
           ) : (
             Array.from(grouped.entries())
               .sort(([a], [b]) => a.localeCompare(b))
@@ -205,27 +193,35 @@ export function SessionsPage() {
                 const label = rep.email ? `${rep.name ? `${rep.name} — ` : ""}${rep.email}` : subject;
                 return (
                   <Card key={subject} className="overflow-hidden">
-                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-200 bg-neutral-50 px-3 py-2 dark:border-neutral-800 dark:bg-neutral-900/50">
+                    <CardHeader className="bg-neutral-50 dark:bg-neutral-900/50">
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-medium" title={subject}>
+                        <div className="truncate font-medium" title={subject}>
                           {label}
                         </div>
                         <div className="truncate font-mono text-xs text-neutral-500" title={subject}>
                           {subject}
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-3">
                         <span className="text-xs text-neutral-500">
                           {sessions.length} session{sessions.length === 1 ? "" : "s"}
                         </span>
                         <Button
                           variant="danger"
+                          size="sm"
                           disabled={revokeSubject.isPending}
-                          onClick={() => {
+                          onClick={async () => {
                             if (
-                              confirm(
-                                `Revoke every active session for ${subject}?\n\nThey will be signed out immediately (next request → 401) and must sign in again. This is the offboarding path.`,
-                              )
+                              await confirm({
+                                title: `Revoke every session for ${label}?`,
+                                description: (
+                                  <>
+                                    They are signed out immediately (next request → 401) and must sign in again. This is
+                                    the offboarding path. Subject: <span className="font-mono">{subject}</span>
+                                  </>
+                                ),
+                                confirmLabel: "Revoke all",
+                              })
                             )
                               revokeSubject.mutate(subject);
                           }}
@@ -233,60 +229,64 @@ export function SessionsPage() {
                           Revoke all
                         </Button>
                       </div>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
-                            <th className="px-3 py-2 font-medium">Roles</th>
-                            <th className="px-3 py-2 font-medium">Created</th>
-                            <th className="px-3 py-2 font-medium">Expires</th>
-                            <th className="px-3 py-2 font-medium">Session id (hash)</th>
-                            <th className="px-3 py-2" />
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {sessions.map((s) => (
-                            <tr
-                              key={s.id}
-                              className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60"
-                            >
-                              <td className="px-3 py-2 text-neutral-700 dark:text-neutral-300">
-                                {s.roles.length ? s.roles.join(", ") : "—"}
-                              </td>
-                              <td className="px-3 py-2 text-neutral-500">{fmtTime(s.created_at)}</td>
-                              <td className="px-3 py-2 text-neutral-500">{fmtTime(s.expires_at)}</td>
-                              <td className="px-3 py-2 font-mono text-xs text-neutral-500" title={s.id}>
-                                {s.id.slice(0, 12)}…{s.id.slice(-6)}
-                              </td>
-                              <td className="px-3 py-2 text-right whitespace-nowrap">
-                                <Button
-                                  variant="ghost"
-                                  className="text-red-600 dark:text-red-400"
-                                  disabled={revokeOne.isPending}
-                                  onClick={() => {
+                    </CardHeader>
+                    <Table>
+                      <THead>
+                        <Th>Roles</Th>
+                        <Th>Created</Th>
+                        <Th>Expires</Th>
+                        <Th>Session id (hash)</Th>
+                        <Th aria-label="Actions" />
+                      </THead>
+                      <tbody>
+                        {sessions.map((s) => (
+                          <TRow key={s.id}>
+                            <Td>
+                              {s.roles.length ? (
+                                <div className="flex flex-wrap gap-1">
+                                  {s.roles.map((r) => (
+                                    <Badge key={r}>{r}</Badge>
+                                  ))}
+                                </div>
+                              ) : (
+                                <Muted />
+                              )}
+                            </Td>
+                            <Td className="whitespace-nowrap text-neutral-500">{fmtTime(s.created_at)}</Td>
+                            <Td className="whitespace-nowrap text-neutral-500">{fmtTime(s.expires_at)}</Td>
+                            <Td className="font-mono text-xs text-neutral-500" title={s.id}>
+                              {s.id.slice(0, 12)}…{s.id.slice(-6)}
+                            </Td>
+                            <RowActions
+                              label="session"
+                              actions={[
+                                {
+                                  label: "Revoke",
+                                  danger: true,
+                                  disabled: revokeOne.isPending,
+                                  onSelect: async () => {
                                     if (
-                                      confirm(
-                                        `Revoke this session for ${subject}?\n\nThe holder will be signed out on their next request.`,
-                                      )
+                                      await confirm({
+                                        title: `Revoke this session for ${label}?`,
+                                        description: "The holder is signed out on their next request.",
+                                        confirmLabel: "Revoke session",
+                                      })
                                     )
                                       revokeOne.mutate(s.id);
-                                  }}
-                                >
-                                  Revoke
-                                </Button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                                  },
+                                },
+                              ]}
+                            />
+                          </TRow>
+                        ))}
+                      </tbody>
+                    </Table>
                   </Card>
                 );
               })
           )}
         </div>
       )}
-    </div>
+    </Page>
   );
 }

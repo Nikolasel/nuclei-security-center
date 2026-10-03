@@ -2,7 +2,32 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { api, type ScannerNode } from "../api";
 import { hasRole, useMe } from "../auth";
-import { Button, Card, ErrorText, Field, Input, Modal, Pill, Spinner } from "../components/ui";
+import {
+  Alert,
+  Badge,
+  Button,
+  Card,
+  ErrorText,
+  Field,
+  FormSection,
+  Input,
+  Modal,
+  ModalActions,
+  Muted,
+  Page,
+  PageHeader,
+  Pill,
+  RowActions,
+  Spinner,
+  Table,
+  TableEmpty,
+  Td,
+  Textarea,
+  Th,
+  THead,
+  TRow,
+  useConfirm,
+} from "../components/ui";
 import { parseList } from "../util";
 
 const defaultMaxConcurrentScans = 20;
@@ -28,11 +53,11 @@ function DiscoveryBadge({ scanType }: { scanType?: string }) {
  *  When unhealthy, the poll failure (e.g. "401 Unauthorized" for a wrong token)
  *  is shown as subtext so an operator can tell *why* without reading server logs. */
 function HealthBadge({ healthy, error }: { healthy?: boolean | null; error?: string }) {
-  if (healthy == null) return <Pill tone="neutral">unknown</Pill>;
-  if (healthy) return <Pill tone="good">healthy</Pill>;
+  if (healthy == null) return <Badge>unknown</Badge>;
+  if (healthy) return <Badge tone="success">healthy</Badge>;
   return (
     <div className="space-y-1">
-      <Pill tone="warn">unhealthy</Pill>
+      <Badge tone="danger">unhealthy</Badge>
       {error && (
         <div className="max-w-xs text-xs text-rose-600 dark:text-rose-400" title={error}>
           {error}
@@ -97,10 +122,10 @@ function NodeModal({ existing, onClose }: { existing?: ScannerNode; onClose: () 
   return (
     <Modal open onOpenChange={(v) => !v && onClose()} title={editing ? "Edit scanner node" : "New scanner node"}>
       <div className="space-y-4">
-        <Field label="Name">
+        <Field label="Name" required>
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="corp" className="w-full" />
         </Field>
-        <Field label="Endpoint (base URL the backend calls)">
+        <Field label="Endpoint" required hint="Base URL the backend calls.">
           <Input
             value={endpoint}
             onChange={(e) => setEndpoint(e.target.value)}
@@ -108,7 +133,11 @@ function NodeModal({ existing, onClose }: { existing?: ScannerNode; onClose: () 
             className="w-full"
           />
         </Field>
-        <Field label={editing ? "Token (leave blank to keep current)" : "Token (bearer secret)"}>
+        <Field
+          label="Token"
+          required={!editing}
+          hint={editing ? "Leave blank to keep the current bearer secret." : "Bearer secret shared with the node."}
+        >
           <Input
             type="password"
             value={token}
@@ -118,104 +147,102 @@ function NodeModal({ existing, onClose }: { existing?: ScannerNode; onClose: () 
             className="w-full"
           />
         </Field>
-        <Field label="CIDRs (one per line — empty = catch-all)">
-          <textarea
+        <Field
+          label="CIDRs"
+          hint="One per line. A node with no CIDRs is a catch-all for hostname targets and IPs matching no other node. CIDRs must not overlap another node."
+        >
+          <Textarea
             value={cidrs}
             onChange={(e) => setCidrs(e.target.value)}
             rows={3}
             placeholder="10.0.0.0/8&#10;192.168.1.0/24"
-            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-1.5 font-mono text-sm dark:border-neutral-700 dark:bg-neutral-800"
           />
         </Field>
-        <p className="-mt-2 text-xs text-neutral-500">
-          A node with no CIDRs is a catch-all for hostname targets and IPs matching no other node.
-          CIDRs must not overlap another node.
-        </p>
-        <Field label="Maximum concurrent scans">
-          <Input
-            type="number"
-            min={1}
-            max={maxConcurrentScansCeiling}
-            value={maxConcurrentScans}
-            onChange={(e) => setMaxConcurrentScans(e.target.value)}
-            className="w-full max-w-[12rem]"
-          />
-        </Field>
-        {!maxConcurrentScansValid && (
-          <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
-            Enter a whole number from 1 to {maxConcurrentScansCeiling}. This limit protects this
-            node&apos;s process, memory, and outbound scan budget.
-          </p>
-        )}
-        <Field label="Tags (comma separated)">
-          <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="corp, internal" className="w-full" />
-        </Field>
-
-        <div className="border-t border-neutral-200 pt-3 dark:border-neutral-800">
-          <button
-            type="button"
-            onClick={() => setShowTLS((v) => !v)}
-            className="flex w-full items-center justify-between text-left text-sm font-medium text-neutral-700 dark:text-neutral-300"
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field
+            label="Maximum concurrent scans"
+            error={
+              !maxConcurrentScansValid &&
+              `Enter a whole number from 1 to ${maxConcurrentScansCeiling}. This limit protects this node's process, memory, and outbound scan budget.`
+            }
           >
-            <span>Mutual TLS (optional){hasTLS ? " · configured" : ""}</span>
-            <span className="text-neutral-400">{showTLS ? "–" : "+"}</span>
-          </button>
+            <Input
+              type="number"
+              min={1}
+              max={maxConcurrentScansCeiling}
+              value={maxConcurrentScans}
+              onChange={(e) => setMaxConcurrentScans(e.target.value)}
+              className="w-full"
+            />
+          </Field>
+          <Field label="Tags" hint="Comma separated.">
+            <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="corp, internal" className="w-full" />
+          </Field>
+        </div>
+
+        <FormSection>
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-expanded={showTLS}
+            onClick={() => setShowTLS((v) => !v)}
+            className="-ml-2.5"
+          >
+            {showTLS ? "−" : "+"} Mutual TLS (optional){hasTLS ? " · configured" : ""}
+          </Button>
           {showTLS && (
-            <div className="mt-3 space-y-4">
+            <div className="space-y-4">
               <p className="text-xs text-neutral-500">
                 For a node in an untrusted segment: pin its server certificate and present a client
                 certificate. Use an <code>https://</code> endpoint above. Paste PEM material. Leave
                 empty for plain HTTP + bearer token.
               </p>
-              <Field label="Server CA (PEM — pins the node's server cert)">
-                <textarea
+              <Field label="Server CA (PEM)" hint="Pins the node's server certificate.">
+                <Textarea
                   value={serverCA}
                   onChange={(e) => setServerCA(e.target.value)}
                   rows={3}
                   placeholder="-----BEGIN CERTIFICATE-----"
-                  className="w-full rounded-md border border-neutral-300 bg-white px-3 py-1.5 font-mono text-xs dark:border-neutral-700 dark:bg-neutral-800"
+                  className="text-xs"
                 />
               </Field>
-              <Field label="Client certificate (PEM — presented to the node)">
-                <textarea
+              <Field label="Client certificate (PEM)" hint="Presented to the node.">
+                <Textarea
                   value={clientCert}
                   onChange={(e) => setClientCert(e.target.value)}
                   rows={3}
                   placeholder="-----BEGIN CERTIFICATE-----"
-                  className="w-full rounded-md border border-neutral-300 bg-white px-3 py-1.5 font-mono text-xs dark:border-neutral-700 dark:bg-neutral-800"
+                  className="text-xs"
                 />
               </Field>
               <Field
-                label={
-                  editing
-                    ? "Client private key (PEM — leave blank to keep current)"
-                    : "Client private key (PEM)"
-                }
+                label="Client private key (PEM)"
+                hint={editing ? "Write-only. Leave blank to keep the current key." : "Write-only — never shown again."}
               >
-                <textarea
+                <Textarea
                   value={clientKey}
                   onChange={(e) => setClientKey(e.target.value)}
                   rows={3}
                   placeholder={editing && hasTLS ? "unchanged" : "-----BEGIN PRIVATE KEY-----"}
                   autoComplete="off"
-                  className="w-full rounded-md border border-neutral-300 bg-white px-3 py-1.5 font-mono text-xs dark:border-neutral-700 dark:bg-neutral-800"
+                  className="text-xs"
                 />
               </Field>
             </div>
           )}
-        </div>
+        </FormSection>
 
         {save.isError && <ErrorText error={save.error} />}
-        <div className="flex justify-end gap-2">
+        <ModalActions>
           <Button onClick={onClose}>Cancel</Button>
           <Button
             variant="primary"
             disabled={save.isPending || !name.trim() || !endpoint.trim() || tokenMissing || !maxConcurrentScansValid}
             onClick={() => save.mutate()}
           >
-            {save.isPending ? "Saving…" : "Save"}
+            {save.isPending ? "Saving…" : "Save node"}
           </Button>
-        </div>
+        </ModalActions>
       </div>
     </Modal>
   );
@@ -225,6 +252,7 @@ export function NodesPage() {
   const me = useMe();
   const isAdmin = hasRole(me.data ?? undefined, "admin");
   const qc = useQueryClient();
+  const confirm = useConfirm();
   const [editing, setEditing] = useState<ScannerNode | "new" | null>(null);
   const [notice, setNotice] = useState("");
 
@@ -244,26 +272,23 @@ export function NodesPage() {
   });
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Scanner Nodes</h1>
-          <p className="mt-1 text-sm text-neutral-500">
-            The dispatch registry. A scan runs on the node whose CIDRs contain its target; nodes
-            with no CIDRs are catch-alls. Health is polled from each node.
-          </p>
-        </div>
-        {isAdmin && (
-          <Button variant="primary" onClick={() => setEditing("new")}>
-            New node
-          </Button>
-        )}
-      </div>
+    <Page>
+      <PageHeader
+        title="Scanner nodes"
+        description="The dispatch registry. A scan runs on the node whose CIDRs contain its target; nodes with no CIDRs are catch-alls. Health is polled from each node."
+        actions={
+          isAdmin && (
+            <Button variant="primary" onClick={() => setEditing("new")}>
+              New node
+            </Button>
+          )
+        }
+      />
 
       {notice && (
-        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">
+        <Alert tone="success" onDismiss={() => setNotice("")}>
           {notice}
-        </div>
+        </Alert>
       )}
       {del.isError && <ErrorText error={del.error} />}
       {syncTemplates.isError && <ErrorText error={syncTemplates.error} />}
@@ -274,64 +299,56 @@ export function NodesPage() {
         <ErrorText error={q.error} />
       ) : (
         <Card>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
-                  <th className="px-3 py-2 font-medium">Name</th>
-                  <th className="px-3 py-2 font-medium">Status</th>
-                  <th className="px-3 py-2 font-medium">Endpoint</th>
-                  <th className="px-3 py-2 font-medium">Scope</th>
-                  <th className="px-3 py-2 font-medium">Catalog</th>
-                  {isAdmin && (
-                    <th className="sticky right-0 bg-white px-3 py-2 dark:bg-neutral-900" />
-                  )}
-                </tr>
-              </thead>
-              <tbody>
-                {(q.data ?? []).map((n) => (
-                  <tr key={n.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
-                    <td className="px-3 py-2">
+          <Table>
+            <THead>
+              <Th>Name</Th>
+              <Th>Status</Th>
+              <Th>Endpoint</Th>
+              <Th>Scope</Th>
+              <Th>Catalog</Th>
+              {isAdmin && <Th aria-label="Actions" />}
+            </THead>
+            <tbody>
+              {(q.data ?? []).map((n) => {
+                const syncing = syncTemplates.isPending && syncTemplates.variables?.id === n.id;
+                return (
+                  <TRow key={n.id}>
+                    <Td>
                       <div className="font-medium">{n.name}</div>
                       {n.tags.length > 0 && (
                         <div className="mt-0.5 max-w-[12rem] truncate text-xs text-neutral-500" title={n.tags.join(", ")}>
                           {n.tags.join(", ")}
                         </div>
                       )}
-                    </td>
-                    <td className="px-3 py-2">
+                    </Td>
+                    <Td>
                       <div className="flex flex-wrap items-center gap-1.5">
                         <HealthBadge healthy={n.healthy} error={n.health_error} />
                         <span title="Node default — a policy's discovery_scan_type can override per scan">
                           <DiscoveryBadge scanType={n.naabu_scan_type} />
                         </span>
                       </div>
-                    </td>
-                    <td className="max-w-[16rem] px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">
+                    </Td>
+                    <Td className="max-w-[16rem] font-mono text-xs text-neutral-600 dark:text-neutral-400">
                       <div className="flex items-center gap-2">
                         <span className="truncate" title={n.endpoint}>
                           {n.endpoint}
                         </span>
                         {(n.tls_client_cert || n.tls_server_ca) && (
-                          <span
-                            className="shrink-0 rounded bg-neutral-200 px-1.5 py-0.5 font-sans text-[10px] font-medium uppercase tracking-wide text-neutral-600 dark:bg-neutral-700 dark:text-neutral-300"
-                            title="mutual TLS configured"
-                          >
-                            mTLS
-                          </span>
+                          <Pill title="mutual TLS configured">mTLS</Pill>
                         )}
                       </div>
-                    </td>
-                    <td className="px-3 py-2 text-xs">
+                    </Td>
+                    <Td className="text-xs">
                       <div
                         className="max-w-[12rem] truncate font-mono text-neutral-600 dark:text-neutral-400"
                         title={n.cidrs.length ? n.cidrs.join(", ") : "catch-all"}
                       >
-                        {n.cidrs.length ? n.cidrs.join(", ") : <span className="text-neutral-400">catch-all</span>}
+                        {n.cidrs.length ? n.cidrs.join(", ") : <Muted>catch-all</Muted>}
                       </div>
                       <div className="mt-0.5 text-neutral-500">cap {n.max_concurrent_scans}</div>
-                    </td>
-                    <td className="px-3 py-2 text-xs text-neutral-500">
+                    </Td>
+                    <Td className="text-xs text-neutral-500">
                       <div className="font-mono" title={n.templates_commit}>
                         {n.templates_commit ? n.templates_commit.slice(0, 12) : "none active"}
                         {n.nuclei_version ? ` · nuclei ${n.nuclei_version}` : ""}
@@ -342,54 +359,50 @@ export function NodesPage() {
                       <div className="mt-0.5" title={n.last_seen ? new Date(n.last_seen).toLocaleString() : undefined}>
                         seen {fmtTime(n.last_seen)}
                       </div>
-                    </td>
+                    </Td>
                     {isAdmin && (
-                      <td className="sticky right-0 bg-white px-2 py-2 text-right whitespace-nowrap shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.18)] dark:bg-neutral-900 dark:shadow-[-8px_0_8px_-8px_rgba(0,0,0,0.55)]">
-                        <Button
-                          variant="ghost"
-                          title="Sync templates"
-                          disabled={syncTemplates.isPending && syncTemplates.variables?.id === n.id}
-                          onClick={() => {
-                            setNotice("");
-                            syncTemplates.mutate(n);
-                          }}
-                        >
-                          {syncTemplates.isPending && syncTemplates.variables?.id === n.id
-                            ? "Syncing…"
-                            : "Sync templates"}
-                        </Button>
-                        <Button variant="ghost" onClick={() => setEditing(n)}>
-                          Edit
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          className="text-red-600 dark:text-red-400"
-                          onClick={() => {
-                            if (confirm(`Delete scanner node "${n.name}"?`)) del.mutate(n.id);
-                          }}
-                        >
-                          Delete
-                        </Button>
-                      </td>
+                      <RowActions
+                        label={n.name}
+                        actions={[
+                          { label: "Edit", primary: true, onSelect: () => setEditing(n) },
+                          {
+                            label: syncing ? "Syncing…" : "Sync templates",
+                            title: "Push the active template catalog to this node now",
+                            disabled: syncing,
+                            onSelect: () => {
+                              setNotice("");
+                              syncTemplates.mutate(n);
+                            },
+                          },
+                          {
+                            label: "Delete",
+                            danger: true,
+                            onSelect: async () => {
+                              if (
+                                await confirm({
+                                  title: `Delete scanner node “${n.name}”?`,
+                                  description: "Scans can no longer be dispatched to it. Past scans keep their history.",
+                                  confirmLabel: "Delete node",
+                                })
+                              )
+                                del.mutate(n.id);
+                            },
+                          },
+                        ]}
+                      />
                     )}
-                  </tr>
-                ))}
-                {(q.data ?? []).length === 0 && (
-                  <tr>
-                    <td colSpan={isAdmin ? 6 : 5} className="px-3 py-8 text-center text-neutral-400">
-                      No scanner nodes.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                  </TRow>
+                );
+              })}
+              {(q.data ?? []).length === 0 && <TableEmpty colSpan={isAdmin ? 6 : 5}>No scanner nodes.</TableEmpty>}
+            </tbody>
+          </Table>
         </Card>
       )}
 
       {editing && (
         <NodeModal existing={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />
       )}
-    </div>
+    </Page>
   );
 }

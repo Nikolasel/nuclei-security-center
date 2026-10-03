@@ -1,4 +1,7 @@
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ChevronDown, Download } from "lucide-react";
+import type { ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
   api,
@@ -10,7 +13,27 @@ import {
 } from "../api";
 import { hasRole, useMe } from "../auth";
 import { ScanFindingsView } from "../components/ScanFindingsView";
-import { Button, Card, ErrorText, ProgressBar, Spinner, StateBadge } from "../components/ui";
+import {
+  Alert,
+  Badge,
+  Button,
+  DescriptionList,
+  ErrorText,
+  linkClass,
+  menuContentClass,
+  menuItemClass,
+  menuSeparatorClass,
+  Meta,
+  Muted,
+  Page,
+  PageHeader,
+  ProgressBar,
+  Section,
+  Spinner,
+  StateBadge,
+  Tag,
+  useConfirm,
+} from "../components/ui";
 import { formatDuration, scanEtaSeconds } from "../util";
 
 export function ScanDetailPage() {
@@ -18,6 +41,7 @@ export function ScanDetailPage() {
   const me = useMe();
   const canCancel = hasRole(me.data ?? undefined, "operator");
   const qc = useQueryClient();
+  const confirm = useConfirm();
 
   const scan = useQuery({
     queryKey: ["scan", id],
@@ -42,60 +66,39 @@ export function ScanDetailPage() {
   // typically has none since ingest only runs on successful completion.
   const done = state === "complete" || state === "failed" || state === "cancelled";
 
+  const short = id.slice(0, 8);
+  const d = scan.data;
+
   return (
-    <div className="space-y-5">
-      <div>
-        <Link to="/scans" className="text-sm text-indigo-600 hover:underline dark:text-indigo-400">
-          ← Scans
-        </Link>
-        <h1 className="mt-1 flex items-center gap-3 text-xl font-semibold">
-          <span className="font-mono text-base">{id.slice(0, 8)}</span>
-          {scan.data && <StateBadge state={scan.data.state} />}
-          <span className="ml-auto flex items-center gap-3">
+    <Page>
+      <PageHeader
+        back={{ label: "Scans", to: "/scans" }}
+        title={<span className="font-mono">{short}</span>}
+        badges={d && <StateBadge state={d.state} />}
+        actions={
+          <>
             {canCancel && active && (
               <Button
-                variant="ghost"
+                variant="danger-ghost"
                 disabled={cancel.isPending}
-                onClick={() => {
-                  if (confirm(`Stop scan ${id.slice(0, 8)}?`)) cancel.mutate();
+                onClick={async () => {
+                  if (
+                    await confirm({
+                      title: `Stop scan ${short}?`,
+                      description: "The scanner node cancels the run. Results collected so far are not ingested.",
+                      confirmLabel: "Stop scan",
+                    })
+                  )
+                    cancel.mutate();
                 }}
               >
                 Stop scan
               </Button>
             )}
-            {scan.data?.has_raw && (
-              <a
-                href={scanRawUrl(id)}
-                className="text-sm font-normal text-indigo-600 hover:underline dark:text-indigo-400"
-              >
-                Download raw output (JSONL)
-              </a>
-            )}
-            {scan.data?.has_log && (
-              <a
-                href={scanLogUrl(id)}
-                className="text-sm font-normal text-indigo-600 hover:underline dark:text-indigo-400"
-              >
-                Download log
-              </a>
-            )}
-            <a
-              href={scanBundleExportUrl(id, "zip")}
-              className="text-sm font-normal text-indigo-600 hover:underline dark:text-indigo-400"
-              title="Export scan bundle: scan record, resolved config and every occurrence as preserved raw JSON — the destination re-derives its own finding lifecycle (#136)"
-            >
-              Download bundle (zip)
-            </a>
-            <a
-              href={scanBundleExportUrl(id)}
-              className="text-sm font-normal text-indigo-600 hover:underline dark:text-indigo-400"
-              title="Same bundle as readable JSON (#136)"
-            >
-              Download bundle (JSON)
-            </a>
-          </span>
-        </h1>
-      </div>
+            <DownloadMenu id={id} hasRaw={!!d?.has_raw} hasLog={!!d?.has_log} />
+          </>
+        }
+      />
 
       {cancel.isError && <ErrorText error={cancel.error} />}
 
@@ -105,106 +108,56 @@ export function ScanDetailPage() {
         <ErrorText error={scan.error} />
       ) : (
         scan.data && (
-          <Card className="p-4">
-            <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-4">
-              <div>
-                <dt className="text-xs text-neutral-500">Target</dt>
-                <dd>
-                  {scan.data.target_name ? (
-                    <>
-                      {scan.data.target_id ? (
-                        <Link
-                          to="/targets"
-                          className="text-indigo-600 hover:underline dark:text-indigo-400"
-                        >
-                          {scan.data.target_name}
-                        </Link>
-                      ) : (
-                        scan.data.target_name
-                      )}
-                      {scan.data.target_host_count ? (
-                        <span className="text-neutral-400">
-                          {" "}
-                          ({scan.data.target_host_count} host
-                          {scan.data.target_host_count === 1 ? "" : "s"})
-                        </span>
-                      ) : null}
-                    </>
-                  ) : (
-                    <span className="text-neutral-400">ad-hoc</span>
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs text-neutral-500">Scanner node</dt>
-                <dd>
-                  {scan.data.node_name ? (
-                    scan.data.node_id ? (
-                      <Link
-                        to="/nodes"
-                        className="text-indigo-600 hover:underline dark:text-indigo-400"
-                      >
-                        {scan.data.node_name}
-                      </Link>
-                    ) : (
-                      scan.data.node_name
-                    )
-                  ) : (
-                    <span className="text-neutral-400">—</span>
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs text-neutral-500">Scan policy</dt>
-                <dd>
-                  {scan.data.scan_policy_name ? (
-                    scan.data.scan_policy_id ? (
-                      <Link
-                        to="/scan-policies"
-                        className="text-indigo-600 hover:underline dark:text-indigo-400"
-                      >
-                        {scan.data.scan_policy_name}
-                      </Link>
-                    ) : (
-                      scan.data.scan_policy_name
-                    )
-                  ) : (
-                    <span className="text-neutral-400">Default</span>
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs text-neutral-500">Template set</dt>
-                <dd>
-                  {scan.data.template_set_name ? (
-                    scan.data.template_set_id ? (
-                      <Link
-                        to="/template-sets"
-                        className="text-indigo-600 hover:underline dark:text-indigo-400"
-                      >
-                        {scan.data.template_set_name}
-                      </Link>
-                    ) : (
-                      scan.data.template_set_name
-                    )
-                  ) : (
-                    <span className="text-neutral-400">—</span>
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs text-neutral-500">Created</dt>
-                <dd>{new Date(scan.data.created_at).toLocaleString()}</dd>
-              </div>
-              <div>
-                <dt className="text-xs text-neutral-500">Finished</dt>
-                <dd>{scan.data.finished_at ? new Date(scan.data.finished_at).toLocaleString() : "—"}</dd>
-              </div>
-              <div>
-                <dt className="text-xs text-neutral-500">Nuclei</dt>
-                <dd className="font-mono text-xs">{scan.data.nuclei_version || "—"}</dd>
-              </div>
-            </dl>
+          <Section title="Run">
+            <DescriptionList columns={4}>
+              <Meta label="Target">
+                {scan.data.target_name ? (
+                  <>
+                    <OptionalLink to={scan.data.target_id ? "/targets" : undefined}>{scan.data.target_name}</OptionalLink>
+                    {scan.data.target_host_count ? (
+                      <span className="text-neutral-400">
+                        {" "}
+                        ({scan.data.target_host_count} host{scan.data.target_host_count === 1 ? "" : "s"})
+                      </span>
+                    ) : null}
+                  </>
+                ) : (
+                  <Muted>ad-hoc</Muted>
+                )}
+              </Meta>
+              <Meta label="Scanner node">
+                {scan.data.node_name ? (
+                  <OptionalLink to={scan.data.node_id ? "/nodes" : undefined}>{scan.data.node_name}</OptionalLink>
+                ) : (
+                  <Muted />
+                )}
+              </Meta>
+              <Meta label="Scan policy">
+                {scan.data.scan_policy_name ? (
+                  <OptionalLink to={scan.data.scan_policy_id ? "/scan-policies" : undefined}>
+                    {scan.data.scan_policy_name}
+                  </OptionalLink>
+                ) : (
+                  <Muted>Default</Muted>
+                )}
+              </Meta>
+              <Meta label="Template set">
+                {scan.data.template_set_name ? (
+                  <OptionalLink to={scan.data.template_set_id ? "/template-sets" : undefined}>
+                    {scan.data.template_set_name}
+                  </OptionalLink>
+                ) : (
+                  <Muted />
+                )}
+              </Meta>
+              <Meta label="Created">{new Date(scan.data.created_at).toLocaleString()}</Meta>
+              <Meta label="Finished">
+                {scan.data.finished_at ? new Date(scan.data.finished_at).toLocaleString() : <Muted />}
+              </Meta>
+              <Meta label="Nuclei">
+                <span className="font-mono text-xs">{scan.data.nuclei_version || "—"}</span>
+              </Meta>
+            </DescriptionList>
             {/* Discovery phase (naabu, #86): no clean percentage, so an animated
                 bar with the live per-host tally. The host count is naabu's
                 host-discovery probe result ("responding", not "alive"): on a NAT'd
@@ -270,17 +223,17 @@ export function ScanDetailPage() {
               <p className="mt-4 text-xs text-neutral-400">Waiting for progress from the scanner…</p>
             )}
             {scan.data.error && (
-              <p className="mt-3 rounded bg-red-50 px-3 py-2 text-sm whitespace-pre-wrap break-words text-red-700 dark:bg-red-950 dark:text-red-300">
-                {scan.data.error}
-              </p>
+              <Alert tone="danger" title="Scan failed" className="mt-4">
+                <span className="whitespace-pre-wrap">{scan.data.error}</span>
+              </Alert>
             )}
             {scan.data.skipped_finding_count > 0 && (
-              <p className="mt-3 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+              <Alert tone="warning" className="mt-4">
                 {scan.data.skipped_finding_count.toLocaleString()}{" "}malformed finding{" "}
                 {scan.data.skipped_finding_count === 1 ? "record was" : "records were"} skipped during ingest;
                 indexed results are partial; absent findings cannot be auto-mitigated from this scan.
                 Operational ingest failures remain scan-fatal.
-              </p>
+              </Alert>
             )}
             {scan.data.discovered_targets && scan.data.discovered_targets.length > 0 && (
               <DiscoveredEndpoints targets={scan.data.discovered_targets} />
@@ -292,7 +245,7 @@ export function ScanDetailPage() {
                 origin={scan.data.coverage_origin}
               />
             )}
-          </Card>
+          </Section>
         )
       )}
 
@@ -301,7 +254,53 @@ export function ScanDetailPage() {
       ) : (
         <ScanFindingsView scanId={id} />
       )}
-    </div>
+    </Page>
+  );
+}
+
+/** OptionalLink renders a link when the referenced record still exists. */
+function OptionalLink({ to, children }: { to?: string; children: ReactNode }) {
+  return to ? (
+    <Link to={to} className={linkClass}>
+      {children}
+    </Link>
+  ) : (
+    <>{children}</>
+  );
+}
+
+/** DownloadMenu groups the scan's archived artifacts behind one header button. */
+function DownloadMenu({ id, hasRaw, hasLog }: { id: string; hasRaw: boolean; hasLog: boolean }) {
+  const item = (href: string, label: string, title?: string) => (
+    <DropdownMenu.Item asChild>
+      <a href={href} title={title} className={menuItemClass}>
+        {label}
+      </a>
+    </DropdownMenu.Item>
+  );
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <Button>
+          <Download className="h-4 w-4" aria-hidden />
+          Download
+          <ChevronDown className="h-4 w-4 text-neutral-400" aria-hidden />
+        </Button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content align="end" sideOffset={4} className={menuContentClass}>
+          {hasRaw && item(scanRawUrl(id), "Raw output (JSONL)")}
+          {hasLog && item(scanLogUrl(id), "Execution log")}
+          {(hasRaw || hasLog) && <DropdownMenu.Separator className={menuSeparatorClass} />}
+          {item(
+            scanBundleExportUrl(id, "zip"),
+            "Scan bundle (zip)",
+            "Scan record, resolved config and every occurrence as preserved raw JSON — the destination re-derives its own finding lifecycle (#136)",
+          )}
+          {item(scanBundleExportUrl(id), "Scan bundle (JSON)", "Same bundle as readable JSON (#136)")}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
   );
 }
 
@@ -319,25 +318,27 @@ function CoveredEndpoints({
 }) {
   if (endpoints == null) {
     return (
-      <div className="mt-4 rounded bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+      <div className="mt-5 space-y-2">
         <CoverageSource origin={origin} />
-        <p>Endpoint coverage unavailable · this scan cannot mark absent findings as mitigated</p>
-        {warning && <p className="mt-1 break-words">{warning}</p>}
+        <Alert tone="warning" title="Endpoint coverage unavailable">
+          This scan cannot mark absent findings as mitigated.
+          {warning && <p className="mt-1">{warning}</p>}
+        </Alert>
       </div>
     );
   }
   const visibleEndpoints = endpoints.slice(0, 500);
   return (
-    <div className="mt-4">
+    <div className="mt-5">
       <CoverageSource origin={origin} />
       <p className="text-xs font-medium text-neutral-500">
         Template/endpoint checks completed · {endpoints.length.toLocaleString()}{" "}
         {endpoints.length === 1 ? "pair" : "pairs"}
       </p>
       {warning && (
-        <p className="mt-1 rounded bg-amber-50 px-2 py-1 text-xs break-words text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+        <Alert tone="warning" className="mt-2">
           {warning}
-        </p>
+        </Alert>
       )}
       {endpoints.length === 0 ? (
         <p className="mt-1 text-xs text-neutral-400">
@@ -346,12 +347,9 @@ function CoveredEndpoints({
       ) : (
         <div className="mt-2 flex max-h-40 flex-wrap gap-1 overflow-y-auto">
           {visibleEndpoints.map((pair) => (
-            <span
-              key={`${pair.template_id}\u001f${pair.endpoint}`}
-              className="rounded bg-neutral-100 px-2 py-1 font-mono text-xs text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
-            >
+            <Tag key={`${pair.template_id}\u001f${pair.endpoint}`} mono>
               {pair.template_id} · {pair.endpoint}
-            </span>
+            </Tag>
           ))}
           {endpoints.length > visibleEndpoints.length && (
             <span className="px-2 py-1 text-xs text-neutral-400">
@@ -364,28 +362,16 @@ function CoveredEndpoints({
   );
 }
 
-function coverageSource(origin?: CoverageOrigin): { label: string; className: string } {
+function coverageSource(origin?: CoverageOrigin): { label: string; tone: "success" | "warning" } {
   switch (origin) {
     case "node":
-      return {
-        label: "scanner node",
-        className: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
-      };
+      return { label: "scanner node", tone: "success" };
     case "import_trusted":
-      return {
-        label: "trusted imported bundle · operator opt-in",
-        className: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
-      };
+      return { label: "trusted imported bundle · operator opt-in", tone: "warning" };
     case "import_untrusted":
-      return {
-        label: "untrusted imported bundle · not mitigation evidence",
-        className: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
-      };
+      return { label: "untrusted imported bundle · not mitigation evidence", tone: "warning" };
     default:
-      return {
-        label: "unknown source · not mitigation evidence",
-        className: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
-      };
+      return { label: "unknown source · not mitigation evidence", tone: "warning" };
   }
 }
 
@@ -393,8 +379,7 @@ function CoverageSource({ origin }: { origin?: CoverageOrigin }) {
   const source = coverageSource(origin);
   return (
     <p className="mb-2 text-xs text-neutral-500">
-      Coverage source:{" "}
-      <span className={`rounded-full px-2 py-0.5 font-medium ${source.className}`}>{source.label}</span>
+      Coverage source: <Badge tone={source.tone}>{source.label}</Badge>
     </p>
   );
 }
@@ -407,7 +392,7 @@ function DiscoveredEndpoints({ targets }: { targets: string[] }) {
   const groups = groupEndpoints(targets);
   const portCount = targets.length;
   return (
-    <div className="mt-4">
+    <div className="mt-5">
       <p className="text-xs font-medium text-neutral-500">
         Discovered endpoints (naabu) · {portCount} {portCount === 1 ? "port" : "ports"} on {groups.length}{" "}
         {groups.length === 1 ? "host" : "hosts"}

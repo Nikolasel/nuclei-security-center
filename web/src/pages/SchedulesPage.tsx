@@ -2,7 +2,31 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { api, type Schedule } from "../api";
 import { hasRole, useMe } from "../auth";
-import { Button, Card, ErrorText, Field, Input, Modal, Select, Spinner } from "../components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  Checkbox,
+  ErrorText,
+  Field,
+  FormHint,
+  Input,
+  Modal,
+  ModalActions,
+  Muted,
+  Page,
+  PageHeader,
+  RowActions,
+  Select,
+  Spinner,
+  Table,
+  TableEmpty,
+  Td,
+  Th,
+  THead,
+  TRow,
+  useConfirm,
+} from "../components/ui";
 import { duplicateName } from "../util";
 
 // Common cron presets offered as one-click buttons in the editor.
@@ -244,10 +268,10 @@ function ScheduleModal({
       title={duplicate ? "Duplicate schedule" : existing ? "Edit schedule" : "New schedule"}
     >
       <div className="space-y-4">
-        <Field label="Name">
+        <Field label="Name" required>
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="nightly-prod" className="w-full" />
         </Field>
-        <Field label="Scan policy (templates + execution settings)">
+        <Field label="Scan policy" required hint="Templates and execution settings.">
           <Select value={scanPolicyId} onChange={(e) => setScanPolicyId(e.target.value)} className="w-full">
             <option value="">Select a scan policy…</option>
             {policies.map((p) => (
@@ -258,11 +282,9 @@ function ScheduleModal({
           </Select>
         </Field>
         {!scanPolicies.isLoading && policies.length === 0 && (
-          <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
-            No scan policies yet — create one under Scan Policies first.
-          </p>
+          <FormHint tone="warning">No scan policies yet — create one under Scan policies first.</FormHint>
         )}
-        <Field label="Target (approved scope)">
+        <Field label="Target" required hint="The approved scope this schedule scans.">
           <Select value={targetId} onChange={(e) => setTargetId(e.target.value)} className="w-full">
             <option value="">Select a target…</option>
             {(targets.data ?? []).map((target) => (
@@ -273,44 +295,39 @@ function ScheduleModal({
           </Select>
         </Field>
         {!targets.isLoading && (targets.data ?? []).length === 0 && (
-          <p className="-mt-2 text-xs text-amber-700 dark:text-amber-400">
-            No approved targets yet — create one under Targets first.
-          </p>
+          <FormHint tone="warning">No approved targets yet — create one under Targets first.</FormHint>
         )}
-        <Field label="Cron (min hour day-of-month month day-of-week)">
+        <Field label="Cron" required hint="minute hour day-of-month month day-of-week">
           <Input value={cron} onChange={(e) => setCron(e.target.value)} placeholder="0 3 * * *" className="w-full font-mono" />
         </Field>
-        <div className="flex flex-wrap gap-1">
+        <div className="-mt-2 flex flex-wrap gap-1.5" aria-label="Cron presets">
           {CRON_PRESETS.map((p) => (
-            <button
-              key={p.cron}
-              type="button"
-              onClick={() => setCron(p.cron)}
-              className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-400 dark:hover:bg-neutral-800"
-            >
+            <Button key={p.cron} size="sm" selected={cron.trim() === p.cron} onClick={() => setCron(p.cron)}>
               {p.label}
-            </button>
+            </Button>
           ))}
         </div>
-        <div className="block space-y-1">
-          <span className="text-sm font-medium text-neutral-700 dark:text-neutral-300">Timezone</span>
+        <div className="space-y-1">
+          <span className="block text-sm font-medium text-neutral-700 dark:text-neutral-300">Timezone</span>
           <TimezoneField value={timezone} onChange={setTimezone} />
-          <p className="text-xs text-neutral-500">
+          <FormHint>
             Cron clock fields fire in this IANA zone (DST from the timezone database). New schedules
             default to the browser timezone; omit on the API for UTC.
-          </p>
+          </FormHint>
         </div>
-        <label className="flex items-center gap-2 text-sm">
-          <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-          Enabled (the ticker dispatches this schedule)
-        </label>
+        <Checkbox
+          label="Enabled"
+          description="The backend ticker dispatches this schedule automatically."
+          checked={enabled}
+          onChange={setEnabled}
+        />
         {save.isError && <ErrorText error={save.error} />}
-        <div className="flex justify-end gap-2">
+        <ModalActions>
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" disabled={!canSave || save.isPending} onClick={() => save.mutate()}>
-            {save.isPending ? "Saving…" : "Save"}
+            {save.isPending ? "Saving…" : "Save schedule"}
           </Button>
-        </div>
+        </ModalActions>
       </div>
     </Modal>
   );
@@ -321,6 +338,7 @@ export function SchedulesPage() {
   const canWrite = hasRole(me.data ?? undefined, "operator");
   const canDelete = hasRole(me.data ?? undefined, "admin");
   const qc = useQueryClient();
+  const confirm = useConfirm();
   const [editing, setEditing] = useState<Schedule | "new" | null>(null);
   const [duplicating, setDuplicating] = useState(false);
 
@@ -350,25 +368,27 @@ export function SchedulesPage() {
     setDuplicating(false);
   };
 
+  const openEditor = (schedule: Schedule | "new", duplicate = false) => {
+    setDuplicating(duplicate);
+    setEditing(schedule);
+  };
+  const showActions = canWrite || canDelete;
+
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Schedules</h1>
-          <p className="text-sm text-neutral-500">Cron-driven scans dispatched automatically by the backend.</p>
-        </div>
-        {canWrite && (
-          <Button
-            variant="primary"
-            onClick={() => {
-              setDuplicating(false);
-              setEditing("new");
-            }}
-          >
-            New schedule
-          </Button>
-        )}
-      </div>
+    <Page>
+      <PageHeader
+        title="Schedules"
+        description="Cron-driven scans dispatched automatically by the backend."
+        actions={
+          canWrite && (
+            <Button variant="primary" onClick={() => openEditor("new")}>
+              New schedule
+            </Button>
+          )
+        }
+      />
+
+      {(run.isError || toggle.isError || del.isError) && <ErrorText error={run.error ?? toggle.error ?? del.error} />}
 
       {q.isLoading ? (
         <Spinner />
@@ -376,104 +396,76 @@ export function SchedulesPage() {
         <ErrorText error={q.error} />
       ) : (
         <Card>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
-                  <th className="px-3 py-2 font-medium">Name</th>
-                  <th className="px-3 py-2 font-medium">Scan policy</th>
-                  <th className="px-3 py-2 font-medium">Target</th>
-                  <th className="px-3 py-2 font-medium">Cron</th>
-                  <th className="px-3 py-2 font-medium">Timezone</th>
-                  <th className="px-3 py-2 font-medium">Status</th>
-                  <th className="px-3 py-2 font-medium">Next run</th>
-                  <th className="px-3 py-2 font-medium">Last run</th>
-                  {(canWrite || canDelete) && <th className="px-3 py-2" />}
-                </tr>
-              </thead>
-              <tbody>
-                {(q.data ?? []).map((s) => (
-                  <tr key={s.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
-                    <td className="px-3 py-2 font-medium">{s.name}</td>
-                    <td className="px-3 py-2 text-neutral-600 dark:text-neutral-400">{policyName(s.scan_policy_id)}</td>
-                    <td className="px-3 py-2 text-neutral-600 dark:text-neutral-400">{targetName(s.target_id)}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">{s.cron}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">{s.timezone || "UTC"}</td>
-                    <td className="px-3 py-2">
-                      {s.enabled ? (
-                        <span className="inline-block rounded bg-green-100 px-1.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-950 dark:text-green-300">
-                          enabled
-                        </span>
-                      ) : (
-                        <span className="inline-block rounded bg-neutral-200 px-1.5 py-0.5 text-xs font-medium text-neutral-600 dark:bg-neutral-800 dark:text-neutral-400">
-                          disabled
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-3 py-2 text-xs text-neutral-500">
-                      {s.enabled ? fmtInZone(s.next_run_at, s.timezone || "UTC") : "—"}
-                    </td>
-                    <td className="px-3 py-2 text-xs text-neutral-500">{fmtInZone(s.last_run_at, s.timezone || "UTC")}</td>
-                    {(canWrite || canDelete) && (
-                      <td className="px-3 py-2 text-right whitespace-nowrap">
-                        {canWrite && (
-                          <>
-                            <Button
-                              variant="ghost"
-                              disabled={run.isPending}
-                              onClick={() => run.mutate(s.id)}
-                              title="Dispatch now, off-schedule"
-                            >
-                              Run now
-                            </Button>
-                            <Button variant="ghost" disabled={toggle.isPending} onClick={() => toggle.mutate(s)}>
-                              {s.enabled ? "Disable" : "Enable"}
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              onClick={() => {
-                                setDuplicating(false);
-                                setEditing(s);
-                              }}
-                            >
-                              Edit
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              onClick={() => {
-                                setDuplicating(true);
-                                setEditing(s);
-                              }}
-                            >
-                              Duplicate
-                            </Button>
-                          </>
-                        )}
-                        {canDelete && (
-                          <Button
-                            variant="ghost"
-                            className="text-red-600 dark:text-red-400"
-                            onClick={() => {
-                              if (confirm(`Delete schedule "${s.name}"?`)) del.mutate(s.id);
-                            }}
-                          >
-                            Delete
-                          </Button>
-                        )}
-                      </td>
-                    )}
-                  </tr>
-                ))}
-                {(q.data ?? []).length === 0 && (
-                  <tr>
-                    <td colSpan={8 + (canWrite || canDelete ? 1 : 0)} className="px-3 py-8 text-center text-neutral-400">
-                      No schedules yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          <Table>
+            <THead>
+              <Th>Name</Th>
+              <Th>Scan policy</Th>
+              <Th>Target</Th>
+              <Th>Cron</Th>
+              <Th>Timezone</Th>
+              <Th>Status</Th>
+              <Th>Next run</Th>
+              <Th>Last run</Th>
+              {showActions && <Th aria-label="Actions" />}
+            </THead>
+            <tbody>
+              {(q.data ?? []).map((s) => (
+                <TRow key={s.id}>
+                  <Td className="font-medium">{s.name}</Td>
+                  <Td className="text-neutral-600 dark:text-neutral-400">{policyName(s.scan_policy_id)}</Td>
+                  <Td className="text-neutral-600 dark:text-neutral-400">{targetName(s.target_id)}</Td>
+                  <Td className="font-mono text-xs text-neutral-600 dark:text-neutral-400">{s.cron}</Td>
+                  <Td className="font-mono text-xs text-neutral-600 dark:text-neutral-400">{s.timezone || "UTC"}</Td>
+                  <Td>{s.enabled ? <Badge tone="success">enabled</Badge> : <Badge>disabled</Badge>}</Td>
+                  <Td className="whitespace-nowrap text-xs text-neutral-500">
+                    {s.enabled ? fmtInZone(s.next_run_at, s.timezone || "UTC") : <Muted />}
+                  </Td>
+                  <Td className="whitespace-nowrap text-xs text-neutral-500">{fmtInZone(s.last_run_at, s.timezone || "UTC")}</Td>
+                  {showActions && (
+                    <RowActions
+                      label={s.name}
+                      actions={[
+                        {
+                          label: "Run now",
+                          primary: true,
+                          hidden: !canWrite,
+                          disabled: run.isPending,
+                          title: "Dispatch now, off-schedule",
+                          onSelect: () => run.mutate(s.id),
+                        },
+                        { label: "Edit", primary: true, hidden: !canWrite, onSelect: () => openEditor(s) },
+                        {
+                          label: s.enabled ? "Disable" : "Enable",
+                          hidden: !canWrite,
+                          disabled: toggle.isPending,
+                          onSelect: () => toggle.mutate(s),
+                        },
+                        { label: "Duplicate", hidden: !canWrite, onSelect: () => openEditor(s, true) },
+                        {
+                          label: "Delete",
+                          danger: true,
+                          hidden: !canDelete,
+                          onSelect: async () => {
+                            if (
+                              await confirm({
+                                title: `Delete schedule “${s.name}”?`,
+                                description: "It stops dispatching. Scans it already ran keep their history.",
+                                confirmLabel: "Delete schedule",
+                              })
+                            )
+                              del.mutate(s.id);
+                          },
+                        },
+                      ]}
+                    />
+                  )}
+                </TRow>
+              ))}
+              {(q.data ?? []).length === 0 && (
+                <TableEmpty colSpan={8 + (showActions ? 1 : 0)}>No schedules yet.</TableEmpty>
+              )}
+            </tbody>
+          </Table>
         </Card>
       )}
 
@@ -485,6 +477,6 @@ export function SchedulesPage() {
           onClose={closeEditor}
         />
       )}
-    </div>
+    </Page>
   );
 }

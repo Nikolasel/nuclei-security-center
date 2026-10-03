@@ -3,7 +3,29 @@ import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api, type Target } from "../api";
 import { hasRole, useMe } from "../auth";
-import { Button, Card, ErrorText, Field, Input, Modal, Spinner } from "../components/ui";
+import {
+  Alert,
+  Button,
+  Card,
+  ErrorText,
+  Field,
+  Input,
+  Modal,
+  ModalActions,
+  Muted,
+  Page,
+  PageHeader,
+  RowActions,
+  Spinner,
+  Table,
+  TableEmpty,
+  Td,
+  Textarea,
+  Th,
+  THead,
+  TRow,
+  useConfirm,
+} from "../components/ui";
 import { duplicateName, parseList } from "../util";
 
 function TargetModal({
@@ -53,27 +75,30 @@ function TargetModal({
             className="w-full"
           />
         </Field>
-        <Field label="Hosts (one per line — the scope allowlist)" required>
-          <textarea
+        <Field
+          label="Hosts"
+          required
+          hint="One per line: hostname, IP, CIDR or URL. This is the scope allowlist — scans can only reach these hosts."
+        >
+          <Textarea
             value={hosts}
             onChange={(e) => setHosts(e.target.value)}
             rows={4}
             placeholder="scanme.sh&#10;10.0.0.0/24&#10;https://example.com"
             required
             aria-required="true"
-            className="w-full rounded-md border border-neutral-300 bg-white px-3 py-1.5 font-mono text-sm dark:border-neutral-700 dark:bg-neutral-800"
           />
         </Field>
-        <Field label="Tags (comma separated)">
+        <Field label="Tags" hint="Comma separated.">
           <Input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="prod, external" className="w-full" />
         </Field>
         {save.isError && <ErrorText error={save.error} />}
-        <div className="flex justify-end gap-2">
+        <ModalActions>
           <Button onClick={onClose}>Cancel</Button>
           <Button variant="primary" disabled={save.isPending || !canSave} onClick={() => save.mutate()}>
-            {save.isPending ? "Saving…" : "Save"}
+            {save.isPending ? "Saving…" : "Save target"}
           </Button>
-        </div>
+        </ModalActions>
       </div>
     </Modal>
   );
@@ -84,6 +109,7 @@ export function TargetsPage() {
   const canWrite = hasRole(me.data ?? undefined, "operator");
   const canDelete = hasRole(me.data ?? undefined, "admin");
   const qc = useQueryClient();
+  const confirm = useConfirm();
   const [editing, setEditing] = useState<Target | "new" | null>(null);
   const [duplicating, setDuplicating] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -97,36 +123,42 @@ export function TargetsPage() {
     mutationFn: (id: string) => api.deleteTarget(id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["targets"] }),
   });
+  const openEditor = (target: Target | "new", duplicate = false) => {
+    setDuplicating(duplicate);
+    setEditing(target);
+  };
   const closeEditor = () => {
     setEditing(null);
     setDuplicating(false);
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold">Targets</h1>
-        {canWrite && (
-          <Button
-            variant="primary"
-            onClick={() => {
-              setDuplicating(false);
-              setEditing("new");
-            }}
-          >
-            New target
-          </Button>
-        )}
-      </div>
+    <Page>
+      <PageHeader
+        title="Targets"
+        description="Approved scan scope. A scan can only reach hosts listed on the target it runs against."
+        actions={
+          canWrite && (
+            <Button variant="primary" onClick={() => openEditor("new")}>
+              New target
+            </Button>
+          )
+        }
+      />
 
       {selectedTargetID && (
-        <div className="flex items-center justify-between rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-sm text-indigo-800 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-200">
-          <span>Showing the linked target.</span>
-          <Button variant="ghost" onClick={() => setSearchParams({})}>
-            Show all
-          </Button>
-        </div>
+        <Alert
+          tone="info"
+          action={
+            <Button variant="link" onClick={() => setSearchParams({})}>
+              Show all targets
+            </Button>
+          }
+        >
+          Showing the linked target.
+        </Alert>
       )}
+      {del.isError && <ErrorText error={del.error} />}
 
       {q.isLoading ? (
         <Spinner />
@@ -134,78 +166,52 @@ export function TargetsPage() {
         <ErrorText error={q.error} />
       ) : (
         <Card>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
-                  <th className="px-3 py-2 font-medium">Name</th>
-                  <th className="px-3 py-2 font-medium">Hosts</th>
-                  <th className="px-3 py-2 font-medium">Tags</th>
-                  {(canWrite || canDelete) && <th className="px-3 py-2" />}
-                </tr>
-              </thead>
-              <tbody>
-                {visibleTargets.map((t) => (
-                  <tr
-                    key={t.id}
-                    className={`border-b border-neutral-100 last:border-0 dark:border-neutral-800/60 ${
-                      t.id === selectedTargetID ? "bg-indigo-50 dark:bg-indigo-950/30" : ""
-                    }`}
-                  >
-                    <td className="px-3 py-2 font-medium">{t.name}</td>
-                    <td className="px-3 py-2 font-mono text-xs text-neutral-600 dark:text-neutral-400">
-                      {t.hosts.join(", ")}
-                    </td>
-                    <td className="px-3 py-2 text-neutral-500">{t.tags.join(", ") || "—"}</td>
-                    {(canWrite || canDelete) && (
-                      <td className="px-3 py-2 text-right whitespace-nowrap">
-                        {canWrite && (
-                          <Button
-                            variant="ghost"
-                            onClick={() => {
-                              setDuplicating(false);
-                              setEditing(t);
-                            }}
-                          >
-                            Edit
-                          </Button>
-                        )}
-                        {canWrite && (
-                          <Button
-                            variant="ghost"
-                            onClick={() => {
-                              setDuplicating(true);
-                              setEditing(t);
-                            }}
-                          >
-                            Duplicate
-                          </Button>
-                        )}
-                        {canDelete && (
-                          <Button
-                            variant="ghost"
-                            className="text-red-600 dark:text-red-400"
-                            onClick={() => {
-                              if (confirm(`Delete target "${t.name}"?`)) del.mutate(t.id);
-                            }}
-                          >
-                            Delete
-                          </Button>
-                        )}
-                      </td>
-                    )}
-                  </tr>
-                ))}
-                {visibleTargets.length === 0 && (
-                  <tr>
-                    <td colSpan={4} className="px-3 py-8 text-center text-neutral-400">
-                      {selectedTargetID ? "The linked target no longer exists." : "No targets yet."}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          <Table>
+            <THead>
+              <Th>Name</Th>
+              <Th>Hosts</Th>
+              <Th>Tags</Th>
+              {(canWrite || canDelete) && <Th aria-label="Actions" />}
+            </THead>
+            <tbody>
+              {visibleTargets.map((t) => (
+                <TRow key={t.id} highlighted={t.id === selectedTargetID}>
+                  <Td className="font-medium">{t.name}</Td>
+                  <Td className="font-mono text-xs text-neutral-600 dark:text-neutral-400">{t.hosts.join(", ")}</Td>
+                  <Td className="text-neutral-500">{t.tags.join(", ") || <Muted />}</Td>
+                  {(canWrite || canDelete) && (
+                    <RowActions
+                      label={t.name}
+                      actions={[
+                        { label: "Edit", primary: true, hidden: !canWrite, onSelect: () => openEditor(t) },
+                        { label: "Duplicate", hidden: !canWrite, onSelect: () => openEditor(t, true) },
+                        {
+                          label: "Delete",
+                          danger: true,
+                          hidden: !canDelete,
+                          onSelect: async () => {
+                            if (
+                              await confirm({
+                                title: `Delete target “${t.name}”?`,
+                                description: "Schedules that use this target are deleted with it. Past scans keep their history.",
+                                confirmLabel: "Delete target",
+                              })
+                            )
+                              del.mutate(t.id);
+                          },
+                        },
+                      ]}
+                    />
+                  )}
+                </TRow>
+              ))}
+              {visibleTargets.length === 0 && (
+                <TableEmpty colSpan={4}>
+                  {selectedTargetID ? "The linked target no longer exists." : "No targets yet."}
+                </TableEmpty>
+              )}
+            </tbody>
+          </Table>
         </Card>
       )}
 
@@ -217,6 +223,6 @@ export function TargetsPage() {
           onClose={closeEditor}
         />
       )}
-    </div>
+    </Page>
   );
 }

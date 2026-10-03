@@ -2,7 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { useMe } from "./auth";
 import { Brand } from "./components/Brand";
 import { Layout } from "./components/Layout";
-import { Button, ErrorText, Spinner } from "./components/ui";
+import { buttonClass, ErrorText, Spinner } from "./components/ui";
 import { FindingDetailPage } from "./pages/FindingDetailPage";
 import { FindingsPage } from "./pages/FindingsPage";
 import { NodesPage } from "./pages/NodesPage";
@@ -26,8 +26,8 @@ function LoginScreen() {
         <Brand compact className="justify-center" />
         <h1 className="mt-5 text-xl font-semibold text-white">Nuclei Security Center</h1>
         <p className="mt-2 text-sm text-slate-300">Sign in with your organization account.</p>
-        <a href="/api/auth/login" className="mt-6 inline-block">
-          <Button variant="primary">Log in</Button>
+        <a href="/api/auth/login" className={`mt-6 ${buttonClass("primary")}`}>
+          Log in
         </a>
       </div>
     </div>

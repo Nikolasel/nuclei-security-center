@@ -95,6 +95,10 @@ npm install
 npm run dev        # http://localhost:5173; proxies /api to :8080
 ```
 
+UI work follows the [UI style guide](UI_STYLE_GUIDE.md): compose the primitives in
+`web/src/components/ui.tsx` rather than hand-writing Tailwind, and check both themes and a narrow
+viewport before opening a PR.
+
 `npm run build` (type-check + production bundle into `web/dist`) is not part of the
 hot-reload loop — it belongs with the pre-PR gates, see “Continuous integration and releases”
 and [CONTRIBUTING.md](../CONTRIBUTING.md).

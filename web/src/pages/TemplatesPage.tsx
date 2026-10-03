@@ -18,17 +18,41 @@ import {
 import { hasRole, useMe } from "../auth";
 import { TemplateArchiveImportModal } from "../components/TemplateArchiveImportModal";
 import {
+  Alert,
   Button,
   Card,
+  CardHeader,
+  DescriptionList,
   ErrorText,
   Field,
+  FileInput,
+  FormHint,
+  focusRing,
+  cn,
   Input,
+  Meta,
   Modal,
+  ModalActions,
+  Muted,
+  OffsetPager,
+  Page,
+  PageHeader,
   Pill,
+  RowActions,
+  Section,
   Select,
   SeverityBadge,
   Spinner,
+  Table,
+  TableEmpty,
+  Tabs,
+  Td,
   Textarea,
+  Th,
+  THead,
+  TRow,
+  useConfirm,
+  type RowAction,
 } from "../components/ui";
 import {
   collapseSyncRuns,
@@ -73,31 +97,23 @@ function TemplateDetailModal({
         <Spinner />
       ) : (
         <div className="space-y-4">
-          <dl className="grid gap-3 text-sm sm:grid-cols-2">
-            <div>
-              <dt className="text-xs uppercase tracking-wide text-neutral-500">Template ID</dt>
-              <dd className="mt-1 font-mono text-xs">{detail.data.id}</dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wide text-neutral-500">Source</dt>
-              <dd className="mt-1">{detail.data.source}</dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wide text-neutral-500">Author</dt>
-              <dd className="mt-1">{detail.data.author || "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase tracking-wide text-neutral-500">Revision</dt>
-              <dd className="mt-1 tabular-nums">{detail.data.revision}</dd>
-            </div>
-          </dl>
+          <DescriptionList columns={2}>
+            <Meta label="Template ID">
+              <span className="font-mono text-xs">{detail.data.id}</span>
+            </Meta>
+            <Meta label="Source">{detail.data.source}</Meta>
+            <Meta label="Author">{detail.data.author || <Muted />}</Meta>
+            <Meta label="Revision">
+              <span className="tabular-nums">{detail.data.revision}</span>
+            </Meta>
+          </DescriptionList>
           {detail.data.description && <p className="text-sm text-neutral-600 dark:text-neutral-400">{detail.data.description}</p>}
           <pre className="max-h-[50dvh] overflow-auto rounded-md bg-neutral-950 p-4 text-xs text-neutral-100">
             {detail.data.yaml}
           </pre>
-          <div className="flex justify-end">
+          <ModalActions>
             <Button onClick={onClose}>Close</Button>
-          </div>
+          </ModalActions>
         </div>
       )}
     </Modal>
@@ -171,19 +187,19 @@ function CustomTemplateModal({
         <ErrorText error={detail.error} />
       ) : (
         <div className="space-y-4">
-          <p className="text-xs text-neutral-500">
+          <FormHint>
             Upload or paste one Nuclei YAML document. A healthy scanner node validates it with the
             deployed Nuclei engine before it is saved. The template ID is immutable after creation.
-          </p>
-          <input
-            type="file"
-            accept=".yaml,.yml,application/yaml,text/yaml,text/plain"
-            className="block w-full text-xs text-neutral-500 file:mr-3 file:rounded-md file:border-0 file:bg-neutral-100 file:px-3 file:py-1.5 file:text-sm file:font-medium dark:file:bg-neutral-800"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void file.text().then(setDraft);
-            }}
-          />
+          </FormHint>
+          <Field label="Upload a YAML file" hint="Replaces the editor content below.">
+            <FileInput
+              accept=".yaml,.yml,application/yaml,text/yaml,text/plain"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void file.text().then(setDraft);
+              }}
+            />
+          </Field>
           <Field label="Template YAML">
             <Textarea
               rows={22}
@@ -194,7 +210,7 @@ function CustomTemplateModal({
             />
           </Field>
           {save.isError && <ErrorText error={save.error} />}
-          <div className="flex justify-end gap-2">
+          <ModalActions>
             <Button onClick={onClose}>Cancel</Button>
             <Button
               variant="primary"
@@ -203,7 +219,7 @@ function CustomTemplateModal({
             >
               {save.isPending ? "Validating and saving…" : "Save template"}
             </Button>
-          </div>
+          </ModalActions>
         </div>
       )}
     </Modal>
@@ -225,21 +241,18 @@ function CatalogTable({
   selected?: Set<string>;
   onToggle?: (id: string) => void;
   onView: (template: Template) => void;
-  actions?: (template: Template) => ReactNode;
+  actions?: (template: Template) => RowAction[];
   sort?: TemplateSort;
   order?: SortOrder;
   onSort?: (sort: TemplateSort) => void;
   emptyMessage?: string;
 }) {
   const header = (label: string, value: TemplateSort) => (
-    <th
-      className="px-3 py-2 font-medium"
-      aria-sort={sort === value ? (order === "desc" ? "descending" : "ascending") : "none"}
-    >
+    <Th aria-sort={sort === value ? (order === "desc" ? "descending" : "ascending") : "none"}>
       {onSort ? (
         <button
           type="button"
-          className="inline-flex items-center gap-1 hover:text-indigo-600"
+          className={cn("inline-flex items-center gap-1 rounded-sm uppercase hover:text-indigo-600", focusRing)}
           onClick={() => onSort(value)}
         >
           {label}
@@ -248,69 +261,64 @@ function CatalogTable({
           </span>
         </button>
       ) : label}
-    </th>
+    </Th>
   );
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
-            {selected && <th className="w-10 px-3 py-2" />}
-            {header("Template", "name")}
-            {header("Severity", "severity")}
-            {header("Source", "source")}
-            <th className="px-3 py-2 font-medium">Tags</th>
-            {header("Inserted", "inserted")}
-            {header("Revision", "revision")}
-            <th className="px-3 py-2" />
-          </tr>
-        </thead>
-        <tbody>
-          {templates.map((template) => (
-            <tr key={template.id} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
-              {selected && (
-                <td className="px-3 py-2">
-                  <input
-                    type="checkbox"
-                    checked={selected.has(template.id)}
-                    onChange={() => onToggle?.(template.id)}
-                    aria-label={`Select ${template.id}`}
-                  />
-                </td>
-              )}
-              <td className="max-w-md px-3 py-2">
-                <button type="button" className="text-left font-medium hover:text-indigo-600" onClick={() => onView(template)}>
-                  {template.name || template.id}
-                </button>
-                <div className="mt-0.5 truncate font-mono text-xs text-neutral-500" title={template.id}>
-                  {template.id}
-                </div>
-              </td>
-              <td className="px-3 py-2"><SeverityBadge severity={template.severity} /></td>
-              <td className="px-3 py-2">
-                <Pill tone={template.source === "custom" ? "good" : "neutral"}>{template.source}</Pill>
-              </td>
-              <td className="max-w-xs px-3 py-2 text-xs text-neutral-500">
-                <span className="line-clamp-2">{template.tags.join(", ") || "—"}</span>
-              </td>
-              <td className="whitespace-nowrap px-3 py-2 text-xs text-neutral-500">{fmtTime(template.created_at)}</td>
-              <td className="px-3 py-2 tabular-nums text-neutral-500">{template.revision}</td>
-              <td className="whitespace-nowrap px-3 py-2 text-right">
-                <Button variant="ghost" onClick={() => onView(template)}>View YAML</Button>
-                {actions?.(template)}
-              </td>
-            </tr>
-          ))}
-          {templates.length === 0 && (
-            <tr>
-              <td colSpan={selected ? 8 : 7} className="px-3 py-8 text-center text-neutral-400">
-                {emptyMessage}
-              </td>
-            </tr>
-          )}
-        </tbody>
-      </table>
-    </div>
+    <Table>
+      <THead>
+        {selected && <Th className="w-10" aria-label="Selected" />}
+        {header("Template", "name")}
+        {header("Severity", "severity")}
+        {header("Source", "source")}
+        <Th>Tags</Th>
+        {header("Inserted", "inserted")}
+        {header("Revision", "revision")}
+        <Th aria-label="Actions" />
+      </THead>
+      <tbody>
+        {templates.map((template) => (
+          <TRow key={template.id} highlighted={selected?.has(template.id)}>
+            {selected && (
+              <Td>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 accent-indigo-600"
+                  checked={selected.has(template.id)}
+                  onChange={() => onToggle?.(template.id)}
+                  aria-label={`Select ${template.id}`}
+                />
+              </Td>
+            )}
+            <Td className="max-w-md">
+              <button
+                type="button"
+                className={cn("rounded-sm text-left font-medium hover:text-indigo-600", focusRing)}
+                onClick={() => onView(template)}
+              >
+                {template.name || template.id}
+              </button>
+              <div className="mt-0.5 truncate font-mono text-xs text-neutral-500" title={template.id}>
+                {template.id}
+              </div>
+            </Td>
+            <Td><SeverityBadge severity={template.severity} /></Td>
+            <Td>
+              <Pill tone={template.source === "custom" ? "good" : "neutral"}>{template.source}</Pill>
+            </Td>
+            <Td className="max-w-xs text-xs text-neutral-500">
+              <span className="line-clamp-2">{template.tags.join(", ") || "—"}</span>
+            </Td>
+            <Td className="whitespace-nowrap text-xs text-neutral-500">{fmtTime(template.created_at)}</Td>
+            <Td className="tabular-nums text-neutral-500">{template.revision}</Td>
+            <RowActions
+              label={template.id}
+              actions={[{ label: "View YAML", primary: true, onSelect: () => onView(template) }, ...(actions?.(template) ?? [])]}
+            />
+          </TRow>
+        ))}
+        {templates.length === 0 && <TableEmpty colSpan={selected ? 8 : 7}>{emptyMessage}</TableEmpty>}
+      </tbody>
+    </Table>
   );
 }
 
@@ -327,14 +335,8 @@ function Pager({
 }) {
   if (total <= pageSize) return null;
   return (
-    <div className="flex items-center justify-between border-t border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800">
-      <span>
-        {offset + 1}–{Math.min(offset + pageSize, total)} of {total}
-      </span>
-      <div className="flex gap-2">
-        <Button disabled={offset === 0} onClick={() => onChange(Math.max(0, offset - pageSize))}>Previous</Button>
-        <Button disabled={offset + pageSize >= total} onClick={() => onChange(offset + pageSize)}>Next</Button>
-      </div>
+    <div className="border-t border-neutral-200 px-4 py-2.5 dark:border-neutral-800">
+      <OffsetPager offset={offset} total={total} pageSize={pageSize} onChange={onChange} />
     </div>
   );
 }
@@ -417,7 +419,7 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
   return (
     <div className="space-y-4">
       <Card className="p-4">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Search">
             <Input className="w-full" value={query} onChange={(event) => { setQuery(event.target.value); resetPage(); }} placeholder="ID, name, description" />
           </Field>
@@ -434,7 +436,7 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
               {SEVERITIES.map((value) => <option key={value} value={value}>{value}</option>)}
             </Select>
           </Field>
-          <Field label="Tags (comma separated)">
+          <Field label="Tags">
             <Input className="w-full" value={tags} onChange={(event) => { setTags(event.target.value); resetPage(); }} placeholder="cve, rce" />
           </Field>
         </div>
@@ -443,9 +445,9 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
       {selected.size > 0 && (
         <Card className="p-4">
           <div className="flex flex-wrap items-end gap-3">
-            <div className="mr-auto">
+            <div className="mr-auto space-y-0.5">
               <div className="font-medium">{selected.size} selected</div>
-              <button type="button" className="text-xs text-indigo-600 hover:underline" onClick={() => setSelected(new Set())}>Clear selection</button>
+              <Button variant="link" className="text-xs" onClick={() => setSelected(new Set())}>Clear selection</Button>
             </div>
             <Field label="Export format">
               <Select value={exportFormat} onChange={(event) => setExportFormat(event.target.value as TemplateArchiveFormat)}>
@@ -470,33 +472,36 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
                 <Field label="Or create a set">
                   <Input className="w-52 shrink-0" value={setName} onChange={(event) => setSetName(event.target.value)} placeholder="internet-exposure" />
                 </Field>
-                <Button variant="primary" disabled={!setName.trim() || create.isPending} onClick={() => create.mutate()}>
+                <Button disabled={!setName.trim() || create.isPending} onClick={() => create.mutate()}>
                   {create.isPending ? "Creating…" : "Create from selection"}
                 </Button>
               </>
             )}
           </div>
           {exportTooLarge && (
-            <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
-              This selection is too large for a reliable URL-based export.{" "}
-              {canWrite
-                ? "Add it to a template set and export the set instead."
-                : "Ask an operator to save it as a template set, then export the set."}
-            </p>
+            <div className="mt-3">
+              <FormHint tone="warning">
+                This selection is too large for a reliable URL-based export.{" "}
+                {canWrite
+                  ? "Add it to a template set and export the set instead."
+                  : "Ask an operator to save it as a template set, then export the set."}
+              </FormHint>
+            </div>
           )}
           {download.isError && <div className="mt-3"><ErrorText error={download.error} /></div>}
           {(add.isError || create.isError) && <div className="mt-3"><ErrorText error={add.error ?? create.error} /></div>}
         </Card>
       )}
-      {notice && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">{notice}</div>}
+      {notice && <Alert tone="success" onDismiss={() => setNotice("")}>{notice}</Alert>}
       {selectMatching.isError && <ErrorText error={selectMatching.error} />}
 
       {templates.isError ? <ErrorText error={templates.error} /> : templates.isLoading || !templates.data ? <Spinner /> : (
         <Card>
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-200 px-3 py-2 text-xs text-neutral-500 dark:border-neutral-800">
-            <span>{templates.data.total} templates match the current filters.</span>
+          <CardHeader>
+            <span className="text-xs text-neutral-500">{templates.data.total} templates match the current filters.</span>
             <div className="flex flex-wrap gap-2">
               <Button
+                size="sm"
                 onClick={() => setSelected((current) => {
                   const next = new Set(current);
                   templates.data.items.forEach((template) => next.add(template.id));
@@ -506,13 +511,14 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
                 Select this page
               </Button>
               <Button
+                size="sm"
                 disabled={selectMatching.isPending || templates.data.total === 0}
                 onClick={() => selectMatching.mutate()}
               >
                 {selectMatching.isPending ? "Selecting…" : `Select all ${templates.data.total} matching`}
               </Button>
             </div>
-          </div>
+          </CardHeader>
           <CatalogTable
             templates={templates.data.items}
             selected={selected}
@@ -536,6 +542,7 @@ function CatalogTab({ canWrite }: { canWrite: boolean }) {
 
 function CustomTab({ canWrite, canDelete }: { canWrite: boolean; canDelete: boolean }) {
   const qc = useQueryClient();
+  const confirm = useConfirm();
   const [offset, setOffset] = useState(0);
   const [viewing, setViewing] = useState<Template | null>(null);
   const [editing, setEditing] = useState<Template | "new" | null>(null);
@@ -566,7 +573,7 @@ function CustomTab({ canWrite, canDelete }: { canWrite: boolean; canDelete: bool
         <p className="text-sm text-neutral-500">Organization-specific YAML, validated by Nuclei and stored losslessly alongside the upstream catalog.</p>
         {canWrite && <Button variant="primary" onClick={() => setEditing("new")}>New custom template</Button>}
       </div>
-      {notice && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">{notice}</div>}
+      {notice && <Alert tone="success" onDismiss={() => setNotice("")}>{notice}</Alert>}
       {remove.isError && <ErrorText error={remove.error} />}
       {templates.isError ? <ErrorText error={templates.error} /> : templates.isLoading || !templates.data ? <Spinner /> : (
         <Card>
@@ -577,22 +584,24 @@ function CustomTab({ canWrite, canDelete }: { canWrite: boolean; canDelete: bool
             order={order}
             onSort={changeSort}
             emptyMessage="No custom templates yet."
-            actions={(template) => (
-              <>
-                {canWrite && <Button variant="ghost" onClick={() => setEditing(template)}>Edit</Button>}
-                {canDelete && (
-                  <Button
-                    variant="ghost"
-                    className="text-red-600 dark:text-red-400"
-                    onClick={() => {
-                      if (confirm(`Delete custom template "${template.id}"?`)) remove.mutate(template.id);
-                    }}
-                  >
-                    Delete
-                  </Button>
-                )}
-              </>
-            )}
+            actions={(template) => [
+              { label: "Edit", primary: true, hidden: !canWrite, onSelect: () => setEditing(template) },
+              {
+                label: "Delete",
+                danger: true,
+                hidden: !canDelete,
+                onSelect: async () => {
+                  if (
+                    await confirm({
+                      title: `Delete custom template “${template.id}”?`,
+                      description: "Exact template sets that include it lose this member. Deletion is refused while an exclude-mode set lists it.",
+                      confirmLabel: "Delete template",
+                    })
+                  )
+                    remove.mutate(template.id);
+                },
+              },
+            ]}
           />
           <Pager offset={offset} total={templates.data.total} onChange={setOffset} />
         </Card>
@@ -624,17 +633,17 @@ function SyncRunRow({
 }) {
   const upstream = formatRefRange(run.ref_before, run.ref_after);
   return (
-    <tr className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
-      <td className="px-3 py-2 whitespace-nowrap">
+    <TRow>
+      <Td className="whitespace-nowrap">
         {indent && <span aria-hidden="true" className="mr-1 text-neutral-400">↳</span>}
         {fmtTime(run.started_at)}
-      </td>
-      <td className="px-3 py-2"><Pill tone={run.status === "success" ? "good" : run.status === "failed" ? "warn" : "neutral"}>{run.status}</Pill></td>
-      <td className="px-3 py-2 tabular-nums" title={result.title || undefined}>
+      </Td>
+      <Td><Pill tone={run.status === "success" ? "good" : run.status === "failed" ? "warn" : "neutral"}>{run.status}</Pill></Td>
+      <Td className="tabular-nums" title={result.title || undefined}>
         {result.text}
         {expander}
-      </td>
-      <td className="px-3 py-2 whitespace-nowrap">
+      </Td>
+      <Td className="whitespace-nowrap">
         {run.templates_commit ? (
           <>
             <div className="font-mono text-xs" title={run.templates_commit}>
@@ -644,14 +653,14 @@ function SyncRunRow({
               {run.template_count ?? 0} templates
             </div>
           </>
-        ) : "—"}
-      </td>
-      <td className="px-3 py-2 font-mono text-xs" title={upstream.title || undefined}>
+        ) : <Muted />}
+      </Td>
+      <Td className="font-mono text-xs" title={upstream.title || undefined}>
         {upstream.text}
-      </td>
-      <td className="px-3 py-2 whitespace-nowrap text-neutral-500">{fmtTime(run.finished_at)}</td>
-      <td className="max-w-md px-3 py-2 text-xs text-rose-600 dark:text-rose-400" title={run.error}>{run.error || "—"}</td>
-    </tr>
+      </Td>
+      <Td className="whitespace-nowrap text-neutral-500">{fmtTime(run.finished_at)}</Td>
+      <Td className="max-w-md text-xs text-rose-600 dark:text-rose-400" title={run.error}>{run.error || <Muted />}</Td>
+    </TRow>
   );
 }
 
@@ -676,68 +685,66 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
   return (
     <div className="space-y-4">
       {status.isError ? <ErrorText error={status.error} /> : status.isLoading || !status.data ? <Spinner /> : (
-        <Card className="p-4">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="font-semibold">Upstream mirror</h2>
-                <Pill tone={status.data.enabled ? "good" : "warn"}>{status.data.enabled ? "enabled" : "disabled"}</Pill>
-              </div>
-              {status.data.enabled ? (
-                <dl className="mt-3 grid gap-x-8 gap-y-2 text-sm sm:grid-cols-3">
-                  <div><dt className="text-xs text-neutral-500">Repository</dt><dd className="mt-0.5 break-all font-mono text-xs">{status.data.repo}</dd></div>
-                  <div><dt className="text-xs text-neutral-500">Ref</dt><dd className="mt-0.5 font-mono text-xs">{status.data.ref}</dd></div>
-                  <div><dt className="text-xs text-neutral-500">Interval</dt><dd className="mt-0.5">{status.data.interval}</dd></div>
-                  <div>
-                    <dt className="text-xs text-neutral-500">Active catalog bundle</dt>
-                    <dd className="mt-0.5 font-mono text-xs" title={status.data.templates_commit}>
-                      {shortDigest(status.data.templates_commit)}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs text-neutral-500">Active templates</dt>
-                    <dd className="mt-0.5 tabular-nums">{status.data.template_count}</dd>
-                  </div>
-                </dl>
-              ) : (
-                <p className="mt-2 text-sm text-neutral-500">Set TEMPLATE_SYNC_REPO to enable the community catalog mirror. Custom templates remain available.</p>
-              )}
-              <p className="mt-3 text-xs text-neutral-500">
-                Configure the mirror on the backend with TEMPLATE_SYNC_REPO, TEMPLATE_SYNC_REF,
-                and TEMPLATE_SYNC_INTERVAL. Changes take effect after a backend restart.
-              </p>
-            </div>
-            {canWrite && (
+        <Section
+          title={
+            <span className="flex items-center gap-2">
+              Upstream mirror
+              <Pill tone={status.data.enabled ? "good" : "warn"}>{status.data.enabled ? "enabled" : "disabled"}</Pill>
+            </span>
+          }
+          actions={
+            canWrite && (
               <Button variant="primary" disabled={!status.data.enabled || trigger.isPending} onClick={() => trigger.mutate()}>
                 {trigger.isPending ? "Queueing…" : trigger.isSuccess ? "Sync queued" : "Sync now"}
               </Button>
+            )
+          }
+        >
+          <div className="space-y-3">
+            {status.data.enabled ? (
+              <DescriptionList>
+                <Meta label="Repository"><span className="break-all font-mono text-xs">{status.data.repo}</span></Meta>
+                <Meta label="Ref"><span className="font-mono text-xs">{status.data.ref}</span></Meta>
+                <Meta label="Interval">{status.data.interval}</Meta>
+                <Meta label="Active catalog bundle">
+                  <span className="font-mono text-xs" title={status.data.templates_commit}>
+                    {shortDigest(status.data.templates_commit)}
+                  </span>
+                </Meta>
+                <Meta label="Active templates"><span className="tabular-nums">{status.data.template_count}</span></Meta>
+              </DescriptionList>
+            ) : (
+              <p className="text-sm text-neutral-500">Set TEMPLATE_SYNC_REPO to enable the community catalog mirror. Custom templates remain available.</p>
             )}
+            <FormHint>
+              Configure the mirror on the backend with TEMPLATE_SYNC_REPO, TEMPLATE_SYNC_REF,
+              and TEMPLATE_SYNC_INTERVAL. Changes take effect after a backend restart.
+            </FormHint>
+            {trigger.isError && <ErrorText error={trigger.error} />}
           </div>
-          {trigger.isError && <div className="mt-3"><ErrorText error={trigger.error} /></div>}
-        </Card>
+        </Section>
       )}
 
       {runs.isError ? <ErrorText error={runs.error} /> : runs.isLoading || !runs.data ? <Spinner /> : (
         <Card>
-          <div className="border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
-            <div className="font-medium">Sync history</div>
-            <div className="text-xs text-neutral-500">
-              {runs.data.total} retained {runs.data.total === 1 ? "run" : "runs"} in PostgreSQL.
+          <CardHeader>
+            <div>
+              <h2 className="text-sm font-semibold">Sync history</h2>
+              <div className="text-xs text-neutral-500">
+                {runs.data.total} retained {runs.data.total === 1 ? "run" : "runs"} in PostgreSQL.
+              </div>
             </div>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
-                  <th className="px-3 py-2 font-medium">Started</th>
-                  <th className="px-3 py-2 font-medium">Status</th>
-                  <th className="px-3 py-2 font-medium">Result</th>
-                  <th className="px-3 py-2 font-medium">Catalog bundle</th>
-                  <th className="px-3 py-2 font-medium">Upstream commit</th>
-                  <th className="px-3 py-2 font-medium">Finished</th>
-                  <th className="px-3 py-2 font-medium">Error</th>
-                </tr>
-              </thead>
+          </CardHeader>
+          <Table>
+              <THead>
+                <Th>Started</Th>
+                <Th>Status</Th>
+                <Th>Result</Th>
+                <Th>Catalog bundle</Th>
+                <Th>Upstream commit</Th>
+                <Th>Finished</Th>
+                <Th>Error</Th>
+              </THead>
               <tbody>
                 {collapseSyncRuns(runs.data.items).map(({ run, count, rest }) => {
                   // Key by the series' oldest run so the group stays stable as
@@ -750,10 +757,10 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
                         run={run}
                         result={formatSyncRunRow(run, count, fmtTime(run.finished_at))}
                         expander={count > 1 && (
-                          <button
-                            type="button"
+                          <Button
+                            variant="link"
                             aria-expanded={isExpanded}
-                            className="ml-2 inline-flex items-center gap-0.5 align-middle text-xs font-medium text-indigo-600 hover:underline dark:text-indigo-400"
+                            className="ml-2 gap-0.5 align-middle text-xs"
                             onClick={() =>
                               setExpanded((prev) => {
                                 const next = new Set(prev);
@@ -769,7 +776,7 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
                               <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
                             )}
                             {isExpanded ? "hide" : `${count - 1} more`}
-                          </button>
+                          </Button>
                         )}
                       />
                       {isExpanded &&
@@ -779,10 +786,9 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
                     </Fragment>
                   );
                 })}
-                {runs.data.items.length === 0 && <tr><td colSpan={7} className="px-3 py-8 text-center text-neutral-400">No upstream sync has run yet.</td></tr>}
+                {runs.data.items.length === 0 && <TableEmpty colSpan={7}>No upstream sync has run yet.</TableEmpty>}
               </tbody>
-            </table>
-          </div>
+          </Table>
           <Pager
             offset={offset}
             total={runs.data.total}
@@ -820,29 +826,26 @@ export function TemplatesPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">Templates</h1>
-          <p className="mt-1 text-sm text-neutral-500">
-            Browse the mirrored Nuclei catalog, author custom checks, and monitor catalog refreshes.
-          </p>
-        </div>
-        {canWrite && <Button variant="primary" onClick={() => setImporting(true)}>Import templates</Button>}
-      </div>
-      {importNotice && <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300">{importNotice}</div>}
-      <div className="flex flex-wrap gap-1 border-b border-neutral-200 dark:border-neutral-800">
-        {(["catalog", "custom", "sync"] as const).map((value) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => setTab(value)}
-            className={`border-b-2 px-3 py-2 text-sm font-medium capitalize ${tab === value ? "border-indigo-600 text-indigo-700 dark:text-indigo-300" : "border-transparent text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"}`}
-          >
-            {value === "custom" ? "Custom templates" : value}
-          </button>
-        ))}
-      </div>
+    <Page>
+      <PageHeader
+        title="Templates"
+        description="Browse the mirrored Nuclei catalog, author custom checks, and monitor catalog refreshes."
+        actions={canWrite && <Button onClick={() => setImporting(true)}>Import templates</Button>}
+      />
+      {importNotice && (
+        <Alert tone="success" onDismiss={() => setImportNotice("")}>
+          {importNotice}
+        </Alert>
+      )}
+      <Tabs
+        tabs={[
+          { value: "catalog", label: "Catalog" },
+          { value: "custom", label: "Custom templates" },
+          { value: "sync", label: "Sync" },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
       {tab === "catalog" && <CatalogTab canWrite={canWrite} />}
       {tab === "custom" && <CustomTab canWrite={canWrite} canDelete={canDelete} />}
       {tab === "sync" && <SyncTab canWrite={canWrite} />}
@@ -859,12 +862,12 @@ export function TemplatesPage() {
       {importing && (
         <TemplateArchiveImportModal
           title="Import templates"
-          description="Upload a template export in YAML archive or JSON format. This imports custom templates only; use Template Sets to restore a set and its membership."
+          description="Upload a template export in YAML archive or JSON format. This imports custom templates only; use Template sets to restore a set and its membership."
           importArchive={api.importTemplates}
           onImported={imported}
           onClose={() => setImporting(false)}
         />
       )}
-    </div>
+    </Page>
   );
 }

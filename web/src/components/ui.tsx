@@ -171,7 +171,7 @@ export function PageHeader({
             {backContent}
           </button>
         ))}
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
             <h1 className="min-w-0 break-words text-xl font-semibold tracking-tight">{title}</h1>

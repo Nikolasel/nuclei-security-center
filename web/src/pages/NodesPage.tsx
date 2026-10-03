@@ -16,8 +16,9 @@ import {
   Muted,
   Page,
   PageHeader,
-  Pill,
+  PropertyList,
   RowActions,
+  type Property,
   Spinner,
   Table,
   TableEmpty,
@@ -37,15 +38,16 @@ function fmtTime(s?: string) {
   return s ? new Date(s).toLocaleString() : "—";
 }
 
-/** DiscoveryBadge shows the node's effective naabu scan type (#271) as polled
- *  via /v1/capabilities. SYN is the default (needs CAP_NET_RAW + libpcap);
- *  connect is the unprivileged fallback. While the node has never been polled
- *  successfully the value is absent and renders as unknown rather than a guess
- *  — a per-scan policy can still override the node default. */
-function DiscoveryBadge({ scanType }: { scanType?: string }) {
-  if (scanType === "connect") return <Pill tone="neutral">Connect</Pill>;
-  if (scanType === "syn") return <Pill tone="good">SYN</Pill>;
-  return <Pill tone="neutral">unknown</Pill>;
+/** discoveryProperty describes the node's effective naabu scan type (#271) as
+ *  polled via /v1/capabilities. SYN is the default (needs CAP_NET_RAW +
+ *  libpcap); connect is the unprivileged fallback. While the node has never been
+ *  polled successfully the value is absent and renders as unknown rather than a
+ *  guess — a per-scan policy can still override the node default. */
+function discoveryProperty(scanType?: string): Property {
+  const title = "Node default port-discovery mode — a policy's discovery_scan_type can override it per scan";
+  if (scanType === "connect") return { label: "Connect discovery", title };
+  if (scanType === "syn") return { label: "SYN discovery", title };
+  return { label: "Discovery unknown", title: `${title}. Not reported until the node is polled successfully.` };
 }
 
 /** HealthBadge renders a node's liveness (#98): green when healthy, red when a
@@ -303,6 +305,7 @@ export function NodesPage() {
             <THead>
               <Th>Name</Th>
               <Th>Status</Th>
+              <Th>Properties</Th>
               <Th>Endpoint</Th>
               <Th>Scope</Th>
               <Th>Catalog</Th>
@@ -322,22 +325,24 @@ export function NodesPage() {
                       )}
                     </Td>
                     <Td>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <HealthBadge healthy={n.healthy} error={n.health_error} />
-                        <span title="Node default — a policy's discovery_scan_type can override per scan">
-                          <DiscoveryBadge scanType={n.naabu_scan_type} />
-                        </span>
-                      </div>
+                      <HealthBadge healthy={n.healthy} error={n.health_error} />
+                    </Td>
+                    <Td>
+                      <PropertyList
+                        items={[
+                          discoveryProperty(n.naabu_scan_type),
+                          {
+                            label: "mTLS",
+                            title: "Mutual TLS configured: the node's server certificate is pinned and a client certificate is presented",
+                            hidden: !(n.tls_client_cert || n.tls_server_ca),
+                          },
+                        ]}
+                      />
                     </Td>
                     <Td className="max-w-[16rem] font-mono text-xs text-neutral-600 dark:text-neutral-400">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate" title={n.endpoint}>
-                          {n.endpoint}
-                        </span>
-                        {(n.tls_client_cert || n.tls_server_ca) && (
-                          <Pill title="mutual TLS configured">mTLS</Pill>
-                        )}
-                      </div>
+                      <span className="block truncate" title={n.endpoint}>
+                        {n.endpoint}
+                      </span>
                     </Td>
                     <Td className="text-xs">
                       <div
@@ -394,7 +399,7 @@ export function NodesPage() {
                   </TRow>
                 );
               })}
-              {(q.data ?? []).length === 0 && <TableEmpty colSpan={isAdmin ? 6 : 5}>No scanner nodes.</TableEmpty>}
+              {(q.data ?? []).length === 0 && <TableEmpty colSpan={isAdmin ? 7 : 6}>No scanner nodes.</TableEmpty>}
             </tbody>
           </Table>
         </Card>

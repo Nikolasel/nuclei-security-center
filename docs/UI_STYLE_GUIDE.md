@@ -172,6 +172,12 @@ external ones. Links navigate. Buttons act.
 ```
 
 - **The first column is the row's identity** (`font-medium`, or a mono ID link).
+- **Status vs. properties:** a `Status` column holds only the row's live state as one `Badge`
+  (healthy, enabled, complete). Configuration facts (discovery mode, mTLS, source) go in a separate
+  `Properties` column rendered with `<PropertyList items={[…]} />`: neutral pills with a
+  self-explanatory label ("SYN discovery", not "SYN") and a `title` tooltip explaining the fact.
+  A new indicator is one more entry, so it never needs a new column. Hide absent facts with
+  `hidden` rather than showing a "no" pill.
 - **Empty values** render as `<Muted />` (an em dash) or a muted word ("ad-hoc", "catch-all"). Never
   leave a cell blank.
 - **Empty table:** one `TableEmpty` row saying what is missing ("No schedules yet.", or "No findings
@@ -253,7 +259,7 @@ onSelect: async () => {
 | Context banner ("Showing the linked target.") | `<Alert tone="info" action={…}>` |
 | Status of a thing (scan state, enabled, healthy) | `<Badge tone>` / `StateBadge` / `FindingStateBadge` |
 | Severity | `<SeverityBadge>` only |
-| A secondary property (source, mode, discovery type) | `<Pill>` (outlined) |
+| A secondary property (source, mode, discovery type) | `<Pill>` (outlined), or `<PropertyList>` for a row's set of properties |
 | A list of values (tags, CWEs, endpoint pairs) | `<Tag>` / `<TagList>` |
 | Nothing to show / no access | `<EmptyState>` (in place of a table: `TableEmpty`) |
 

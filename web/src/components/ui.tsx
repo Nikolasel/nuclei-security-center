@@ -776,6 +776,25 @@ export function Pill({
   );
 }
 
+export type Property = { label: string; title?: string; hidden?: boolean };
+
+/** PropertyList renders a row's configuration facts as neutral Pills — the
+ *  content of a table's "Properties" column. Status never goes here (that is
+ *  the Status column's Badge); add a new fact as one more entry. */
+export function PropertyList({ items }: { items: Property[] }) {
+  const visible = items.filter((i) => !i.hidden);
+  if (visible.length === 0) return <Muted />;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {visible.map((i) => (
+        <Pill key={i.label} title={i.title}>
+          {i.label}
+        </Pill>
+      ))}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Feedback
 

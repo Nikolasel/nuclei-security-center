@@ -194,7 +194,20 @@ export function clearStoredFindingsFilters(): void {
  *  custom filter: it must filter something and match none of the presets. */
 export function isRecentCustomCandidate(filter: FindingQuery, now = new Date()): boolean {
   const hasConditions = filter.groups.some((g) => g.conditions.length > 0);
-  return hasConditions && matchFindingsPreset(filter, now) == null;
+  return hasConditions && matchFindingsPreset(filter, now) == null && !isExpiringAcceptancesWindow(filter);
+}
+
+/** isExpiringAcceptancesWindow recognizes the "Expiring acceptances" preset
+ *  from any day. The preset is persisted as a concrete 7-day window, so on a
+ *  later UTC day it no longer equals today's preset; it is still that preset,
+ *  not hand-built work, and must not replace the recent custom filter. */
+export function isExpiringAcceptancesWindow(filter: FindingQuery): boolean {
+  const window = filter.groups[0]?.conditions.find((c) => c.field === "accept_expires_at");
+  const start = window?.op === "between" ? window.values?.[0] : undefined;
+  if (filter.groups.length !== 1 || !start || !/^\d{4}-\d{2}-\d{2}$/.test(start)) return false;
+  const thatDay = new Date(`${start}T12:00:00Z`);
+  if (Number.isNaN(thatDay.getTime())) return false;
+  return JSON.stringify(rowsToQuery(expiringAcceptancesRows(thatDay))) === JSON.stringify(filter);
 }
 
 export function readRecentCustomFilter(): FindingQuery | null {

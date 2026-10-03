@@ -5,6 +5,7 @@ import {
   FINDINGS_PRESETS,
   FINDINGS_RECENT_CUSTOM_KEY,
   clearRecentCustomFilter,
+  isExpiringAcceptancesWindow,
   isRecentCustomCandidate,
   readRecentCustomFilter,
   writeRecentCustomFilter,
@@ -225,6 +226,27 @@ describe("recent custom filter", () => {
     expect(isRecentCustomCandidate(custom, now)).toBe(true);
     expect(isRecentCustomCandidate(defaultFindingsFilter(), now)).toBe(false);
     expect(isRecentCustomCandidate({ groups: [] }, now)).toBe(false);
+  });
+
+  it("does not treat a stale Expiring acceptances window as custom", () => {
+    const lastWeek = rowsToQuery(FINDINGS_PRESETS.find((p) => p.id === "expiring")!.rows(new Date("2026-09-20T12:00:00Z")));
+    expect(isExpiringAcceptancesWindow(lastWeek)).toBe(true);
+    expect(isRecentCustomCandidate(lastWeek, now)).toBe(false);
+  });
+
+  it("still treats a hand-edited expiry window as custom", () => {
+    const widened = {
+      groups: [
+        {
+          conditions: [
+            { field: "disposition", op: "any_of", values: ["accepted"] },
+            { field: "accept_expires_at", op: "between", values: ["2026-10-03", "2026-10-31"] },
+          ],
+        },
+      ],
+    };
+    expect(isExpiringAcceptancesWindow(widened)).toBe(false);
+    expect(isRecentCustomCandidate(widened, now)).toBe(true);
   });
 
   it("round-trips through storage and clears", () => {

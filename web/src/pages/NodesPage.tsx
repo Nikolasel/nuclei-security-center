@@ -332,9 +332,14 @@ export function NodesPage() {
                         items={[
                           discoveryProperty(n.naabu_scan_type),
                           {
-                            label: "mTLS",
-                            title: "Mutual TLS configured: the node's server certificate is pinned and a client certificate is presented",
-                            hidden: !(n.tls_client_cert || n.tls_server_ca),
+                            label: "Pinned server CA",
+                            title: "The backend verifies the node's server certificate against a pinned CA",
+                            hidden: !n.tls_server_ca,
+                          },
+                          {
+                            label: "Client certificate",
+                            title: "The backend presents a client certificate to the node (mutual TLS)",
+                            hidden: !n.tls_client_cert,
                           },
                         ]}
                       />

@@ -15,6 +15,7 @@ import {
 import {
   FINDINGS_FILTERS_KEY,
   FINDINGS_PRESETS,
+  FINDINGS_RECENT_CUSTOM_KEY,
   clearRecentCustomFilter,
   clearStoredFindingsFilters,
   defaultFindingsRows,
@@ -477,6 +478,16 @@ export function FindingsView() {
     writeRecentCustomFilter(filter);
     setRecentCustom(filter);
   }, [filter]);
+
+  // Another tab changing (or Reset clearing) the recent custom filter updates
+  // this tab's View menu, so it never writes a forgotten filter back.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === FINDINGS_RECENT_CUSTOM_KEY || e.key === null) setRecentCustom(readRecentCustomFilter());
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   // Another tab editing the same preference updates this table.
   useEffect(() => {

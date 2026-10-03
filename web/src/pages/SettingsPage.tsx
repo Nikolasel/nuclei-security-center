@@ -1,8 +1,137 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
-import { api } from "../api";
+import * as Tooltip from "@radix-ui/react-tooltip";
+import { CircleHelp } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { api, type EnvVariable } from "../api";
 import { hasRole, useMe } from "../auth";
-import { Button, Card, ErrorText, Field, Input, Spinner } from "../components/ui";
+import { Button, Card, cn, ErrorText, Field, Input, Spinner } from "../components/ui";
+
+function groupEnvVariables(vars: EnvVariable[]): { group: string; items: EnvVariable[] }[] {
+  const order: string[] = [];
+  const map = new Map<string, EnvVariable[]>();
+  for (const v of vars) {
+    const list = map.get(v.group);
+    if (!list) {
+      order.push(v.group);
+      map.set(v.group, [v]);
+    } else {
+      list.push(v);
+    }
+  }
+  return order.map((group) => ({ group, items: map.get(group) ?? [] }));
+}
+
+function effectiveDisplay(v: EnvVariable): string {
+  if (v.effective != null && v.effective !== "") return v.effective;
+  if (v.sensitive) return v.set ? "hidden" : "—";
+  if (v.effective === "") return "(empty)";
+  return "—";
+}
+
+function EnvConfigTable({ variables }: { variables: EnvVariable[] }) {
+  const groups = groupEnvVariables(variables);
+  return (
+    <Tooltip.Provider delayDuration={0}>
+      <div className="overflow-x-auto">
+        <table className="w-full table-fixed text-sm">
+          <colgroup>
+            <col className="w-[34%]" />
+            <col className="w-[10%]" />
+            <col className="w-[32%]" />
+            <col className="w-[24%]" />
+          </colgroup>
+          <thead>
+            <tr className="border-b border-neutral-200 text-left text-xs uppercase tracking-wide text-neutral-500 dark:border-neutral-800">
+              <th className="px-2 py-1.5 font-medium">Variable</th>
+              <th className="px-2 py-1.5 font-medium">Status</th>
+              <th className="px-2 py-1.5 font-medium">Effective</th>
+              <th className="px-2 py-1.5 font-medium">Default</th>
+            </tr>
+          </thead>
+          {groups.map(({ group, items }, i) => (
+            <tbody key={group}>
+              <tr>
+                <th
+                  scope="colgroup"
+                  colSpan={4}
+                  className={cn(
+                    "px-2 text-left text-sm font-semibold text-neutral-900 dark:text-neutral-100",
+                    i === 0 ? "pb-1.5 pt-3" : "pb-1.5 pt-5",
+                  )}
+                >
+                  {group}
+                </th>
+              </tr>
+              {items.map((v) => (
+                <tr key={v.name} className="border-b border-neutral-100 last:border-0 dark:border-neutral-800/60">
+                  <td className="px-2 py-1.5">
+                    <div className="flex min-w-0 items-center gap-1">
+                      <span className="truncate font-mono text-xs">{v.name}</span>
+                      <EnvVarInfo name={v.name} description={v.description} />
+                    </div>
+                  </td>
+                  <td className="px-2 py-1.5 text-neutral-500">{v.set ? "set" : "unset"}</td>
+                  <td
+                    className="truncate px-2 py-1.5 font-mono text-xs text-neutral-700 dark:text-neutral-300"
+                    title={effectiveDisplay(v)}
+                  >
+                    {effectiveDisplay(v)}
+                  </td>
+                  <td className="truncate px-2 py-1.5 font-mono text-xs text-neutral-500" title={v.default || "—"}>
+                    {v.default || "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          ))}
+        </table>
+      </div>
+    </Tooltip.Provider>
+  );
+}
+
+function EnvVarInfo({ name, description }: { name: string; description: string }) {
+  const [open, setOpen] = useState(false);
+  const lastPointerType = useRef<string>("");
+  if (!description) return null;
+  return (
+    <Tooltip.Root open={open} delayDuration={0} onOpenChange={setOpen}>
+      <Tooltip.Trigger asChild>
+        <button
+          type="button"
+          aria-label={`About ${name}`}
+          aria-expanded={open}
+          className="shrink-0 rounded p-0.5 text-neutral-400 hover:text-neutral-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-indigo-500 dark:hover:text-neutral-200"
+          onPointerDown={(e) => {
+            lastPointerType.current = e.pointerType;
+          }}
+          onClick={(e) => {
+            // Touch/pen have no hover. Toggle here and preventDefault so
+            // Radix Trigger's composed onClick (context.onClose) does not
+            // immediately close the tooltip that this click just opened.
+            if (lastPointerType.current === "touch" || lastPointerType.current === "pen") {
+              e.preventDefault();
+              setOpen((v) => !v);
+            }
+          }}
+        >
+          <CircleHelp className="h-3.5 w-3.5" aria-hidden />
+        </button>
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content
+          side="bottom"
+          align="start"
+          sideOffset={6}
+          collisionPadding={8}
+          className="z-50 max-w-xs rounded-md border border-neutral-200 bg-white px-3 py-2 text-xs leading-relaxed text-neutral-700 shadow-md dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
+        >
+          {description}
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  );
+}
 
 export function SettingsPage() {
   const me = useMe();
@@ -12,6 +141,12 @@ export function SettingsPage() {
   const settings = useQuery({
     queryKey: ["settings"],
     queryFn: () => api.getSettings(),
+    enabled: isAdmin,
+  });
+
+  const environment = useQuery({
+    queryKey: ["settings", "environment"],
+    queryFn: () => api.getEnvironment(),
     enabled: isAdmin,
   });
 
@@ -55,7 +190,7 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="max-w-2xl space-y-5">
+    <div className="max-w-4xl space-y-5">
       <div>
         <h1 className="text-xl font-semibold">Settings</h1>
         <p className="mt-1 text-sm text-neutral-500">Global configuration for this Nuclei Security Center.</p>
@@ -134,6 +269,23 @@ export function SettingsPage() {
               </span>
             )}
           </div>
+        </Card>
+      )}
+
+      {environment.isLoading ? (
+        <Spinner />
+      ) : environment.isError ? (
+        <ErrorText error={environment.error} />
+      ) : (
+        <Card className="space-y-4 p-5">
+          <div>
+            <h2 className="text-sm font-semibold">Environment configuration</h2>
+            <p className="mt-1 text-sm text-neutral-500">
+              Read-only view of this backend process&apos;s allowlisted environment. Secrets are never
+              shown. Changing a value requires a redeploy or restart — this page cannot edit env.
+            </p>
+          </div>
+          <EnvConfigTable variables={environment.data?.variables ?? []} />
         </Card>
       )}
     </div>

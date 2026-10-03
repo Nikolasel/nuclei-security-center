@@ -6,9 +6,10 @@ import (
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 )
 
-// Global app settings API (#95). Admin-only: the settings surface (today just
-// the scan-retention policy) is infrastructure configuration, so both read and
-// write require admin — consistent with scanner-node/service-account management.
+// Global app settings API (#95, #336). Admin-only: the settings surface is
+// infrastructure configuration (scan-retention policy plus a read-only view of
+// the process environment), so both read and write require admin — consistent
+// with scanner-node/service-account management.
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	settings, err := s.store.GetAppSettings(r.Context())
@@ -17,6 +18,10 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, settings)
+}
+
+func (s *Server) handleGetEnvironment(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, EnvConfigResponse{Variables: resolveEnvConfig()})
 }
 
 // updateSettingsRequest is the PUT /api/settings body. RetentionDays is a pointer

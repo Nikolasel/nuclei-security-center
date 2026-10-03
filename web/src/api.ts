@@ -543,6 +543,23 @@ export interface AppSettings {
   updated_at: string;
 }
 
+/** One allowlisted backend environment variable from GET /api/settings/environment. */
+export interface EnvVariable {
+  name: string;
+  group: string;
+  set: boolean;
+  /** Parsed/consumed value; null for secrets whose raw value never leaves the backend. */
+  effective: string | null;
+  default: string;
+  sensitive: boolean;
+  /** Short purpose from the backend env registry (same text as Configuration.md). */
+  description: string;
+}
+
+export interface EnvConfig {
+  variables: EnvVariable[];
+}
+
 export interface Page<T> {
   items: T[];
   total: number;
@@ -948,6 +965,7 @@ export const api = {
   // Global app settings (#95) — admin only. The retention policy governs the
   // background scan-deletion sweeper.
   getSettings: () => request<AppSettings>("GET", "/api/settings"),
+  getEnvironment: () => request<EnvConfig>("GET", "/api/settings/environment"),
   updateSettings: (body: {
     retention_enabled: boolean;
     scan_retention_days: number | null;

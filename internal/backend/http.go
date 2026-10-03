@@ -253,6 +253,7 @@ func (s *Server) Handler() http.Handler {
 	// the read is admin too (it's an infrastructure config page, not a viewer
 	// read). The write is audited as a config change.
 	mux.HandleFunc("GET /api/settings", s.requireRole(RoleAdmin, s.handleGetSettings))
+	mux.HandleFunc("GET /api/settings/environment", s.requireRole(RoleAdmin, s.handleGetEnvironment))
 	mux.HandleFunc("PUT /api/settings", s.mutation(eventConfigChanged, "settings.update", "settings", RoleAdmin, s.handleUpdateSettings))
 
 	// Unknown /api/* paths get a JSON-ish 404 rather than the SPA's index.html.

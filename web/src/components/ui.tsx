@@ -50,7 +50,7 @@ export const menuItemClass =
 export const menuSeparatorClass = "my-1 h-px bg-neutral-200 dark:bg-neutral-800";
 
 const controlBase =
-  "rounded-md border border-neutral-300 bg-white text-sm outline-none transition focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800 dark:disabled:bg-neutral-900";
+  "rounded-md border border-neutral-300 bg-white text-sm outline-none transition placeholder:text-neutral-400 dark:placeholder:text-neutral-500 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-500 dark:border-neutral-700 dark:bg-neutral-800 dark:disabled:bg-neutral-900";
 
 // ---------------------------------------------------------------------------
 // Buttons
@@ -360,7 +360,7 @@ export function THead({ children }: { children: ReactNode }) {
 
 export function Th({ className, children, ...props }: ThHTMLAttributes<HTMLTableCellElement>) {
   return (
-    <th scope="col" className={cn("px-4 py-2.5 font-medium", className)} {...props}>
+    <th scope="col" className={cn("whitespace-nowrap px-4 py-2.5 font-medium", className)} {...props}>
       {children}
     </th>
   );
@@ -704,7 +704,7 @@ export function ProgressBar({
           />
         )}
       </div>
-      <span className="w-24 shrink-0 text-right text-xs tabular-nums text-neutral-500">
+      <span className="shrink-0 whitespace-nowrap text-right text-xs tabular-nums text-neutral-500">
         {label ?? `${pct.toFixed(0)}%`}
       </span>
     </div>
@@ -1084,9 +1084,9 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
             )}
             <ModalActions>
               <Button onClick={() => settle(false)}>Cancel</Button>
+              {/* Radix focuses the first control (Cancel) on open — the safe default. */}
               <Button
                 variant={request.tone === "primary" ? "primary" : "danger"}
-                autoFocus
                 onClick={() => settle(true)}
               >
                 {request.confirmLabel ?? "Confirm"}

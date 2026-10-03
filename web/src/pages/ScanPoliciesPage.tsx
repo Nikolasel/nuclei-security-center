@@ -582,7 +582,7 @@ export function ScanPoliciesPage() {
                 const disc = discoverySummary(p);
                 return (
                   <TRow key={p.id}>
-                    <Td className="font-medium">{p.name}</Td>
+                    <Td className="whitespace-nowrap font-medium">{p.name}</Td>
                     <Td className="text-neutral-600 dark:text-neutral-400">{templateSetName(p.template_set_id)}</Td>
                     <Td title={exec.title}>
                       {exec.label === "defaults" ? <Muted>defaults</Muted> : <span className="font-mono text-xs">{exec.label}</span>}

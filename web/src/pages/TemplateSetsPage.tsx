@@ -503,7 +503,7 @@ export function TemplateSetsPage() {
             <tbody>
               {(sets.data ?? []).map((set) => (
                 <TRow key={set.id}>
-                  <Td className="font-medium">{set.name}</Td>
+                  <Td className="whitespace-nowrap font-medium">{set.name}</Td>
                   <Td>
                     <Pill tone={set.mode === "exact" ? "good" : "neutral"}>{set.mode}</Pill>
                   </Td>

@@ -411,16 +411,16 @@ export function SchedulesPage() {
             <tbody>
               {(q.data ?? []).map((s) => (
                 <TRow key={s.id}>
-                  <Td className="font-medium">{s.name}</Td>
-                  <Td className="text-neutral-600 dark:text-neutral-400">{policyName(s.scan_policy_id)}</Td>
-                  <Td className="text-neutral-600 dark:text-neutral-400">{targetName(s.target_id)}</Td>
-                  <Td className="font-mono text-xs text-neutral-600 dark:text-neutral-400">{s.cron}</Td>
+                  <Td className="whitespace-nowrap font-medium">{s.name}</Td>
+                  <Td className="whitespace-nowrap text-neutral-600 dark:text-neutral-400">{policyName(s.scan_policy_id)}</Td>
+                  <Td className="whitespace-nowrap text-neutral-600 dark:text-neutral-400">{targetName(s.target_id)}</Td>
+                  <Td className="whitespace-nowrap font-mono text-xs text-neutral-600 dark:text-neutral-400">{s.cron}</Td>
                   <Td className="font-mono text-xs text-neutral-600 dark:text-neutral-400">{s.timezone || "UTC"}</Td>
                   <Td>{s.enabled ? <Badge tone="success">enabled</Badge> : <Badge>disabled</Badge>}</Td>
-                  <Td className="whitespace-nowrap text-xs text-neutral-500">
+                  <Td className="text-xs text-neutral-500">
                     {s.enabled ? fmtInZone(s.next_run_at, s.timezone || "UTC") : <Muted />}
                   </Td>
-                  <Td className="whitespace-nowrap text-xs text-neutral-500">{fmtInZone(s.last_run_at, s.timezone || "UTC")}</Td>
+                  <Td className="text-xs text-neutral-500">{fmtInZone(s.last_run_at, s.timezone || "UTC")}</Td>
                   {showActions && (
                     <RowActions
                       label={s.name}

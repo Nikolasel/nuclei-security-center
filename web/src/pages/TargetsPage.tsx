@@ -176,7 +176,7 @@ export function TargetsPage() {
             <tbody>
               {visibleTargets.map((t) => (
                 <TRow key={t.id} highlighted={t.id === selectedTargetID}>
-                  <Td className="font-medium">{t.name}</Td>
+                  <Td className="whitespace-nowrap font-medium">{t.name}</Td>
                   <Td className="font-mono text-xs text-neutral-600 dark:text-neutral-400">{t.hosts.join(", ")}</Td>
                   <Td className="text-neutral-500">{t.tags.join(", ") || <Muted />}</Td>
                   {(canWrite || canDelete) && (

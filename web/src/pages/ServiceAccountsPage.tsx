@@ -248,7 +248,7 @@ export function ServiceAccountsPage() {
             <tbody>
               {(q.data ?? []).map((sa) => (
                 <TRow key={sa.id}>
-                  <Td className="font-medium">{sa.name}</Td>
+                  <Td className="whitespace-nowrap font-medium">{sa.name}</Td>
                   <Td>
                     <Badge>{sa.role}</Badge>
                   </Td>

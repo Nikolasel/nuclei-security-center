@@ -1,13 +1,12 @@
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { Columns3, Filter } from "lucide-react";
+import { Check, ChevronDown, Columns3, Filter } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, type ExportFormat, type LifecycleFinding } from "../api";
 import {
   ConditionBuilder,
   countActiveConditions,
-  expiringAcceptancesRows,
   queryToRows,
   rowsToCrumbs,
   rowsToQuery,
@@ -15,8 +14,11 @@ import {
 } from "./ConditionBuilder";
 import {
   FINDINGS_FILTERS_KEY,
+  FINDINGS_PRESETS,
   clearStoredFindingsFilters,
   defaultFindingsRows,
+  findingsFilterPrefsAreDefault,
+  matchFindingsPreset,
   readStoredFindingsFilters,
   resolveFindingsFilterPrefs,
   writeStoredFindingsFilters,
@@ -580,6 +582,8 @@ export function FindingsView() {
 
   const crumbs = useMemo(() => rowsToCrumbs(rows, targetOpts), [rows, targetOpts]);
   const activeCount = useMemo(() => countActiveConditions(rows), [rows]);
+  const activePreset = useMemo(() => matchFindingsPreset(compiled), [compiled]);
+  const isDefaultView = findingsFilterPrefsAreDefault({ filter: compiled, sort: sort || null, order: sort ? order : null });
 
   // Changing the applied filter jumps back to page 1 — but not on first mount, so
   // an offset restored from the URL survives a back-navigation.
@@ -683,23 +687,36 @@ export function FindingsView() {
             <span className="rounded bg-indigo-600 px-1.5 text-xs font-semibold text-white">{activeCount}</span>
           )}
         </Button>
-        <Button
-          variant="ghost"
-          title="Accepted findings whose accept-risk expiry falls in the next 7 days (UTC)"
-          onClick={() => {
-            setRows(expiringAcceptancesRows());
-            setFilterOpen(true);
-          }}
-        >
-          Expiring acceptances
-        </Button>
-        <Button
-          variant="ghost"
-          title="Restore the default open-findings filter and sort, and forget the stored preference"
-          onClick={resetFiltersToDefault}
-        >
-          Reset to default
-        </Button>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild>
+            <Button title="Switch to a saved view of the findings list">
+              <span className="text-neutral-500 dark:text-neutral-400">View:</span>
+              {activePreset?.label ?? "Custom filter"}
+              <ChevronDown className="h-4 w-4 text-neutral-400" aria-hidden />
+            </Button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content align="start" sideOffset={6} className={cn(menuContentClass, "min-w-64")}>
+              {FINDINGS_PRESETS.map((preset) => (
+                <DropdownMenu.Item
+                  key={preset.id}
+                  onSelect={() => setRows(preset.rows())}
+                  title={preset.description}
+                  className={cn(menuItemClass, "items-start")}
+                >
+                  <Check
+                    className={cn("mt-0.5 h-4 w-4 shrink-0", activePreset?.id === preset.id ? "text-indigo-600 dark:text-indigo-400" : "invisible")}
+                    aria-hidden
+                  />
+                  <span>
+                    <span className="block">{preset.label}</span>
+                    <span className="block text-xs text-neutral-500 dark:text-neutral-400">{preset.description}</span>
+                  </span>
+                </DropdownMenu.Item>
+              ))}
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
 
         {/* Compact read-only summary of the active filter (visible when collapsed). */}
         {!filterOpen &&
@@ -726,6 +743,15 @@ export function FindingsView() {
           ) : (
             <span className="text-sm text-neutral-400">No filter — showing all findings</span>
           ))}
+        {!isDefaultView && (
+          <Button
+            variant="link"
+            title="Restore the default open-findings filter and sort, and forget the stored preference"
+            onClick={resetFiltersToDefault}
+          >
+            Reset
+          </Button>
+        )}
 
         <div className="ml-auto flex items-center gap-2">
           <DropdownMenu.Root>

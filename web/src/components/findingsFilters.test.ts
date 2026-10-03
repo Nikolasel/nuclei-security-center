@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { rowsToQuery } from "./ConditionBuilder";
 import {
   FINDINGS_FILTERS_KEY,
+  FINDINGS_PRESETS,
+  matchFindingsPreset,
   FINDINGS_FILTERS_VERSION,
   clearStoredFindingsFilters,
   defaultFindingsFilter,
@@ -185,5 +188,23 @@ describe("localStorage read/write", () => {
     expect(readStoredFindingsFilters()).toBeNull();
     localStorage.setItem(FINDINGS_FILTERS_KEY, JSON.stringify({ nope: true }));
     expect(mergeFindingsFilters(readStoredFindingsFilters())).toBeNull();
+  });
+});
+
+describe("findings presets", () => {
+  const now = new Date("2026-10-03T12:00:00Z");
+  const compiled = (id: string) => rowsToQuery(FINDINGS_PRESETS.find((p) => p.id === id)!.rows(now));
+
+  it("treats the default filter as the open preset", () => {
+    expect(matchFindingsPreset(defaultFindingsFilter(), now)?.id).toBe("open");
+  });
+
+  it("recognizes each preset's own filter", () => {
+    for (const p of FINDINGS_PRESETS) expect(matchFindingsPreset(compiled(p.id), now)?.id).toBe(p.id);
+  });
+
+  it("returns null for a customized filter", () => {
+    const custom = { groups: [{ conditions: [{ field: "severity", op: "any_of", values: ["high"] }] }] };
+    expect(matchFindingsPreset(custom, now)).toBeNull();
   });
 });

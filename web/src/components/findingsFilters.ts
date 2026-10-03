@@ -6,7 +6,7 @@
 // list is scoped to one scan and is not the lifecycle triage view.
 
 import type { FindingQuery } from "../api";
-import { makeRow, type Row } from "./ConditionBuilder";
+import { expiringAcceptancesRows, makeRow, rowsToQuery, type Row } from "./ConditionBuilder";
 
 export const FINDINGS_FILTERS_KEY = "nsc.findings.filters";
 export const FINDINGS_FILTERS_VERSION = 1;
@@ -25,6 +25,40 @@ export function defaultFindingsFilter(): FindingQuery {
   return {
     groups: [{ conditions: [{ field: "state", op: "any_of", values: ["new", "active", "resurfaced"] }] }],
   };
+}
+
+export type FindingsPresetId = "open" | "expiring" | "all";
+
+export interface FindingsPreset {
+  id: FindingsPresetId;
+  label: string;
+  description: string;
+  rows: (now?: Date) => Row[];
+}
+
+/** FINDINGS_PRESETS are the named views offered by the findings "View" menu.
+ *  "open" is the default filter, so choosing it is the filter half of a reset. */
+export const FINDINGS_PRESETS: FindingsPreset[] = [
+  {
+    id: "open",
+    label: "Open findings",
+    description: "New, active and resurfaced findings (the default)",
+    rows: () => defaultFindingsRows(),
+  },
+  {
+    id: "expiring",
+    label: "Expiring acceptances",
+    description: "Accepted findings whose accept-risk expiry falls in the next 7 days (UTC)",
+    rows: (now) => expiringAcceptancesRows(now),
+  },
+  { id: "all", label: "All findings", description: "No filter, every lifecycle finding", rows: () => [] },
+];
+
+/** matchFindingsPreset returns the preset whose compiled query equals `filter`,
+ *  or null when the filter has been customized. */
+export function matchFindingsPreset(filter: FindingQuery, now = new Date()): FindingsPreset | null {
+  const key = JSON.stringify(filter);
+  return FINDINGS_PRESETS.find((p) => JSON.stringify(rowsToQuery(p.rows(now))) === key) ?? null;
 }
 
 export function defaultFindingsFilterPrefs(): FindingsFilterPrefs {

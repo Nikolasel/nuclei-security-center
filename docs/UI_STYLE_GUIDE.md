@@ -284,6 +284,15 @@ Radix `DropdownMenu` with `menuContentClass` / `menuItemClass` / `menuSeparatorC
 `Button` (`asChild`) whose label ends in ▾ for a choice menu ("Export ▾"), or an `ActionMenu` "⋯" for
 overflow actions.
 
+### Saved views
+
+A list with named filter presets offers them in one secondary `View: <name> ▾` dropdown. Each
+item has a label and a one-line description, and the active preset is checked. When the current
+filter matches no preset, the trigger reads "Custom filter". **Reset** is a `link` button placed after
+the active-filter summary and shown **only** when the filter or sort differs from the default.
+Don't put presets or reset in the toolbar as separate ghost buttons. Example: the findings list
+(`FINDINGS_PRESETS` in `findingsFilters.ts`).
+
 ## Accessibility checklist
 
 - Every interactive element shows the shared `focusRing` on keyboard focus. Primitives include it.

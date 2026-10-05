@@ -15,9 +15,12 @@ raw JSONL. Complete scans export/import as versioned scan bundles (JSON or zip).
 guardrail** keeps every scan inside approved targets, every mutating call
 is written to a structured **audit log**, and raw scanner output is archived to object storage.
 
-![Nuclei Security Center findings page](docs/assets/nuclei-security-center-preview.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/nuclei-security-center-preview-dark.png">
+  <img alt="Nuclei Security Center findings page" src="docs/assets/nuclei-security-center-preview-light.png">
+</picture>
 
-*Live application screenshot: populated Findings from a honey.scanme.sh full-catalog scan in dark mode.*
+*Live application screenshot: populated Findings from a honey.scanme.sh full-catalog scan, in the light or dark theme to match yours.*
 
 ## Architecture
 

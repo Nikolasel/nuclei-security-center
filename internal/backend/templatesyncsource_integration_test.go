@@ -169,6 +169,28 @@ func TestTemplateSyncSwitchAndReconcilePostgres(t *testing.T) {
 		t.Fatalf("fill template set: %v", err)
 	}
 
+	// 1b. A dry run of a DIFFERENT repository (PR #344 review A: a typo, an
+	// unreachable host, wrong credentials) must not disturb the sync clone
+	// the configured source just populated — the foreign candidate is probed
+	// in a throwaway directory, so the next configured-source run stays a
+	// cheap fetch instead of a full re-clone inside the request.
+	other := buildTemplateRepoFixture(t, "other-template")
+	foreign, err := syncer.PreviewSource(ctx, other, "latest")
+	if err != nil {
+		t.Fatalf("preview foreign repository: %v", err)
+	}
+	if foreign.Added != 1 || foreign.Removed != 3 {
+		t.Fatalf("foreign preview = added %d removed %d, want 1/3", foreign.Added, foreign.Removed)
+	}
+	_, cacheEntries, _, err := syncer.templateSnapshot(ctx, syncer.config.Dir, fixture, "latest")
+	if err != nil {
+		t.Fatalf("sync cache after foreign preview: %v", err)
+	}
+	if len(cacheEntries) != 3 || cacheEntries[0].ID == "other-template" {
+		t.Fatalf("sync cache after foreign preview = %d entries (%s…), want the untouched alpha/beta/shared catalog",
+			len(cacheEntries), cacheEntries[0].ID)
+	}
+
 	// 2. Dry run of the preview source: beta removed, alpha changed, gamma
 	// added; the exact set is named with its member counts. No DB writes.
 	preview, err := syncer.PreviewSource(ctx, fixture, "main")
@@ -417,12 +439,12 @@ func TestTemplateSyncConfigRBACAndAuditPostgres(t *testing.T) {
 	srv.SetTemplateSyncer(syncer)
 	h := srv.Handler()
 
-	session := func(roles ...string) string {
+	session := func(subject string, roles ...string) string {
 		t.Helper()
 		cookie := "session-" + types.NewID()
 		if err := st.CreateSession(ctx, store.Session{
 			ID:        cookie,
-			Identity:  store.Identity{Subject: "user-" + types.NewID(), Roles: roles},
+			Identity:  store.Identity{Subject: subject, Roles: roles},
 			ExpiresAt: time.Now().Add(time.Hour),
 		}); err != nil {
 			t.Fatalf("create %v session: %v", roles, err)
@@ -439,9 +461,12 @@ func TestTemplateSyncConfigRBACAndAuditPostgres(t *testing.T) {
 		return req
 	}
 
-	viewer := session(RoleViewer)
-	operator := session(RoleOperator)
-	admin := session(RoleAdmin)
+	viewer := session("user-"+types.NewID(), RoleViewer)
+	operator := session("user-"+types.NewID(), RoleOperator)
+	// The admin's registry row is what the Sync tab resolves "changed by" to
+	// (PR #344 review E); the source switches below stamp this subject.
+	adminSubject := "user-" + types.NewID()
+	admin := session(adminSubject, RoleAdmin)
 
 	// Viewer: 403 with an audited access_denied for both endpoints.
 	rr := httptest.NewRecorder()
@@ -499,6 +524,27 @@ func TestTemplateSyncConfigRBACAndAuditPostgres(t *testing.T) {
 		if src.Repo != "" || src.Ref != "" {
 			t.Fatalf("%s: stored source changed to %+v, want untouched", name, src)
 		}
+	}
+
+	// A failed save still records the candidate it tried (PR #344 review D):
+	// the probe failures are the ones that matter for spotting internal-host
+	// probing, and they previously showed up only in a separate warning line
+	// with no actor attached.
+	logs.Reset()
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, withCookie(httptest.NewRequest(http.MethodPut, "/api/templates/sync/config", strings.NewReader(`{"repo":"https://127.0.0.1:1/nope.git","ref":"main"}`)), admin))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("unreachable PUT status = %d, want 400 body %q", rr.Code, rr.Body.String())
+	}
+	event = lastAudit(t, &logs)
+	if event["event_id"] != eventConfigChanged || event["action"] != "template_sync.config_update" || event["status"] != float64(http.StatusBadRequest) {
+		t.Fatalf("failed PUT audit = %+v, want config_changed/template_sync.config_update 400", event)
+	}
+	if event["repo"] != "https://127.0.0.1:1/nope.git" || event["ref"] != "main" {
+		t.Fatalf("failed PUT audit candidate = %v@%v, want the sanitized candidate repo/ref", event["repo"], event["ref"])
+	}
+	if event["old_ref"] != nil || event["new_ref"] != nil || event["old_repo"] != nil {
+		t.Fatalf("failed PUT audit delta = %+v, want no old/new fields (nothing was stored)", event)
 	}
 
 	// Admin success: an explicit empty repository (disable) needs no probe, so
@@ -620,6 +666,9 @@ func TestTemplateSyncConfigRBACAndAuditPostgres(t *testing.T) {
 		if ev["new_ref"] != nil {
 			t.Fatalf("no-op audit carried new_ref %v, want no old/new delta", ev["new_ref"])
 		}
+		if ev["unchanged"] != true {
+			t.Fatalf("no-op audit unchanged = %v, want true (PR #344 review C)", ev["unchanged"])
+		}
 	}
 	if noopUpdates != 1 {
 		t.Fatalf("no-op save emitted %d template_sync.config_update audit events, want 1", noopUpdates)
@@ -637,17 +686,32 @@ func TestTemplateSyncConfigRBACAndAuditPostgres(t *testing.T) {
 	if !strings.Contains(rr.Body.String(), "unreachable, refused the connection") || strings.Contains(rr.Body.String(), "dial tcp") {
 		t.Fatalf("unreachable preview body = %q, want the generic message without the transport error", rr.Body.String())
 	}
-	if event := lastAudit(t, &logs); event["action"] != "template_sync.preview" || event["event_id"] != eventConfigChanged {
+	// The failed preview records the candidate it tried (PR #344 review D) —
+	// the internal-host probe attempt is visible with its actor in one event.
+	event = lastAudit(t, &logs)
+	if event["action"] != "template_sync.preview" || event["event_id"] != eventConfigChanged {
 		t.Fatalf("preview audit = %+v, want config_changed/template_sync.preview", event)
+	}
+	if event["repo"] != "https://127.0.0.1:1/nope.git" || event["ref"] != "main" {
+		t.Fatalf("failed preview audit candidate = %v@%v, want the sanitized candidate repo/ref", event["repo"], event["ref"])
+	}
+	if event["commit"] != nil {
+		t.Fatalf("failed preview audit commit = %v, want absent", event["commit"])
 	}
 
 	// GET status reports the DB-backed source with the channel label. Restore
 	// the credential-bearing URL at store level so the response also proves
 	// sanitization; the environment view marks the seed-only variables and
-	// shows the DB value.
+	// shows the DB value. The acting subject resolves to a display label for
+	// the UI while the raw subject stays on the record (PR #344 review E).
+	if err := st.UpsertUser(ctx, store.Identity{
+		Subject: adminSubject, Email: "admin@example.test", Name: "Admin User", Roles: []string{RoleAdmin},
+	}); err != nil {
+		t.Fatalf("upsert admin user registry row: %v", err)
+	}
 	if _, err := st.UpdateTemplateSyncSource(ctx, store.TemplateSyncSource{
 		Repo: "https://user:secret@example.test/templates.git", Ref: "main",
-	}, ""); err != nil {
+	}, adminSubject); err != nil {
 		t.Fatalf("re-store credential-bearing source: %v", err)
 	}
 	rr = httptest.NewRecorder()
@@ -656,10 +720,12 @@ func TestTemplateSyncConfigRBACAndAuditPostgres(t *testing.T) {
 		t.Fatalf("GET sync status = %d, want 200", rr.Code)
 	}
 	var syncStatus struct {
-		Enabled   bool   `json:"enabled"`
-		RefSource string `json:"ref_source"`
-		Repo      string `json:"repo"`
-		Ref       string `json:"ref"`
+		Enabled       bool   `json:"enabled"`
+		RefSource     string `json:"ref_source"`
+		Repo          string `json:"repo"`
+		Ref           string `json:"ref"`
+		UpdatedBy     string `json:"source_updated_by"`
+		UpdatedByName string `json:"source_updated_by_name"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &syncStatus); err != nil {
 		t.Fatalf("decode sync status: %v", err)
@@ -669,6 +735,9 @@ func TestTemplateSyncConfigRBACAndAuditPostgres(t *testing.T) {
 	}
 	if syncStatus.Repo != "https://example.test/templates.git" {
 		t.Fatalf("sync status repo = %q, want sanitized", syncStatus.Repo)
+	}
+	if syncStatus.UpdatedBy != adminSubject || syncStatus.UpdatedByName != "Admin User" {
+		t.Fatalf("sync status changed-by = %q (%q), want the subject kept plus its resolved display name (PR #344 review E)", syncStatus.UpdatedBy, syncStatus.UpdatedByName)
 	}
 	if strings.Contains(rr.Body.String(), "secret") {
 		t.Fatalf("sync status leaked credentials: %s", rr.Body.String())

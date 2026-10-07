@@ -108,10 +108,13 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   schedules that resolve those sets — before the switch is confirmed. Only `https://` repositories
   are accepted. The dry run and the save-time probe both refuse a candidate whose ids would shadow
   a custom template — the exact conflict that
-  aborts a sync run — so a confirmed switch can never queue a sync that fails on it. Probes do not
-  touch the sync clone cache: they fetch into a dedicated sibling cache
-  (`<TEMPLATE_SYNC_DIR>-probe`) so a typo, an unreachable candidate, or a cancelled dry run cannot
-  cost a multi-gigabyte re-clone, and they run under a short probe timeout with a fail-fast
+  aborts a sync run — so a confirmed switch can never queue a sync that fails on it. A probe
+  never damages cached state: the configured repository is probed in the real sync clone (under
+  the shared worktree lock a probe only fetches and moves the checked-out ref, both of which
+  every sync re-does), and any other candidate — a typo, an unreachable host, wrong credentials —
+  is probed in a throwaway directory removed afterwards (PR #344 review), so nothing is ever
+  re-pointed or re-cloned from a failed dry run and probes need no second cache next to
+  TEMPLATE_SYNC_DIR. Probes run under a short probe timeout with a fail-fast
   `503` while the long sync lock is held. When the request carries the commit a dry run resolved
   (`preview_commit`) and the ref still resolves to it, the save verifies that commit instead of
   re-fetching and re-walking the catalog, so the usual admin flow fetches once. A real sync still

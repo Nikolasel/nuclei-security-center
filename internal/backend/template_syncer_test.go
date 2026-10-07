@@ -287,13 +287,16 @@ func TestTemplateSnapshotReplacesCacheOnRemoteSwitch(t *testing.T) {
 	}
 }
 
-// A source probe against a different repository runs in its own probe cache and
-// must leave the sync cache — and every ref it holds — intact (PR #344 review
-// #2): a cancelled dry run, a typo, or an unreachable candidate used to wipe
-// the cache and force a full re-clone on the next sync. The probe cache itself
-// converges on the last-probed repository, so repeated probes stay cheap, and
-// an expectCommit that still resolves skips the catalog walk (PR #344 review
-// #6, the PUT's save-time probe reusing the dry run's result).
+// A source probe against a different repository must leave the sync cache —
+// and every ref it holds — intact (PR #344 review #2): a cancelled dry run, a
+// typo, or an unreachable candidate used to wipe the cache and force a full
+// re-clone on the next sync. Foreign candidates are probed in a throwaway
+// directory removed afterwards (PR #344 review A), so nothing persistent is
+// ever re-pointed, and an expectCommit that still resolves skips the catalog
+// walk (PR #344 review #6, the PUT's save-time probe reusing the dry run's
+// result). The syncer has no store here, so every probe takes the throwaway
+// path — the configured-repository reuse case is covered by
+// TestNewProbeWorktree and the Postgres integration tests.
 func TestTemplateSourceProbeLeavesSyncCacheIntact(t *testing.T) {
 	oldRepo, oldHead := writeTemplateRepoFixture(t, []string{"old-template"}, "v9.9.9", "legacy")
 	newRepo, newHead := writeTemplateRepoFixture(t, []string{"new-template"}, "v1.0.0", "")
@@ -347,5 +350,35 @@ func TestTemplateSourceProbeFailsFastWhenBusy(t *testing.T) {
 	defer s.worktree.Unlock()
 	if _, _, _, err := s.resolveTemplateSnapshot(context.Background(), repo, "latest", ""); !errors.Is(err, errTemplateSyncBusy) {
 		t.Fatalf("probe while busy = %v, want errTemplateSyncBusy", err)
+	}
+}
+
+// The configured repository is probed in the real sync clone (under the
+// caller-held worktree lock), any other candidate in a throwaway directory the
+// cleanup removes (PR #344 review A/B): identity is compared on the sanitized
+// URL, so rotated credentials still reuse the clone, and a store-less or
+// empty-configured syncer never probes into persistent state.
+func TestNewProbeWorktree(t *testing.T) {
+	syncDir := filepath.Join(t.TempDir(), "clone-cache")
+
+	dir, cleanup, err := newProbeWorktree("https://user:secret@example.test/catalog.git", syncDir, "https://example.test/catalog.git")
+	if err != nil || dir != syncDir {
+		t.Fatalf("configured candidate: dir %q err %v, want the sync clone", dir, err)
+	}
+	cleanup()
+
+	// A foreign candidate (and an unconfigured/unknown one) gets a temp dir.
+	for _, configured := range []string{"https://example.test/other.git", ""} {
+		dir, cleanup, err := newProbeWorktree(configured, syncDir, "https://example.test/catalog.git")
+		if err != nil || dir == syncDir || strings.HasPrefix(dir, syncDir) {
+			t.Fatalf("foreign candidate (configured %q): dir %q err %v, want a throwaway directory", configured, dir, err)
+		}
+		if _, err := os.Stat(dir); err != nil {
+			t.Fatalf("foreign candidate (configured %q): temp dir %s unavailable: %v", configured, dir, err)
+		}
+		cleanup()
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("foreign candidate (configured %q): temp dir %s survived cleanup", configured, dir)
+		}
 	}
 }

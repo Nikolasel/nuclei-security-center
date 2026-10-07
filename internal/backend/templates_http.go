@@ -281,6 +281,7 @@ func (s *Server) templateSyncStatusResponse(w http.ResponseWriter, r *http.Reque
 	}
 	status.SourceUpdatedAt = provenance.UpdatedAt
 	status.SourceUpdatedBy = provenance.UpdatedBy
+	status.SourceUpdatedByName = provenance.UpdatedByName
 	return status, true
 }
 

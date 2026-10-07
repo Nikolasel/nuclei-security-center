@@ -24,7 +24,7 @@ documented separately because the backend never sees them.
 | `TEMPLATE_SYNC_INTERVAL` | `6h` | Upstream catalog refresh cadence. Env-only; the source repository and ref are runtime settings. |
 | `TEMPLATE_SYNC_REPO` | ProjectDiscovery `nuclei-templates` Git repository | Upstream catalog Git repository. Seeds the DB-backed source once at startup; afterward the admin UI (Templates → Sync) is authoritative and this variable only matters when never seeded. An explicit empty value disables upstream sync while retaining custom templates and distribution. |
 | `TEMPLATE_SYNC_REF` | `latest` | Revision to mirror. Seeds the DB-backed source once at startup; afterward the admin UI is authoritative. latest is the highest stable tag; tags and SHAs are reproducible, branches advance. |
-| `TEMPLATE_SYNC_DIR` | `/tmp/nsc-template-sync` | Backend clone cache. Mount persistent storage to avoid repeated full clones. Preview/save-time probes use a sibling TEMPLATE_SYNC_DIR-probe cache instead, so a dry run never invalidates the real clone. |
+| `TEMPLATE_SYNC_DIR` | `/tmp/nsc-template-sync` | Backend clone cache. Mount persistent storage to avoid repeated full clones. Source probes reuse this clone for the configured repository (under the sync worktree lock) and probe any other candidate in a throwaway temp directory that is removed afterwards, so a dry run never invalidates or duplicates the real clone. |
 | `TEMPLATE_DISTRIBUTE_INTERVAL` | `1h` | How often stale, idle scanner nodes receive the current full catalog bundle. Pre-dispatch top-up still runs. |
 | `EXPORT_SPOOL_DIR` | `os.TempDir()` (usually `/tmp`) | Writable scratch directory for findings exports and scan-bundle imports. |
 

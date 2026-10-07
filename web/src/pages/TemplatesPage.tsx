@@ -1048,7 +1048,7 @@ function SyncTab({ canWrite, isAdmin }: { canWrite: boolean; isAdmin: boolean })
                 <Meta label="Interval">{status.data.interval}</Meta>
                 <Meta label="Last source change">
                   {status.data.source_updated_at
-                    ? `Changed by ${status.data.source_updated_by || "unknown"} at ${fmtTime(status.data.source_updated_at)}`
+                    ? `Changed by ${status.data.source_updated_by_name || status.data.source_updated_by || "unknown"} at ${fmtTime(status.data.source_updated_at)}`
                     : "Seeded from the environment"}
                 </Meta>
                 <Meta label="Active catalog bundle">

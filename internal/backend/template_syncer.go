@@ -81,18 +81,22 @@ type TemplateSyncer struct {
 // latest, preview = main on the community catalog, custom = anything else);
 // DefaultRepo reports whether the sanitized repository is the ProjectDiscovery
 // community catalog; SourceUpdatedAt/By name the admin who last switched the
-// source (unset while it has only ever been seeded from the environment).
+// source (unset while it has only ever been seeded from the environment) —
+// SourceUpdatedByName resolves that subject to a display label for the UI
+// while SourceUpdatedBy keeps the raw subject for audit joins (PR #344
+// review E).
 type TemplateSyncStatus struct {
-	Enabled         bool       `json:"enabled"`
-	Interval        string     `json:"interval,omitempty"`
-	Repo            string     `json:"repo,omitempty"`
-	Ref             string     `json:"ref,omitempty"`
-	RefSource       string     `json:"ref_source,omitempty"`
-	DefaultRepo     bool       `json:"default_repo"`
-	TemplatesCommit string     `json:"templates_commit,omitempty"`
-	TemplateCount   int        `json:"template_count"`
-	SourceUpdatedAt *time.Time `json:"source_updated_at,omitempty"`
-	SourceUpdatedBy string     `json:"source_updated_by,omitempty"`
+	Enabled             bool       `json:"enabled"`
+	Interval            string     `json:"interval,omitempty"`
+	Repo                string     `json:"repo,omitempty"`
+	Ref                 string     `json:"ref,omitempty"`
+	RefSource           string     `json:"ref_source,omitempty"`
+	DefaultRepo         bool       `json:"default_repo"`
+	TemplatesCommit     string     `json:"templates_commit,omitempty"`
+	TemplateCount       int        `json:"template_count"`
+	SourceUpdatedAt     *time.Time `json:"source_updated_at,omitempty"`
+	SourceUpdatedBy     string     `json:"source_updated_by,omitempty"`
+	SourceUpdatedByName string     `json:"source_updated_by_name,omitempty"`
 }
 
 // templateSyncChannels are the ref-channel labels exposed by the status and
@@ -286,9 +290,10 @@ func (s *TemplateSyncer) run(ctx context.Context, repo, ref string) {
 }
 
 // templateSnapshot fetches and checks out repo/ref in the given clone-cache
-// directory and reads its catalog. dir is the sync cache for real runs (where
+// directory and reads its catalog. dir is the sync clone for real runs (where
 // openOrCloneTemplateRepo may legitimately replace the cache when the stored
-// source changed) and the probe cache for source probes.
+// source changed) and the configured repository's probe target for source
+// probes.
 func (s *TemplateSyncer) templateSnapshot(ctx context.Context, dir, repo, ref string) (string, []store.Template, int, error) {
 	r, err := openOrCloneTemplateRepo(ctx, dir, repo, s.log)
 	if err != nil {
@@ -395,21 +400,50 @@ func (s *TemplateSyncer) PreviewSource(ctx context.Context, repo, ref string) (s
 	return preview, nil
 }
 
-// probeDir is the second clone cache source probes run against (PR #344 review
-// #2). Preview and save-time validation never touch the real sync cache: a
-// cancelled dry run, a typo, or an unreachable candidate used to wipe ~1 GB of
-// fetched history and force a full re-clone on the next sync. The probe cache
-// converges on the last-probed repository exactly like the sync cache does, so
-// repeated previews of the same candidate stay cheap; its only cost is the
-// extra disk for the "-probe" sibling of TEMPLATE_SYNC_DIR.
-func (s *TemplateSyncer) probeDir() string {
-	return s.config.Dir + "-probe"
+// probeWorktree returns the directory a source probe runs in plus its cleanup
+// (PR #344 review A/B). The configured repository probes the real sync clone:
+// under the caller-held worktree lock a probe can only fetch and move the
+// checked-out ref — both of which every sync re-does — so a dry run of the
+// stored source costs one fetch instead of cloning the same catalog a second
+// time (the old "<DIR>-probe" sibling doubled disk use and sat outside the
+// documented TEMPLATE_SYNC_DIR mount). Any other candidate — a typo, an
+// unreachable host, wrong credentials — is probed in a throwaway directory
+// that is always removed: a failed or cancelled probe can neither delete nor
+// poison any cached state, so the next probe of the configured repository
+// stays a cheap fetch. When the store is unavailable (tests) or its read
+// fails, the throwaway path wins so a probe can never touch persistent state.
+func (s *TemplateSyncer) probeWorktree(ctx context.Context, repo string) (string, func(), error) {
+	configured := ""
+	if s.store != nil {
+		src, err := s.store.GetTemplateSyncSource(ctx)
+		if err != nil {
+			s.log.Warn("read template sync source for probe isolation", "err", err)
+		} else {
+			configured = src.Repo
+		}
+	}
+	return newProbeWorktree(configured, s.config.Dir, repo)
 }
 
-// resolveTemplateSnapshot fetches and checks out a candidate repo/ref in the
-// probe cache and reads its catalog — the exact work a sync against the
-// candidate would do — under the worktree lock shared with sync/preview probes
-// (#343). The lock is taken with TryLock: a probe fails fast with
+// newProbeWorktree makes the configured-vs-foreign probe decision on plain
+// values (unit-testable): identity is compared on the sanitized URL, so
+// probing the configured repository with rotated credentials still reuses the
+// sync clone.
+func newProbeWorktree(configuredRepo, syncDir, candidateRepo string) (string, func(), error) {
+	if configuredRepo != "" && SafeTemplateRepo(configuredRepo) == SafeTemplateRepo(candidateRepo) {
+		return syncDir, func() {}, nil
+	}
+	tmp, err := os.MkdirTemp("", "nsc-template-probe-")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("create probe worktree: %w", err)
+	}
+	return tmp, func() { os.RemoveAll(tmp) }, nil
+}
+
+// resolveTemplateSnapshot fetches and checks out a candidate repo/ref and
+// reads its catalog — the exact work a sync against the candidate would do —
+// under the worktree lock shared with sync/preview probes (#343). The lock is
+// taken with TryLock: a probe fails fast with
 // errTemplateSyncBusy instead of holding the HTTP request for up to a whole
 // sync budget behind a running refresh (PR #344 review #5).
 //
@@ -428,7 +462,11 @@ func (s *TemplateSyncer) resolveTemplateSnapshot(ctx context.Context, repo, ref,
 		return "", nil, 0, errTemplateSyncBusy
 	}
 	defer s.worktree.Unlock()
-	dir := s.probeDir()
+	dir, cleanup, err := s.probeWorktree(ctx, repo)
+	if err != nil {
+		return "", nil, 0, err
+	}
+	defer cleanup()
 	r, err := openOrCloneTemplateRepo(ctx, dir, repo, s.log)
 	if err != nil {
 		return "", nil, 0, err
@@ -508,7 +546,8 @@ func openOrCloneTemplateRepo(ctx context.Context, dir, remote string, log *slog.
 		// remote-tracking refs, so `latest` would still walk them and branch
 		// lookup would still prefer stale origin refs. Replace the cache with a
 		// fresh clone of the requested remote. Source probes never reach this
-		// path — they run against the separate probe cache.
+		// path — the configured repository probes the already-matching sync
+		// clone, and any other candidate is probed in a throwaway directory.
 		if log != nil {
 			log.Info("template clone cache points at a different repository; replacing it",
 				"old_repo", SafeTemplateRepo(url), "repo", SafeTemplateRepo(remote))

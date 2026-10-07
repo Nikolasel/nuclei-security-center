@@ -198,12 +198,15 @@ func (s *Server) writeTemplateSourceError(w http.ResponseWriter, r *http.Request
 }
 
 // handleUpdateTemplateSyncConfig stores a new upstream source and queues the
-// immediate sync (#343). The save-time probe verifies the candidate in the
-// probe cache — reusing the commit a prior dry run resolved when one was
-// supplied (PR #344 review #6) — so an unreachable repository, an unknown ref,
-// or a snapshot that would shadow a custom template is refused before anything
-// is stored. The audit event carries the sanitized repository (old and new)
-// and the old → new ref, never credentials.
+// immediate sync (#343). The save-time probe verifies the candidate — reusing
+// the commit a prior dry run resolved when one was supplied (PR #344 review
+// #6) — so an unreachable repository, an unknown ref, or a snapshot that would
+// shadow a custom template is refused before anything is stored. The audit
+// event carries the sanitized candidate repository and ref (recorded before
+// the probe, so failed saves — the typos and internal-host probes worth
+// spotting — are audited with what they tried, PR #344 review D), the old →
+// new ref and both sanitized repositories on success, and `unchanged=true`
+// with no delta for a no-op save (PR #344 review C) — never credentials.
 func (s *Server) handleUpdateTemplateSyncConfig(w http.ResponseWriter, r *http.Request) {
 	if s.templateSyncer == nil || s.store == nil {
 		s.serviceUnavailable(w, "update template sync source", errTemplateSyncUnavailable)
@@ -226,10 +229,21 @@ func (s *Server) handleUpdateTemplateSyncConfig(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
+	// Record the sanitized candidate before probing (PR #344 review D): every
+	// audited outcome of this request — including a failed probe — names the
+	// repository it would have fetched.
+	addAuditFields(r,
+		slog.String("repo", SafeTemplateRepo(next.Repo)),
+		slog.String("ref", next.Ref),
+	)
 	// No-op save (PR #344 review #14): storing the identical source would run
-	// the whole probe → audit → sync-queue flow for nothing. The comparison is
+	// the whole probe → sync-queue flow for nothing. The comparison is
 	// on the raw values, so a credential rotation is a real change, not a no-op.
 	if next == stored {
+		// The mutation wrapper still emits its one audit event — every mutating
+		// API call is audited — so the no-op is marked as such instead of
+		// reading as a config change with no delta (PR #344 review C).
+		addAuditFields(r, slog.Bool("unchanged", true))
 		status, ok := s.templateSyncStatusResponse(w, r)
 		if !ok {
 			return
@@ -254,7 +268,6 @@ func (s *Server) handleUpdateTemplateSyncConfig(w http.ResponseWriter, r *http.R
 		slog.String("old_ref", stored.Ref),
 		slog.String("new_ref", next.Ref),
 		slog.String("old_repo", SafeTemplateRepo(stored.Repo)),
-		slog.String("repo", SafeTemplateRepo(next.Repo)),
 	)
 	// A sync already running finishes with its old config; the queued run reads
 	// the new one (single-writer trigger). A disable needs no run.
@@ -269,11 +282,11 @@ func (s *Server) handleUpdateTemplateSyncConfig(w http.ResponseWriter, r *http.R
 }
 
 // handlePreviewTemplateSyncSource runs the admin's dry run for a candidate
-// source (#343): fetch + resolve + catalog diff in the probe cache, no DB
-// writes. The route is audited as a mutation (PR #344 review #7): the preview
-// sends the backend to an admin-supplied host, so the attempt — including
-// rejected ones — leaves a structured trace. It is a cookie-authenticated POST
-// that kicks off network work, so the mutation origin guard also applies.
+// source (#343): fetch + resolve + catalog diff, no DB writes. The route is
+// audited as a mutation (PR #344 review #7): the preview sends the backend to
+// an admin-supplied host, so the attempt — including rejected ones — leaves a
+// structured trace. It is a cookie-authenticated POST that kicks off network
+// work, so the mutation origin guard also applies.
 func (s *Server) handlePreviewTemplateSyncSource(w http.ResponseWriter, r *http.Request) {
 	if !s.mutationOriginAllowed(r) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
@@ -300,6 +313,13 @@ func (s *Server) handlePreviewTemplateSyncSource(w http.ResponseWriter, r *http.
 		http.Error(w, "repository is required", http.StatusBadRequest)
 		return
 	}
+	// Record the sanitized candidate before probing (PR #344 review D): a
+	// failed dry run — the typo or internal-host probe worth spotting — is
+	// audited with the repository it tried, not only its resolved commit.
+	addAuditFields(r,
+		slog.String("repo", SafeTemplateRepo(candidate.Repo)),
+		slog.String("ref", candidate.Ref),
+	)
 	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
 	defer cancel()
 	preview, err := s.templateSyncer.PreviewSource(ctx, candidate.Repo, candidate.Ref)
@@ -309,10 +329,6 @@ func (s *Server) handlePreviewTemplateSyncSource(w http.ResponseWriter, r *http.
 		s.writeTemplateSourceError(w, r, err, "template source preview failed")
 		return
 	}
-	addAuditFields(r,
-		slog.String("repo", preview.Repo),
-		slog.String("ref", preview.Ref),
-		slog.String("commit", preview.Commit),
-	)
+	addAuditFields(r, slog.String("commit", preview.Commit))
 	writeJSON(w, http.StatusOK, preview)
 }

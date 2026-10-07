@@ -615,7 +615,9 @@ repository, ref, the derived channel (`ref_source`: `stable` for the `latest` re
 the ProjectDiscovery community catalog, so the UI offers the Stable/Preview channel choice), the
 active catalog bundle digest (`templates_commit`), active template count, and the provenance of
 the stored source (`source_updated_at`/`source_updated_by`, absent when the source was seeded
-from the environment and never edited). The
+from the environment and never edited; `source_updated_by_name` resolves that subject against
+the users registry to a display label — name, then email — for the UI, while
+`source_updated_by` keeps the raw OIDC subject as the stable audit handle). The
 digest is the same identifier shown for each scanner node, so an administrator can see whether a
 node matches the backend catalog. The cache path is not exposed, and credentials/query strings are
 stripped from repository URLs. `POST /api/templates/sync` queues a refresh and returns `202`;
@@ -643,18 +645,24 @@ whose ids would shadow a custom template is refused with `400` — the same fail
 would hit after the source was already stored. A connection failure returns a generic message; the
 raw dial error is logged server-side only, so the endpoint cannot be used to probe the internal
 network. Saving the stored source unchanged is a `200` no-op (no probe, no queued sync; the
-mutation wrapper still emits its one audit event, without an old → new delta). A valid
+mutation wrapper still emits its one audit event, marked `unchanged=true` and without an old → new
+delta). A valid
 save queues an immediate sync and returns the full new status (bundle digest and count included).
 When the body carries `preview_commit` — the commit a preceding dry run resolved — and the ref
 still resolves to that same commit, the save verifies it instead of re-fetching and re-walking the
-whole catalog, so the usual admin flow pays for exactly one fetch. A save that does change the
-source is audited as `config_changed` (`template_sync.config_update`) with the old → new ref, both
-sanitized repositories (`old_repo` → `repo`), and the actor — never credentials. Disabling is
-audited the same way.
+whole catalog, so the usual admin flow pays for exactly one fetch. Every audited outcome of this
+endpoint — including a failed probe — carries the sanitized candidate `repo` and `ref` (the
+failures are the ones that matter for spotting internal-host probing); a save that does change the
+source additionally records the old → new ref and both sanitized repositories (`old_repo` →
+`repo`) with the actor — never credentials. Disabling is audited the same way.
 `POST /api/templates/sync/preview` (admin) is the read-only dry run behind the UI's impact confirm:
-it fetches and resolves the candidate in a dedicated probe cache next to the sync clone cache
-(`<TEMPLATE_SYNC_DIR>-probe`), so a dry run — or one the admin cancels — never wipes the real
-clone, and compares it with the stored catalog under the same reconcile rules the sync applies.
+it fetches and resolves the candidate, so a dry run — or one the admin cancels — never writes
+anything, and compares it with the stored catalog under the same reconcile rules the sync applies.
+The candidate repository decides where that fetch happens: the configured repository is probed in
+the real sync clone (under the shared worktree lock a probe only fetches and moves the
+checked-out ref, both of which every sync re-does — no second clone of the same catalog), while
+any other candidate is probed in a throwaway directory removed afterwards, so a typo or an
+unreachable host can neither delete nor poison cached state.
 It refuses the candidate with the same custom-template conflict error the save-time probe uses,
 and connection failures return the same generic message as the save path. The response is
 `{repo, ref, ref_source, commit, skipped, added, changed, restored, removed, affected_sets,
@@ -666,9 +674,10 @@ templates that come back from tombstoned, and `regained_sets` names the exact se
 scannable again — only sets whose every currently-unavailable member the candidate restores and
 none of whose active members it would tombstone (a set that regains just part of its membership
 stays refused at dispatch and is reported only through the `restored` count). The dry run is
-audited as `config_changed` (`template_sync.preview`, with the
-sanitized repo/ref and resolved commit) because it triggers outbound network work, and it holds a
-separate bounded probe lock: while a sync or another probe is running it fails fast with `503`
+audited as `config_changed` (`template_sync.preview`) because it triggers outbound network work —
+the sanitized candidate repo/ref are recorded before the probe, so failed dry runs are audited
+with what they tried, and a successful one adds the resolved commit — and it holds a
+bounded probe lock: while a sync or another probe is running it fails fast with `503`
 instead of queueing behind the long sync timeout.
 
 Custom uploads are sanity-checked at write time (all `400` on failure): the body must be a single

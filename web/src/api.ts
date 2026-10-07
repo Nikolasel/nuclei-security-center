@@ -203,9 +203,12 @@ export interface TemplateSyncStatus {
   templates_commit?: string;
   template_count: number;
   /** when/by the stored source was last changed (null = seeded from the
-   *  environment and never edited, #343). */
+   *  environment and never edited, #343). source_updated_by is the raw OIDC
+   *  subject (stable audit handle); source_updated_by_name resolves it to a
+   *  display label for the UI. */
   source_updated_at?: string;
   source_updated_by?: string;
+  source_updated_by_name?: string;
 }
 
 // TemplateSetMemberLoss (in a preview) is one exact set whose membership

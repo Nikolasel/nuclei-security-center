@@ -118,19 +118,29 @@ func (s *Store) UpdateTemplateSyncSource(ctx context.Context, source TemplateSyn
 // TemplateSyncSourceProvenance is who last changed the template sync source and
 // when. Both fields are unset while the source has only ever been seeded from
 // the environment (disable/re-enable count as changes — they produce no sync
-// run, so this is the only trace of them).
+// run, so this is the only trace of them). UpdatedByName resolves the subject's
+// users-registry row to a display label (name, then email) for the Sync view —
+// the raw subject is an opaque OIDC UUID (PR #344 review E) — and stays empty
+// when the actor has no registry row (or is a service account, whose svc:
+// subject is already readable).
 type TemplateSyncSourceProvenance struct {
-	UpdatedAt *time.Time
-	UpdatedBy string
+	UpdatedAt     *time.Time
+	UpdatedBy     string
+	UpdatedByName string
 }
 
-// GetTemplateSyncSourceProvenance reads the source's last-change stamp.
+// GetTemplateSyncSourceProvenance reads the source's last-change stamp,
+// resolving the acting subject against the users registry in the same query.
 func (s *Store) GetTemplateSyncSourceProvenance(ctx context.Context) (TemplateSyncSourceProvenance, error) {
 	var p TemplateSyncSourceProvenance
 	var by *string
 	err := s.pool.QueryRow(ctx,
-		`SELECT template_sync_source_updated_at, template_sync_source_updated_by FROM app_settings WHERE id = true`).
-		Scan(&p.UpdatedAt, &by)
+		`SELECT a.template_sync_source_updated_at, a.template_sync_source_updated_by,
+		        COALESCE(u.name, NULLIF(u.email, ''), '')
+		   FROM app_settings a
+		   LEFT JOIN users u ON u.subject = a.template_sync_source_updated_by
+		  WHERE a.id = true`).
+		Scan(&p.UpdatedAt, &by, &p.UpdatedByName)
 	if err != nil {
 		return TemplateSyncSourceProvenance{}, fmt.Errorf("get template sync source provenance: %w", err)
 	}

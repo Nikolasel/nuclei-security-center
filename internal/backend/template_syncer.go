@@ -382,10 +382,14 @@ func (s *TemplateSyncer) PreviewSource(ctx context.Context, repo, ref string) (s
 		}
 	}
 	if len(restored) > 0 {
-		gains, err := s.store.TemplateSetsRegainingMembers(ctx, restored)
+		gains, err := s.store.TemplateSetsRegainingMembers(ctx, restored, removed)
 		if err != nil {
 			return preview, err
 		}
+		// Only sets the candidate makes fully scannable again — every
+		// unavailable member restored, no active member removed (PR #344
+		// review). Sets that regain just part of their membership stay
+		// refused at dispatch and are reported only via the Restored count.
 		preview.RegainedSets = gains
 	}
 	return preview, nil

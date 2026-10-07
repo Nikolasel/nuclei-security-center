@@ -23,12 +23,20 @@ import (
 )
 
 // buildTemplateRepoFixture creates a local repository standing in for an
-// upstream template catalog: the tagged stable release carries alpha/beta/shared,
-// the moving main branch carries alpha(v2)/gamma/shared. Returned as a plain
-// filesystem path — go-git's local transport, exactly what the clone cache
-// fetches; the HTTP allowlist tests cover URL validation separately.
-func buildTemplateRepoFixture(t *testing.T) string {
+// upstream template catalog: the tagged stable release carries alpha/beta/shared
+// (or, with stableIDs, only those templates — byte-identical bodies for shared
+// ids, so a narrow fixture tombstones the rest when stored), the moving main
+// branch carries alpha(v2)/gamma/shared. Returned as a plain filesystem path —
+// go-git's local transport, exactly what the clone cache fetches; the HTTP
+// allowlist tests cover URL validation separately.
+func buildTemplateRepoFixture(t *testing.T, stableIDs ...string) string {
 	t.Helper()
+	if len(stableIDs) == 0 {
+		stableIDs = []string{"alpha", "beta", "shared"}
+	}
+	// Fixed per-id bodies keep a template's content hash equal across
+	// fixtures that both carry it.
+	stableDesc := map[string]string{"alpha": "stable", "beta": "stable only", "shared": "both refs"}
 	dir := t.TempDir()
 	repo, err := git.PlainInit(dir, false)
 	if err != nil {
@@ -45,7 +53,8 @@ func buildTemplateRepoFixture(t *testing.T) string {
 			t.Fatalf("write fixture template: %v", err)
 		}
 	}
-	templateYAML := func(id, name, desc string) string {
+	templateYAML := func(id, desc string) string {
+		name := strings.ToUpper(id[:1]) + id[1:]
 		return fmt.Sprintf("id: %s\ninfo:\n  name: %s\n  author: fixture\n  severity: medium\n  description: %s\n", id, name, desc)
 	}
 	commit := func(msg string) {
@@ -58,9 +67,9 @@ func buildTemplateRepoFixture(t *testing.T) string {
 		}
 	}
 
-	write("alpha.yaml", templateYAML("alpha", "Alpha", "stable"))
-	write("beta.yaml", templateYAML("beta", "Beta", "stable only"))
-	write("shared.yaml", templateYAML("shared", "Shared", "both refs"))
+	for _, id := range stableIDs {
+		write(id+".yaml", templateYAML(id, stableDesc[id]))
+	}
 	commit("stable catalog")
 
 	head, err := repo.Head()
@@ -74,12 +83,17 @@ func buildTemplateRepoFixture(t *testing.T) string {
 		t.Fatalf("tag fixture release: %v", err)
 	}
 
-	// main drops beta, rewrites alpha, adds gamma.
-	if err := os.Remove(filepath.Join(dir, "beta.yaml")); err != nil {
-		t.Fatalf("remove fixture beta: %v", err)
+	// main drops the stable-only templates, rewrites alpha, adds gamma.
+	for _, id := range stableIDs {
+		if id == "alpha" || id == "shared" {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, id+".yaml")); err != nil {
+			t.Fatalf("remove fixture %s: %v", id, err)
+		}
 	}
-	write("alpha.yaml", templateYAML("alpha", "Alpha", "preview"))
-	write("gamma.yaml", templateYAML("gamma", "Gamma", "preview only"))
+	write("alpha.yaml", templateYAML("alpha", "preview"))
+	write("gamma.yaml", templateYAML("gamma", "preview only"))
 	commit("preview catalog")
 	if err := wt.Checkout(&git.CheckoutOptions{
 		Branch: plumbing.NewBranchReferenceName("main"),
@@ -240,6 +254,39 @@ func TestTemplateSyncSwitchAndReconcilePostgres(t *testing.T) {
 	}
 	if gamma.Availability != "unavailable" {
 		t.Fatalf("gamma after return = %q, want unavailable", gamma.Availability)
+	}
+
+	// 4b. A set is claimed regained only when the candidate restores ALL of
+	// its currently-unavailable members (PR #344 review): a narrower source
+	// tombstones beta and gamma, a dry run back to the full fixture restores
+	// only beta, so the {beta,gamma} set stays refused at dispatch and must
+	// not be listed as scannable again — while the {alpha,beta} set is.
+	narrow := buildTemplateRepoFixture(t, "alpha", "shared")
+	switchTo(narrow, "latest")
+	if got := activeUpstreamIDs(t, st, ctx); len(got) != 2 {
+		t.Fatalf("narrow catalog = %v, want alpha/shared", got)
+	}
+	partialSet, err := st.CreateTemplateSet(ctx, store.TemplateSet{Name: "partial-regain-set", Mode: store.TemplateSetModeExact, CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("create partial-regain template set: %v", err)
+	}
+	if _, err := st.ReplaceTemplateSetMembers(ctx, partialSet.ID, []string{"beta", "gamma"}, "tester"); err != nil {
+		t.Fatalf("fill partial-regain template set: %v", err)
+	}
+	previewPartial, err := syncer.PreviewSource(ctx, fixture, "latest")
+	if err != nil {
+		t.Fatalf("preview latest from the narrow source: %v", err)
+	}
+	if previewPartial.Restored != 1 || previewPartial.Removed != 0 {
+		t.Fatalf("preview from the narrow source = %+v, want restored 1 (beta) removed 0", previewPartial)
+	}
+	if len(previewPartial.RegainedSets) != 1 || previewPartial.RegainedSets[0].ID != set.ID {
+		t.Fatalf("preview from the narrow source regained sets = %+v, want only %s (the partial set stays refused)",
+			previewPartial.RegainedSets, set.ID)
+	}
+	switchTo(fixture, "latest")
+	if got := activeUpstreamIDs(t, st, ctx); len(got) != 3 {
+		t.Fatalf("catalog after leaving the narrow source = %v, want alpha/beta/shared", got)
 	}
 
 	// 5. Preview → stable → preview restore: gamma comes back.

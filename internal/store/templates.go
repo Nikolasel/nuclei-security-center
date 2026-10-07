@@ -85,9 +85,11 @@ type TemplateSetMemberLoss struct {
 	LosingCount int    `json:"losing_count"`
 }
 
-// TemplateSetMemberGain is one exact template set whose stored membership
-// includes currently-unavailable templates a candidate source would bring back
-// (#343 review): after the switch the set becomes scannable again.
+// TemplateSetMemberGain is one exact template set the candidate makes fully
+// scannable again: every currently-unavailable member is restored by the
+// candidate and none of its active members would be tombstoned (#343 review —
+// dispatch refuses any exact set that still holds an unavailable member, so a
+// set that regains only part of its membership must not be claimed scannable).
 type TemplateSetMemberGain struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`
@@ -121,8 +123,10 @@ type TemplateSyncPreview struct {
 	Restored     int                     `json:"restored"`
 	Removed      int                     `json:"removed"`
 	AffectedSets []TemplateSetMemberLoss `json:"affected_sets"`
-	// RegainedSets lists exact sets that become scannable again because the
-	// candidate brings back a tombstoned id they still list.
+	// RegainedSets lists exact sets the candidate makes fully scannable again:
+	// every currently-unavailable member is in restored and none of their
+	// active members is in removed (PR #344 review). A set that regains only
+	// part of its membership stays refused at dispatch and is not listed.
 	RegainedSets []TemplateSetMemberGain `json:"regained_sets"`
 	// AffectedPolicies/AffectedSchedules name the scan policies (and their
 	// schedules) that resolve an affected exact set: while such a set holds
@@ -806,21 +810,31 @@ func (s *Store) TemplateSetsLosingMembers(ctx context.Context, ids []string) ([]
 	return out, rows.Err()
 }
 
-// TemplateSetsRegainingMembers returns the exact template sets whose stored
-// membership includes any of the given currently-unavailable ids — the sets
-// that become scannable again when a candidate source brings the ids back
-// (#343 review). Same shape as TemplateSetsLosingMembers, with the matching
-// member count reported as RegainingCount.
-func (s *Store) TemplateSetsRegainingMembers(ctx context.Context, ids []string) ([]TemplateSetMemberGain, error) {
+// TemplateSetsRegainingMembers returns the exact template sets the candidate
+// makes fully scannable again (#343 review): every currently-unavailable member
+// is in restored (the ids the candidate brings back) and none of its active
+// members is in removed (the ids the candidate would tombstone). Dispatch
+// refuses an exact set while any member stays unavailable, so a set that
+// regains one tombstoned member while another stays unavailable — or one that
+// also loses an active member — is excluded here: the preview reports the
+// restored count without claiming the set becomes scannable.
+func (s *Store) TemplateSetsRegainingMembers(ctx context.Context, restored, removed []string) ([]TemplateSetMemberGain, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT ts.id, ts.name,
 		       (SELECT count(*) FROM template_set_members m2 WHERE m2.template_set_id = ts.id),
-		       count(m.template_id)
+		       count(m.template_id) FILTER (WHERE t.availability <> 'active')
 		  FROM template_sets ts
 		  JOIN template_set_members m ON m.template_set_id = ts.id
-		 WHERE ts.mode = 'exact' AND m.template_id = ANY($1)
+		  JOIN templates t ON t.id = m.template_id
+		 WHERE ts.mode = 'exact'
 		 GROUP BY ts.id, ts.name
-		 ORDER BY lower(ts.name), ts.id`, ids)
+		HAVING count(m.template_id) FILTER (WHERE t.availability <> 'active'
+		                                     AND t.id = ANY($1)) > 0
+		   AND count(m.template_id) FILTER (WHERE t.availability <> 'active'
+		                                     AND NOT (t.id = ANY($1))) = 0
+		   AND count(m.template_id) FILTER (WHERE t.availability = 'active'
+		                                     AND t.id = ANY($2)) = 0
+		 ORDER BY lower(ts.name), ts.id`, restored, removed)
 	if err != nil {
 		return nil, fmt.Errorf("list template sets regaining members: %w", err)
 	}

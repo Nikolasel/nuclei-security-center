@@ -663,7 +663,10 @@ membership includes templates the switch would tombstone (members are kept and r
 template reappears upstream, but scans and schedules resolving such a set are refused until the
 set's explicit selection is updated — hence the affected policy/schedule lists), `restored` counts
 templates that come back from tombstoned, and `regained_sets` names the exact sets that become
-scannable again. The dry run is audited as `config_changed` (`template_sync.preview`, with the
+scannable again — only sets whose every currently-unavailable member the candidate restores and
+none of whose active members it would tombstone (a set that regains just part of its membership
+stays refused at dispatch and is reported only through the `restored` count). The dry run is
+audited as `config_changed` (`template_sync.preview`, with the
 sanitized repo/ref and resolved commit) because it triggers outbound network work, and it holds a
 separate bounded probe lock: while a sync or another probe is running it fails fast with `503`
 instead of queueing behind the long sync timeout.

@@ -14,9 +14,6 @@ func TestValidateTemplateSyncRepo(t *testing.T) {
 		"https://github.com/projectdiscovery/nuclei-templates.git",
 		"https://user:secret@github.com/projectdiscovery/nuclei-templates.git",
 		"https://token@github.com/projectdiscovery/nuclei-templates.git?token_query=1",
-		"SSH://git@github.com/projectdiscovery/nuclei-templates.git",
-		"git://github.com/projectdiscovery/nuclei-templates.git",
-		"ssh://git@internal.example.test:2222/templates.git",
 	}
 	for _, repo := range valid {
 		if got, err := validateTemplateSyncRepo(repo); err != nil {
@@ -33,8 +30,14 @@ func TestValidateTemplateSyncRepo(t *testing.T) {
 		"/tmp/nuclei-templates",
 		"../relative/repo",
 		"http://github.com/projectdiscovery/nuclei-templates.git",
-		"ftp://github.com/projectdiscovery/nuclei-templates.git",
+		// git:// is plaintext and unauthenticated, and ssh:// needs key material
+		// the container does not ship — both stay out of the allowlist until
+		// they can be used safely (PR #344 review #10/#11).
+		"git://github.com/projectdiscovery/nuclei-templates.git",
+		"SSH://git@github.com/projectdiscovery/nuclei-templates.git",
+		"ssh://git@internal.example.test:2222/templates.git",
 		"git@github.com:projectdiscovery/nuclei-templates.git",
+		"ftp://github.com/projectdiscovery/nuclei-templates.git",
 		"https:///no-host/templates.git",
 		"https://",
 	}
@@ -127,7 +130,7 @@ func TestEffectiveTemplateSyncSourceMerge(t *testing.T) {
 			name:         "invalid repo rejected",
 			req:          templateSyncSourceRequest{Repo: strPtr("file:///etc/passwd"), Ref: "main"},
 			wantStatus:   http.StatusBadRequest,
-			wantContains: "https, ssh, or git",
+			wantContains: "use https",
 		},
 		{
 			name:         "relative repo rejected",

@@ -234,6 +234,19 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetTemplateSync(w http.ResponseWriter, r *http.Request) {
+	status, ok := s.templateSyncStatusResponse(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+// templateSyncStatusResponse builds the full TemplateSyncStatus: the DB-backed
+// source with its channel label, the active catalog bundle digest/count, and
+// the source's last-change provenance (PR #344 review #8 — the Sync tab shows
+// "changed by X at T", which also covers disable/re-enable where no run is
+// recorded). It writes the error itself and returns ok=false.
+func (s *Server) templateSyncStatusResponse(w http.ResponseWriter, r *http.Request) (TemplateSyncStatus, bool) {
 	status := TemplateSyncStatus{Enabled: false}
 	if s.templateSyncer != nil {
 		// The source of record is the app_settings row (#343); without a store
@@ -244,25 +257,31 @@ func (s *Server) handleGetTemplateSync(w http.ResponseWriter, r *http.Request) {
 			src, err = s.store.GetTemplateSyncSource(r.Context())
 			if err != nil {
 				s.serverError(w, "read template sync source", err)
-				return
+				return status, false
 			}
 		}
 		status = s.templateSyncer.Status(src)
 	}
 	if s.store == nil {
-		writeJSON(w, http.StatusOK, status)
-		return
+		return status, true
 	}
 	entries, err := s.store.ActiveTemplateBundleEntries(r.Context())
 	if err != nil {
 		s.serverError(w, "read active template catalog digest", err)
-		return
+		return status, false
 	}
 	status.TemplateCount = len(entries)
 	if len(entries) > 0 {
 		status.TemplatesCommit = types.BundleDigest(entries)
 	}
-	writeJSON(w, http.StatusOK, status)
+	provenance, err := s.store.GetTemplateSyncSourceProvenance(r.Context())
+	if err != nil {
+		s.serverError(w, "read template sync source provenance", err)
+		return status, false
+	}
+	status.SourceUpdatedAt = provenance.UpdatedAt
+	status.SourceUpdatedBy = provenance.UpdatedBy
+	return status, true
 }
 
 func (s *Server) handleRequestTemplateSync(w http.ResponseWriter, r *http.Request) {

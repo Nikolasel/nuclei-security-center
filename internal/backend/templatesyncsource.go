@@ -29,23 +29,29 @@ var errTemplateSyncUnavailable = errors.New("template sync is not available")
 const defaultTemplateSyncRef = "latest"
 
 // allowedTemplateSyncRepoSchemes is the URL-scheme allowlist for the upstream
-// template repository: https/ssh/git only. file:// and local paths are
-// rejected so the syncer keeps fetching from a real remote and a compromised
-// admin session cannot point it at backend-local files.
+// template repository: HTTPS only. file:// and local paths are rejected so the
+// syncer keeps fetching from a real remote and a compromised admin session
+// cannot point it at backend-local files. git:// is plaintext and
+// unauthenticated — template content runs against targets, so it must not be
+// tamperable in transit (PR #344 review #10); ssh:// needs key material and a
+// known_hosts file the container does not ship, so it could be stored but
+// never fetched (PR #344 review #11) and stays out until both are supported.
 var allowedTemplateSyncRepoSchemes = map[string]bool{
 	"https": true,
-	"ssh":   true,
-	"git":   true,
 }
 
 // templateSyncSourceRequest is the PUT config / POST preview body. Repo is a
 // pointer so omitted keeps the stored repository (write-only semantics, like
 // node tokens and client keys) while an explicit empty string is the documented
 // "upstream sync disabled" value. Ref is always required: the UI derives it
-// from the Stable/Preview channel choice or the free-form field.
+// from the Stable/Preview channel choice or the free-form field. PreviewCommit
+// is optional: the commit a prior dry run resolved for this exact repo/ref,
+// letting the save-time probe skip the expensive catalog walk (PR #344 review
+// #6) — the queued sync re-checks custom-template conflicts transactionally.
 type templateSyncSourceRequest struct {
-	Repo *string `json:"repo,omitempty"`
-	Ref  string  `json:"ref"`
+	Repo          *string `json:"repo,omitempty"`
+	Ref           string  `json:"ref"`
+	PreviewCommit string  `json:"preview_commit,omitempty"`
 }
 
 // validateTemplateSyncRepo checks an upstream repository URL: absolute, an
@@ -60,9 +66,9 @@ func validateTemplateSyncRepo(raw string) (string, error) {
 	scheme := strings.ToLower(u.Scheme)
 	if !allowedTemplateSyncRepoSchemes[scheme] {
 		if scheme == "" {
-			return "", errors.New("repository must be an absolute URL with an https, ssh, or git scheme")
+			return "", errors.New("repository must be an absolute URL with an https scheme")
 		}
-		return "", fmt.Errorf("repository scheme %q is not allowed: use https, ssh, or git", u.Scheme)
+		return "", fmt.Errorf("repository scheme %q is not allowed: use https", u.Scheme)
 	}
 	if u.Host == "" {
 		return "", errors.New("repository URL must include a host")
@@ -169,12 +175,35 @@ func SeedTemplateSyncConfig(ctx context.Context, st *store.Store, fromEnv store.
 	return after, nil
 }
 
+// writeTemplateSourceError maps a probe failure to its response: 503 while the
+// worktree lock is busy (fail fast instead of queueing behind a running sync,
+// PR #344 review #5), a generic message for transport errors (the raw go-git
+// error can name internal hosts — PR #344 review #7 — so the detail is logged
+// server-side only), and the precise error otherwise (unknown ref, custom
+// shadow conflict, empty snapshot).
+func (s *Server) writeTemplateSourceError(w http.ResponseWriter, r *http.Request, err error, responsePrefix string) {
+	switch {
+	case errors.Is(err, errTemplateSyncBusy):
+		http.Error(w, "a template sync or dry run is already in progress; try again in a few minutes", http.StatusServiceUnavailable)
+	case errors.Is(err, errTemplateRepoUnreachable):
+		if s.log != nil {
+			s.log.Warn("template source probe failed", "path", r.URL.Path, "err", err)
+		}
+		http.Error(w, responsePrefix+": the candidate repository is unreachable, refused the connection, or rejected authentication; see the backend logs for details", http.StatusBadRequest)
+	case errors.Is(err, context.DeadlineExceeded):
+		http.Error(w, responsePrefix+": the probe timed out before the repository resolved; retry, or pick a ref reachable over a faster link", http.StatusBadRequest)
+	default:
+		http.Error(w, fmt.Sprintf("%s: %v", responsePrefix, err), http.StatusBadRequest)
+	}
+}
+
 // handleUpdateTemplateSyncConfig stores a new upstream source and queues the
-// immediate sync (#343). The save-time probe fetches and checks out the
-// candidate in the clone cache and walks its catalog, so an unreachable
-// repository, an unknown ref, or a snapshot that would shadow a custom
-// template is refused before anything is stored. The audit event carries the
-// sanitized repository and the old → new ref, never credentials.
+// immediate sync (#343). The save-time probe verifies the candidate in the
+// probe cache — reusing the commit a prior dry run resolved when one was
+// supplied (PR #344 review #6) — so an unreachable repository, an unknown ref,
+// or a snapshot that would shadow a custom template is refused before anything
+// is stored. The audit event carries the sanitized repository (old and new)
+// and the old → new ref, never credentials.
 func (s *Server) handleUpdateTemplateSyncConfig(w http.ResponseWriter, r *http.Request) {
 	if s.templateSyncer == nil || s.store == nil {
 		s.serviceUnavailable(w, "update template sync source", errTemplateSyncUnavailable)
@@ -182,6 +211,10 @@ func (s *Server) handleUpdateTemplateSyncConfig(w http.ResponseWriter, r *http.R
 	}
 	var req templateSyncSourceRequest
 	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.PreviewCommit != "" && !isCommitSHA(req.PreviewCommit) {
+		http.Error(w, "preview_commit must be a full or abbreviated commit SHA", http.StatusBadRequest)
 		return
 	}
 	stored, err := s.store.GetTemplateSyncSource(r.Context())
@@ -193,22 +226,34 @@ func (s *Server) handleUpdateTemplateSyncConfig(w http.ResponseWriter, r *http.R
 	if !ok {
 		return
 	}
-	if strings.TrimSpace(next.Repo) != "" {
-		ctx, cancel := context.WithTimeout(r.Context(), syncTimeout)
-		if err := s.templateSyncer.validateTemplateSource(ctx, next.Repo, next.Ref); err != nil {
-			cancel()
-			http.Error(w, fmt.Sprintf("candidate template source failed to validate: %v", err), http.StatusBadRequest)
+	// No-op save (PR #344 review #14): storing the identical source would run
+	// the whole probe → audit → sync-queue flow for nothing. The comparison is
+	// on the raw values, so a credential rotation is a real change, not a no-op.
+	if next == stored {
+		status, ok := s.templateSyncStatusResponse(w, r)
+		if !ok {
 			return
 		}
-		cancel()
+		writeJSON(w, http.StatusOK, status)
+		return
 	}
-	if _, err := s.store.UpdateTemplateSyncSource(r.Context(), next); err != nil {
+	if strings.TrimSpace(next.Repo) != "" {
+		ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
+		err := s.templateSyncer.verifyTemplateSource(ctx, next.Repo, next.Ref, req.PreviewCommit)
+		cancel()
+		if err != nil {
+			s.writeTemplateSourceError(w, r, err, "candidate template source failed to validate")
+			return
+		}
+	}
+	if _, err := s.store.UpdateTemplateSyncSource(r.Context(), next, identityFrom(r.Context()).Subject); err != nil {
 		s.serverError(w, "update template sync source", err)
 		return
 	}
 	addAuditFields(r,
 		slog.String("old_ref", stored.Ref),
 		slog.String("new_ref", next.Ref),
+		slog.String("old_repo", SafeTemplateRepo(stored.Repo)),
 		slog.String("repo", SafeTemplateRepo(next.Repo)),
 	)
 	// A sync already running finishes with its old config; the queued run reads
@@ -216,14 +261,19 @@ func (s *Server) handleUpdateTemplateSyncConfig(w http.ResponseWriter, r *http.R
 	if strings.TrimSpace(next.Repo) != "" {
 		s.templateSyncer.RequestSync()
 	}
-	writeJSON(w, http.StatusOK, s.templateSyncer.Status(next))
+	status, ok := s.templateSyncStatusResponse(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
 }
 
 // handlePreviewTemplateSyncSource runs the admin's dry run for a candidate
-// source (#343): fetch + resolve + catalog diff in the clone cache, no DB
-// writes. It is not audited as a mutation (nothing is stored) but it is a
-// cookie-authenticated POST that kicks off network work, so the mutation
-// origin guard still applies.
+// source (#343): fetch + resolve + catalog diff in the probe cache, no DB
+// writes. The route is audited as a mutation (PR #344 review #7): the preview
+// sends the backend to an admin-supplied host, so the attempt — including
+// rejected ones — leaves a structured trace. It is a cookie-authenticated POST
+// that kicks off network work, so the mutation origin guard also applies.
 func (s *Server) handlePreviewTemplateSyncSource(w http.ResponseWriter, r *http.Request) {
 	if !s.mutationOriginAllowed(r) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
@@ -250,14 +300,19 @@ func (s *Server) handlePreviewTemplateSyncSource(w http.ResponseWriter, r *http.
 		http.Error(w, "repository is required", http.StatusBadRequest)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), syncTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
 	defer cancel()
 	preview, err := s.templateSyncer.PreviewSource(ctx, candidate.Repo, candidate.Ref)
 	if err != nil {
 		// An unreachable repo or unknown ref is the input's fault: the caller
 		// gets the probe error instead of a stored-but-broken source.
-		http.Error(w, fmt.Sprintf("template source preview failed: %v", err), http.StatusBadRequest)
+		s.writeTemplateSourceError(w, r, err, "template source preview failed")
 		return
 	}
+	addAuditFields(r,
+		slog.String("repo", preview.Repo),
+		slog.String("ref", preview.Ref),
+		slog.String("commit", preview.Commit),
+	)
 	writeJSON(w, http.StatusOK, preview)
 }

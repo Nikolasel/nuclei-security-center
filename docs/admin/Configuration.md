@@ -24,7 +24,7 @@ documented separately because the backend never sees them.
 | `TEMPLATE_SYNC_INTERVAL` | `6h` | Upstream catalog refresh cadence. Env-only; the source repository and ref are runtime settings. |
 | `TEMPLATE_SYNC_REPO` | ProjectDiscovery `nuclei-templates` Git repository | Upstream catalog Git repository. Seeds the DB-backed source once at startup; afterward the admin UI (Templates → Sync) is authoritative and this variable only matters when never seeded. An explicit empty value disables upstream sync while retaining custom templates and distribution. |
 | `TEMPLATE_SYNC_REF` | `latest` | Revision to mirror. Seeds the DB-backed source once at startup; afterward the admin UI is authoritative. latest is the highest stable tag; tags and SHAs are reproducible, branches advance. |
-| `TEMPLATE_SYNC_DIR` | `/tmp/nsc-template-sync` | Backend clone cache. Mount persistent storage to avoid repeated full clones. |
+| `TEMPLATE_SYNC_DIR` | `/tmp/nsc-template-sync` | Backend clone cache. Mount persistent storage to avoid repeated full clones. Preview/save-time probes use a sibling TEMPLATE_SYNC_DIR-probe cache instead, so a dry run never invalidates the real clone. |
 | `TEMPLATE_DISTRIBUTE_INTERVAL` | `1h` | How often stale, idle scanner nodes receive the current full catalog bundle. Pre-dispatch top-up still runs. |
 | `EXPORT_SPOOL_DIR` | `os.TempDir()` (usually `/tmp`) | Writable scratch directory for findings exports and scan-bundle imports. |
 
@@ -41,7 +41,13 @@ setting. On first boot after this migration the NULL `app_settings` columns are 
 values are authoritative and the environment is never re-applied over them. An env that differs
 from the stored source only logs a drift note at startup — change the source under
 **Templates → Sync → Change source** (admin), which stores, validates against the fetched
-repository, and queues an immediate sync. `TEMPLATE_SYNC_INTERVAL` (cadence) and
+repository, and queues an immediate sync. Only `https://` repositories are accepted (`http://`,
+`git://`, `file://` and bare paths are refused — plaintext remotes could tamper with templates that
+run against targets). SSH remotes are also refused: the go-git client would need an explicit key
+and `known_hosts` setup the container does not ship, so an `ssh://` URL could never resolve as
+configured; use `https://` with credentials embedded in the URL (stored, never shown). Connection
+failures surface as a generic error — the raw dial error goes only to the backend log.
+`TEMPLATE_SYNC_INTERVAL` (cadence) and
 `TEMPLATE_SYNC_DIR` (clone cache) remain env-only. An explicit empty repository means "upstream
 sync disabled" — custom templates and node distribution keep working. The effective environment
 view on Settings marks both seeding variables as seed-only and shows the stored value as

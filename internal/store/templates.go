@@ -52,15 +52,25 @@ type TemplateSyncRun struct {
 	Removed         int    `json:"removed"`
 	Updated         int    `json:"updated"`
 	Skipped         int    `json:"skipped"`
-	Error           string `json:"error,omitempty"`
+	// Restored counts templates brought back from unavailable to active — a
+	// source switch back to a ref that still has a tombstoned id, not a content
+	// change. NULL for pre-migration history, where it was counted as updated.
+	Restored *int `json:"restored,omitempty"`
+	// SourceRepo/SourceRef record the configured source this run actually read
+	// (sanitized repository, ref as stored), so the Sync view can show source
+	// switches. NULL for pre-migration runs.
+	SourceRepo string `json:"source_repo,omitempty"`
+	SourceRef  string `json:"source_ref,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 // TemplateSyncStats summarizes the catalog changes made by an upstream sync.
 type TemplateSyncStats struct {
-	Added   int
-	Removed int
-	Updated int
-	Skipped int
+	Added    int
+	Removed  int
+	Updated  int
+	Restored int
+	Skipped  int
 }
 
 // TemplateSetMemberLoss is one exact template set whose stored membership
@@ -73,6 +83,25 @@ type TemplateSetMemberLoss struct {
 	Name        string `json:"name"`
 	MemberCount int    `json:"member_count"`
 	LosingCount int    `json:"losing_count"`
+}
+
+// TemplateSetMemberGain is one exact template set whose stored membership
+// includes currently-unavailable templates a candidate source would bring back
+// (#343 review): after the switch the set becomes scannable again.
+type TemplateSetMemberGain struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	MemberCount    int    `json:"member_count"`
+	RegainingCount int    `json:"regaining_count"`
+}
+
+// TemplateSetUser is one scan policy or schedule that resolves a template set,
+// listed in the source-switch preview (#343 review) so the dialog can name the
+// scans that would be refused while an exact set holds unavailable members.
+type TemplateSetUser struct {
+	Kind string `json:"kind"` // "scan_policy" | "schedule"
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // TemplateSyncPreview is the dry-run projection for a candidate upstream
@@ -89,8 +118,17 @@ type TemplateSyncPreview struct {
 	Skipped      int                     `json:"skipped"`
 	Added        int                     `json:"added"`
 	Changed      int                     `json:"changed"`
+	Restored     int                     `json:"restored"`
 	Removed      int                     `json:"removed"`
 	AffectedSets []TemplateSetMemberLoss `json:"affected_sets"`
+	// RegainedSets lists exact sets that become scannable again because the
+	// candidate brings back a tombstoned id they still list.
+	RegainedSets []TemplateSetMemberGain `json:"regained_sets"`
+	// AffectedPolicies/AffectedSchedules name the scan policies (and their
+	// schedules) that resolve an affected exact set: while such a set holds
+	// unavailable members, scans from them are refused (fail closed).
+	AffectedPolicies  []TemplateSetUser `json:"affected_policies"`
+	AffectedSchedules []TemplateSetUser `json:"affected_schedules"`
 }
 
 // UpstreamTemplateState is one upstream template row's reconcilable state.
@@ -442,7 +480,8 @@ func (s *Store) ListTemplateSyncRuns(ctx context.Context, limit, offset int) ([]
 	}
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, started_at, finished_at, status, ref_before, ref_after,
-		   templates_commit, template_count, added, removed, updated, skipped, error
+		   templates_commit, template_count, added, removed, updated, skipped, error,
+		   restored, source_repo, source_ref
 		 FROM template_sync_runs ORDER BY started_at DESC LIMIT $1 OFFSET $2`, limit, offset)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list template sync runs: %w", err)
@@ -451,13 +490,15 @@ func (s *Store) ListTemplateSyncRuns(ctx context.Context, limit, offset int) ([]
 	var out []TemplateSyncRun
 	for rows.Next() {
 		var r TemplateSyncRun
-		var refBefore, refAfter, templatesCommit, errStr *string
+		var refBefore, refAfter, templatesCommit, errStr, sourceRepo, sourceRef *string
 		if err := rows.Scan(&r.ID, &r.StartedAt, &r.FinishedAt, &r.Status, &refBefore, &refAfter,
-			&templatesCommit, &r.TemplateCount, &r.Added, &r.Removed, &r.Updated, &r.Skipped, &errStr); err != nil {
+			&templatesCommit, &r.TemplateCount, &r.Added, &r.Removed, &r.Updated, &r.Skipped, &errStr,
+			&r.Restored, &sourceRepo, &sourceRef); err != nil {
 			return nil, 0, err
 		}
 		r.RefBefore, r.RefAfter = deref(refBefore), deref(refAfter)
 		r.TemplatesCommit, r.Error = deref(templatesCommit), deref(errStr)
+		r.SourceRepo, r.SourceRef = deref(sourceRepo), deref(sourceRef)
 		out = append(out, r)
 	}
 	return out, total, rows.Err()
@@ -542,9 +583,13 @@ func (s *Store) ListActiveTemplateBodies(ctx context.Context) ([]Template, error
 }
 
 // StartTemplateSync records a sync attempt before network work begins, so a
-// failed clone/fetch is visible just like a failed database update.
-func (s *Store) StartTemplateSync(ctx context.Context) (TemplateSyncRun, error) {
-	run := TemplateSyncRun{ID: types.NewID(), StartedAt: time.Now().UTC(), Status: "running"}
+// failed clone/fetch is visible just like a failed database update. repo/ref
+// are the configured source the run is about to read — repo must already be
+// sanitized (the caller owns the credential-free projection), so the runs
+// history can show source switches (#343 review).
+func (s *Store) StartTemplateSync(ctx context.Context, repo, ref string) (TemplateSyncRun, error) {
+	run := TemplateSyncRun{ID: types.NewID(), StartedAt: time.Now().UTC(), Status: "running",
+		SourceRepo: repo, SourceRef: ref}
 	var before *string
 	err := s.pool.QueryRow(ctx,
 		`SELECT ref_after FROM template_sync_runs WHERE status = 'success' ORDER BY finished_at DESC LIMIT 1`).Scan(&before)
@@ -553,8 +598,9 @@ func (s *Store) StartTemplateSync(ctx context.Context) (TemplateSyncRun, error) 
 	}
 	run.RefBefore = deref(before)
 	if _, err := s.pool.Exec(ctx,
-		`INSERT INTO template_sync_runs (id, started_at, status, ref_before) VALUES ($1, $2, $3, $4)`,
-		run.ID, run.StartedAt, run.Status, nullStr(run.RefBefore)); err != nil {
+		`INSERT INTO template_sync_runs (id, started_at, status, ref_before, source_repo, source_ref)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		run.ID, run.StartedAt, run.Status, nullStr(run.RefBefore), repo, ref); err != nil {
 		return TemplateSyncRun{}, fmt.Errorf("start template sync: %w", err)
 	}
 	return run, nil
@@ -621,7 +667,13 @@ func (s *Store) ApplyUpstreamTemplates(ctx context.Context, runID, ref string, i
 		old, found := existing[t.ID]
 		if !found {
 			stats.Added++
-		} else if old.hash != t.ContentSHA256 || old.availability != "active" {
+		} else if old.availability != "active" {
+			// A tombstoned id the snapshot still carries comes back active: a
+			// restoration, not a content change (PR #343/#344 review) — counting
+			// it as updated made every stable→preview→stable round trip report
+			// the returning templates as changed.
+			stats.Restored++
+		} else if old.hash != t.ContentSHA256 {
 			stats.Updated++
 		}
 		// The WHERE guard re-asserts the custom/upstream shadow check at write
@@ -667,9 +719,9 @@ func (s *Store) ApplyUpstreamTemplates(ctx context.Context, runID, ref string, i
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE template_sync_runs SET finished_at = now(), status = 'success', ref_after = $2,
-		 added = $3, removed = $4, updated = $5, skipped = $6,
-		 templates_commit = $7, template_count = $8, error = NULL WHERE id = $1`,
-		runID, ref, stats.Added, stats.Removed, stats.Updated, stats.Skipped,
+		 added = $3, removed = $4, updated = $5, skipped = $6, restored = $7,
+		 templates_commit = $8, template_count = $9, error = NULL WHERE id = $1`,
+		runID, ref, stats.Added, stats.Removed, stats.Updated, stats.Skipped, stats.Restored,
 		templatesCommit, templateCount); err != nil {
 		return TemplateSyncStats{}, fmt.Errorf("complete template sync: %w", err)
 	}
@@ -741,7 +793,9 @@ func (s *Store) TemplateSetsLosingMembers(ctx context.Context, ids []string) ([]
 		return nil, fmt.Errorf("list template sets losing members: %w", err)
 	}
 	defer rows.Close()
-	var out []TemplateSetMemberLoss
+	// Non-nil empty, so a candidate that removes templates no exact set holds
+	// still serializes "affected_sets": [] instead of null (PR #344 review).
+	out := []TemplateSetMemberLoss{}
 	for rows.Next() {
 		var l TemplateSetMemberLoss
 		if err := rows.Scan(&l.ID, &l.Name, &l.MemberCount, &l.LosingCount); err != nil {
@@ -750,6 +804,81 @@ func (s *Store) TemplateSetsLosingMembers(ctx context.Context, ids []string) ([]
 		out = append(out, l)
 	}
 	return out, rows.Err()
+}
+
+// TemplateSetsRegainingMembers returns the exact template sets whose stored
+// membership includes any of the given currently-unavailable ids — the sets
+// that become scannable again when a candidate source brings the ids back
+// (#343 review). Same shape as TemplateSetsLosingMembers, with the matching
+// member count reported as RegainingCount.
+func (s *Store) TemplateSetsRegainingMembers(ctx context.Context, ids []string) ([]TemplateSetMemberGain, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT ts.id, ts.name,
+		       (SELECT count(*) FROM template_set_members m2 WHERE m2.template_set_id = ts.id),
+		       count(m.template_id)
+		  FROM template_sets ts
+		  JOIN template_set_members m ON m.template_set_id = ts.id
+		 WHERE ts.mode = 'exact' AND m.template_id = ANY($1)
+		 GROUP BY ts.id, ts.name
+		 ORDER BY lower(ts.name), ts.id`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list template sets regaining members: %w", err)
+	}
+	defer rows.Close()
+	out := []TemplateSetMemberGain{}
+	for rows.Next() {
+		var g TemplateSetMemberGain
+		if err := rows.Scan(&g.ID, &g.Name, &g.MemberCount, &g.RegainingCount); err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// TemplateSetUsers returns the scan policies (and, via their policy, the
+// schedules) that resolve any of the given template sets (#343 review): the
+// dispatch surfaces of an exact set that would hold unavailable members, named
+// in the source-switch preview so the dialog can state which scans are refused.
+// Two queries rather than a UNION so each row carries its kind.
+func (s *Store) TemplateSetUsers(ctx context.Context, setIDs []string) ([]TemplateSetUser, error) {
+	if len(setIDs) == 0 {
+		return []TemplateSetUser{}, nil
+	}
+	out := []TemplateSetUser{}
+	policyRows, err := s.pool.Query(ctx,
+		`SELECT id, name FROM scan_policies WHERE template_set_id = ANY($1) ORDER BY lower(name), id`, setIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list template set users (policies): %w", err)
+	}
+	defer policyRows.Close()
+	for policyRows.Next() {
+		var id, name string
+		if err := policyRows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		out = append(out, TemplateSetUser{Kind: "scan_policy", ID: id, Name: name})
+	}
+	if err := policyRows.Err(); err != nil {
+		return nil, err
+	}
+	scheduleRows, err := s.pool.Query(ctx,
+		`SELECT sc.id, sc.name FROM schedules sc
+		   JOIN scan_policies sp ON sp.id = sc.scan_policy_id
+		  WHERE sp.template_set_id = ANY($1)
+		 ORDER BY lower(sc.name), sc.id`, setIDs)
+	if err != nil {
+		return nil, fmt.Errorf("list template set users (schedules): %w", err)
+	}
+	defer scheduleRows.Close()
+	for scheduleRows.Next() {
+		var id, name string
+		if err := scheduleRows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		out = append(out, TemplateSetUser{Kind: "schedule", ID: id, Name: name})
+	}
+	return out, scheduleRows.Err()
 }
 
 // ReapStaleTemplateSyncRuns marks 'running' rows that have outlived the sync

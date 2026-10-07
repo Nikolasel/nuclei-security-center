@@ -7,6 +7,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import clsx from "clsx";
 import { ChevronLeft, MoreHorizontal } from "lucide-react";
 import {
+  Component,
   createContext,
   useCallback,
   useContext,
@@ -1124,4 +1125,50 @@ export function useConfirm() {
   const confirm = useContext(ConfirmContext);
   if (!confirm) throw new Error("useConfirm must be used inside <ConfirmProvider>");
   return confirm;
+}
+
+type ErrorBoundaryProps = {
+  children: ReactNode;
+  /** When this value changes (e.g. the route path), a shown error clears so
+   *  the next navigation starts clean. */
+  resetKey?: string;
+  /** What crashed, for the message ("this page", "the template sets editor"). */
+  label?: string;
+};
+
+type ErrorBoundaryState = { error: Error | null };
+
+/** ErrorBoundary catches a render crash inside its children and shows a danger
+ *  Alert with a retry button instead of unmounting the whole SPA. App.tsx wraps
+ *  the routed content keyed by pathname; wrap an isolated island (a modal, a
+ *  panel) the same way so one broken component cannot blank the app. */
+export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  state: ErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: unknown): ErrorBoundaryState {
+    return { error: error instanceof Error ? error : new Error(String(error)) };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.error("UI crash caught by ErrorBoundary:", error);
+  }
+
+  componentDidUpdate(prev: ErrorBoundaryProps) {
+    if (this.state.error != null && prev.resetKey !== this.props.resetKey) {
+      this.setState({ error: null });
+    }
+  }
+
+  render() {
+    const { error } = this.state;
+    if (error == null) return this.props.children;
+    return (
+      <div className="space-y-3 p-4">
+        <Alert tone="danger" title={this.props.label ? `Something crashed ${this.props.label}` : "Something crashed"}>
+          {error.message || "An unexpected UI error occurred."}
+        </Alert>
+        <Button onClick={() => this.setState({ error: null })}>Try again</Button>
+      </div>
+    );
+  }
 }

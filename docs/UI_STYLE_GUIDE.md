@@ -262,9 +262,19 @@ onSelect: async () => {
 | A secondary property (source, mode, discovery type) | `<Pill>` (outlined), or `<PropertyList>` for a row's set of properties |
 | A list of values (tags, CWEs, endpoint pairs) | `<Tag>` / `<TagList>` |
 | Nothing to show / no access | `<EmptyState>` (in place of a table: `TableEmpty`) |
+| A component crashed during render | `<ErrorBoundary>` (route-level in `App.tsx`; see Crash containment) |
 
 The `Badge` tone scale is `neutral` · `info` · `success` · `warning` · `danger` · `accent`. A filled
 **Badge** says what state something is in. An outlined **Pill** describes it. Don't mix them up.
+
+### Crash containment
+
+`<ErrorBoundary resetKey label>` catches a render crash in its children and shows a danger `Alert`
+with a **Try again** button instead of unmounting the whole SPA. `App.tsx` wraps the routed content
+keyed by pathname (`resetKey={location.pathname}`), so navigating away clears the error; wrap an
+isolated island (a modal, a panel) the same way when a crash there should not take the page down.
+Don't add per-component boundaries for their own sake — one route-level boundary is the baseline,
+and the dialog that guards a destructive flow is the usual second one.
 
 ### Pagination
 

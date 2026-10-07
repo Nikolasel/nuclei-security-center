@@ -92,22 +92,50 @@ func (s *Store) SeedTemplateSyncSource(ctx context.Context, source TemplateSyncS
 }
 
 // UpdateTemplateSyncSource replaces both columns (the admin switch, #343) and
-// returns the stored row. The caller validates repo/ref and queues the sync.
-func (s *Store) UpdateTemplateSyncSource(ctx context.Context, source TemplateSyncSource) (TemplateSyncSource, error) {
+// stamps who changed it — updated_at/by stay NULL while the source has only
+// ever been seeded from the environment, so the Sync view can distinguish
+// "seeded" from "changed by <admin>" (PR #344 review). The caller validates
+// repo/ref and queues the sync. Returns the stored row.
+func (s *Store) UpdateTemplateSyncSource(ctx context.Context, source TemplateSyncSource, updatedBy string) (TemplateSyncSource, error) {
 	var out TemplateSyncSource
 	var repo, ref *string
 	err := s.pool.QueryRow(ctx,
 		`UPDATE app_settings
-		    SET template_sync_repo = $1, template_sync_ref = $2
+		    SET template_sync_repo = $1, template_sync_ref = $2,
+		        template_sync_source_updated_at = now(),
+		        template_sync_source_updated_by = NULLIF($3, '')
 		  WHERE id = true
 		  RETURNING template_sync_repo, template_sync_ref`,
-		source.Repo, source.Ref).
+		source.Repo, source.Ref, updatedBy).
 		Scan(&repo, &ref)
 	if err != nil {
 		return TemplateSyncSource{}, fmt.Errorf("update template sync source: %w", err)
 	}
 	out.Repo, out.Ref = deref(repo), deref(ref)
 	return out, nil
+}
+
+// TemplateSyncSourceProvenance is who last changed the template sync source and
+// when. Both fields are unset while the source has only ever been seeded from
+// the environment (disable/re-enable count as changes — they produce no sync
+// run, so this is the only trace of them).
+type TemplateSyncSourceProvenance struct {
+	UpdatedAt *time.Time
+	UpdatedBy string
+}
+
+// GetTemplateSyncSourceProvenance reads the source's last-change stamp.
+func (s *Store) GetTemplateSyncSourceProvenance(ctx context.Context) (TemplateSyncSourceProvenance, error) {
+	var p TemplateSyncSourceProvenance
+	var by *string
+	err := s.pool.QueryRow(ctx,
+		`SELECT template_sync_source_updated_at, template_sync_source_updated_by FROM app_settings WHERE id = true`).
+		Scan(&p.UpdatedAt, &by)
+	if err != nil {
+		return TemplateSyncSourceProvenance{}, fmt.Errorf("get template sync source provenance: %w", err)
+	}
+	p.UpdatedBy = deref(by)
+	return p, nil
 }
 
 // GetAppSettings returns the singleton settings row. The baseline seeds it, so

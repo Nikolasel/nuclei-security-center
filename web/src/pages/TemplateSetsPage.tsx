@@ -14,6 +14,7 @@ import { hasRole, useMe } from "../auth";
 import { TemplateArchiveImportModal } from "../components/TemplateArchiveImportModal";
 import {
   Alert,
+  Badge,
   Button,
   Card,
   CardHeader,
@@ -127,11 +128,15 @@ function TemplateSetModal({
     }
   }, [existing?.mode, mode]);
 
+  // While editing an existing set, tombstoned members must stay visible and
+  // clearly marked — they count toward the selection even though they cannot
+  // resolve (#343 review #9). New/duplicated sets list active templates only.
   const templates = useQuery({
-    queryKey: ["templates", "set-picker", query, source, severity, tags, offset],
+    queryKey: ["templates", "set-picker", query, source, severity, tags, offset, existing != null && !duplicate],
     queryFn: () =>
       api.listTemplates({
         ...filters,
+        include_unavailable: existing != null && !duplicate,
         limit: PAGE_SIZE,
         offset,
       }),
@@ -350,6 +355,11 @@ function TemplateSetModal({
                       <span className="block truncate font-mono text-xs text-neutral-500">{template.id}</span>
                     </span>
                     <SeverityBadge severity={template.severity} />
+                    {template.availability !== "active" && (
+                      <Badge tone="danger" title="Not served by the current upstream source; kept in the set until it returns or is removed.">
+                        unavailable
+                      </Badge>
+                    )}
                     <Pill>{template.source}</Pill>
                   </label>
                 ))}
@@ -514,6 +524,14 @@ export function TemplateSetsPage() {
                     </div>
                     {set.mode === "exclude" && set.exclusion_count > 0 && (
                       <div className="text-xs text-amber-700 dark:text-amber-300">{set.exclusion_count} excluded</div>
+                    )}
+                    {set.unavailable_members > 0 && (
+                      <div
+                        className="text-xs text-amber-700 dark:text-amber-300"
+                        title="Members currently tombstoned upstream — scans resolving this set are refused until they return or the selection is updated."
+                      >
+                        {set.unavailable_members} unavailable
+                      </div>
                     )}
                   </Td>
                   <RowActions

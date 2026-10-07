@@ -209,7 +209,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/templates/sync", s.mutation(eventConfigChanged, "templates.sync_requested", "template_sync", RoleOperator, s.handleRequestTemplateSync))
 	mux.HandleFunc("GET /api/templates/sync-runs", s.requireRole(RoleViewer, s.handleListTemplateSyncRuns))
 	mux.HandleFunc("PUT /api/templates/sync/config", s.mutation(eventConfigChanged, "template_sync.config_update", "template_sync", RoleAdmin, s.handleUpdateTemplateSyncConfig))
-	mux.HandleFunc("POST /api/templates/sync/preview", s.requireRole(RoleAdmin, s.handlePreviewTemplateSyncSource))
+	// The preview dry run is audited too (PR #344 review #7): it sends the
+	// backend to an admin-supplied host, so even though nothing is stored the
+	// attempt — and any denial — leaves a structured trace.
+	mux.HandleFunc("POST /api/templates/sync/preview", s.mutation(eventConfigChanged, "template_sync.preview", "template_sync", RoleAdmin, s.handlePreviewTemplateSyncSource))
 	mux.HandleFunc("POST /api/templates", s.mutation(eventConfigChanged, "template.create", "template", RoleOperator, s.handleCreateTemplate))
 	mux.HandleFunc("GET /api/templates/{id}", s.requireRole(RoleViewer, s.handleGetTemplate))
 	mux.HandleFunc("PUT /api/templates/{id}", s.mutation(eventConfigChanged, "template.update", "template", RoleOperator, s.handleUpdateTemplate))

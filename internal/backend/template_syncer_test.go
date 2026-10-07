@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -48,6 +49,9 @@ func TestTemplateSyncStatusChannelsAndDisabled(t *testing.T) {
 	}{
 		{repo: "https://github.com/projectdiscovery/nuclei-templates.git", ref: "latest", wantChannel: templateSyncChannelStable, wantDefault: true, wantEnabled: true},
 		{repo: "https://github.com/projectdiscovery/nuclei-templates.git", ref: "main", wantChannel: templateSyncChannelPreview, wantDefault: true, wantEnabled: true},
+		// `main` is the preview channel only on the community catalog: on any
+		// other repository it is a custom ref (PR #344 review #15).
+		{repo: "https://example.test/fork.git", ref: "main", wantChannel: templateSyncChannelCustom, wantEnabled: true},
 		{repo: "https://user:pw@github.com/projectdiscovery/nuclei-templates.git", ref: "v9.9.9", wantChannel: templateSyncChannelCustom, wantDefault: true, wantEnabled: true},
 		{repo: "https://example.test/fork.git", ref: "dev-branch", wantChannel: templateSyncChannelCustom, wantEnabled: true},
 		{repo: "", ref: "latest", wantChannel: "", wantEnabled: false},
@@ -246,27 +250,27 @@ func writeTemplateRepoFixture(t *testing.T, ids []string, tag, branch string) (s
 // alone: fetch+force never deletes the previous repository's tags or
 // remote-tracking refs, so without replacing the cache the old repo's higher
 // semver tag would win `latest` and its leftover branch would win ref lookup.
-func TestSyncTemplateRepositoryReplacesCacheOnRemoteSwitch(t *testing.T) {
+func TestTemplateSnapshotReplacesCacheOnRemoteSwitch(t *testing.T) {
 	oldRepo, oldHead := writeTemplateRepoFixture(t, []string{"old-template"}, "v9.9.9", "legacy")
 	newRepo, newHead := writeTemplateRepoFixture(t, []string{"new-template"}, "v1.0.0", "")
 	dir := filepath.Join(t.TempDir(), "clone-cache")
 	ctx := context.Background()
-	log := testLogger()
+	s := &TemplateSyncer{config: TemplateSyncerConfig{Interval: time.Hour, Dir: dir}, log: testLogger()}
 
 	// Populate the cache from the old repository; its branch resolves too.
-	commit, entries, _, err := syncTemplateRepository(ctx, dir, oldRepo, "latest", log)
+	commit, entries, _, err := s.templateSnapshot(ctx, dir, oldRepo, "latest")
 	if err != nil {
 		t.Fatalf("sync old repository: %v", err)
 	}
 	if commit != oldHead.String() || len(entries) != 1 || entries[0].ID != "old-template" {
 		t.Fatalf("old catalog = commit %s entries %+v, want %s [old-template]", commit, entries, oldHead)
 	}
-	if commit, _, _, err := syncTemplateRepository(ctx, dir, oldRepo, "legacy", log); err != nil || commit != oldHead.String() {
+	if commit, _, _, err := s.templateSnapshot(ctx, dir, oldRepo, "legacy"); err != nil || commit != oldHead.String() {
 		t.Fatalf("old repository branch legacy = %s err %v, want %s", commit, err, oldHead)
 	}
 
 	// Switch to the new repository: the old v9.9.9 tag must not win latest.
-	commit, entries, _, err = syncTemplateRepository(ctx, dir, newRepo, "latest", log)
+	commit, entries, _, err = s.templateSnapshot(ctx, dir, newRepo, "latest")
 	if err != nil {
 		t.Fatalf("sync new repository: %v", err)
 	}
@@ -275,10 +279,73 @@ func TestSyncTemplateRepositoryReplacesCacheOnRemoteSwitch(t *testing.T) {
 	}
 
 	// Refs only the old repository ever had must not resolve from stale refs.
-	if _, _, _, err := syncTemplateRepository(ctx, dir, newRepo, "v9.9.9", log); err == nil {
+	if _, _, _, err := s.templateSnapshot(ctx, dir, newRepo, "v9.9.9"); err == nil {
 		t.Fatal("the old repository's tag resolved against the new repository, want error")
 	}
-	if _, _, _, err := syncTemplateRepository(ctx, dir, newRepo, "legacy", log); err == nil {
+	if _, _, _, err := s.templateSnapshot(ctx, dir, newRepo, "legacy"); err == nil {
 		t.Fatal("the old repository's branch resolved against the new repository, want error")
+	}
+}
+
+// A source probe against a different repository runs in its own probe cache and
+// must leave the sync cache — and every ref it holds — intact (PR #344 review
+// #2): a cancelled dry run, a typo, or an unreachable candidate used to wipe
+// the cache and force a full re-clone on the next sync. The probe cache itself
+// converges on the last-probed repository, so repeated probes stay cheap, and
+// an expectCommit that still resolves skips the catalog walk (PR #344 review
+// #6, the PUT's save-time probe reusing the dry run's result).
+func TestTemplateSourceProbeLeavesSyncCacheIntact(t *testing.T) {
+	oldRepo, oldHead := writeTemplateRepoFixture(t, []string{"old-template"}, "v9.9.9", "legacy")
+	newRepo, newHead := writeTemplateRepoFixture(t, []string{"new-template"}, "v1.0.0", "")
+	dir := filepath.Join(t.TempDir(), "clone-cache")
+	ctx := context.Background()
+	s := &TemplateSyncer{config: TemplateSyncerConfig{Interval: time.Hour, Dir: dir}, log: testLogger()}
+
+	if _, _, _, err := s.templateSnapshot(ctx, s.config.Dir, oldRepo, "latest"); err != nil {
+		t.Fatalf("sync old repository: %v", err)
+	}
+
+	commit, entries, _, err := s.resolveTemplateSnapshot(ctx, newRepo, "latest", "")
+	if err != nil {
+		t.Fatalf("probe new repository: %v", err)
+	}
+	if commit != newHead.String() || len(entries) != 1 || entries[0].ID != "new-template" {
+		t.Fatalf("probe catalog = commit %s entries %+v, want %s [new-template]", commit, entries, newHead)
+	}
+
+	// The sync cache must still resolve only the old repository's refs.
+	if commit, _, _, err := s.templateSnapshot(ctx, s.config.Dir, oldRepo, "legacy"); err != nil || commit != oldHead.String() {
+		t.Fatalf("sync cache lost the old repository: %s %v, want %s", commit, err, oldHead)
+	}
+	if _, _, _, err := s.templateSnapshot(ctx, s.config.Dir, oldRepo, "v1.0.0"); err == nil {
+		t.Fatal("the probed repository's tag resolved against the sync cache, want error")
+	}
+
+	// A second probe of the same candidate reuses the probe cache, and passing
+	// the resolved commit skips the walk (no entries returned).
+	commit, entries, _, err = s.resolveTemplateSnapshot(ctx, newRepo, "latest", newHead.String())
+	if err != nil {
+		t.Fatalf("verified probe: %v", err)
+	}
+	if commit != newHead.String() || entries != nil {
+		t.Fatalf("verified probe = commit %s entries %v, want commit kept and walk skipped", commit, entries)
+	}
+
+	// A moved ref (or wrong expectCommit) walks the fresh snapshot instead.
+	if _, entries, _, err := s.resolveTemplateSnapshot(ctx, newRepo, "latest", "0000000000000000000000000000000000000000"); err != nil || len(entries) != 1 {
+		t.Fatalf("mismatched expectCommit = entries %+v err %v, want full walk", entries, err)
+	}
+}
+
+// While a sync or another probe holds the worktree lock, a source probe fails
+// fast instead of queueing behind it for up to a whole sync budget (PR #344
+// review #5); the queued sync itself still waits.
+func TestTemplateSourceProbeFailsFastWhenBusy(t *testing.T) {
+	repo, _ := writeTemplateRepoFixture(t, []string{"t"}, "v1.0.0", "")
+	s := &TemplateSyncer{config: TemplateSyncerConfig{Interval: time.Hour, Dir: filepath.Join(t.TempDir(), "clone-cache")}, log: testLogger()}
+	s.worktree.Lock()
+	defer s.worktree.Unlock()
+	if _, _, _, err := s.resolveTemplateSnapshot(context.Background(), repo, "latest", ""); !errors.Is(err, errTemplateSyncBusy) {
+		t.Fatalf("probe while busy = %v, want errTemplateSyncBusy", err)
 	}
 }

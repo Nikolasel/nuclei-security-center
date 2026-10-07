@@ -83,8 +83,10 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   severity, description, tags, content_sha256`). The raw YAML is the sole complete
   representation; metadata is extracted only for catalog filtering.
 - **template_sync_runs** — backend-owned upstream catalog refresh history, including pinned
-  upstream commit, resulting canonical `templates_commit` + template count, and
-  added/updated/removed/skipped counts. Failed runs record the unchanged active bundle state, so a
+  upstream commit, resulting canonical `templates_commit` + template count,
+  added/updated/restored/removed/skipped counts, and the configured source the run read
+  (`source_repo` sanitized + `source_ref`, #343), so the history distinguishes an admin source
+  switch from an ordinary upstream change. Failed runs record the unchanged active bundle state, so a
   node reporting an older digest can be matched to catalog history (a stray malformed file is
   skipped-and-counted, not fatal; the run fails closed only if nothing parses). Runs are retained
   in PostgreSQL and exposed through a paginated history; NSC does not silently prune them.
@@ -100,14 +102,22 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   repository keeps the stored value (write-only, like node tokens). Switching reconciles in
   place — the full-snapshot upsert + tombstone keeps template ids, exact-set memberships,
   exclusions, lifecycle history, and scan provenance intact, and returning templates are restored
-  by the `ON CONFLICT` upsert — and the admin dry run (`POST /api/templates/sync/preview`) reports
-  added/changed/removed counts plus the exact sets that would lose active members before the
-  switch is confirmed. The dry run and the save-time probe (a full fetch/checkout/catalog walk)
-  both refuse a candidate whose ids would shadow a custom template — the exact conflict that
-  aborts a sync run — so a confirmed switch can never queue a sync that fails on it. The clone
-  cache is replaced whenever the remote URL changes: a force fetch alone would keep the previous
-  repository's tags and remote refs, letting a higher stale semver tag win `latest` or a leftover
-  branch win ref lookup.
+  by the `ON CONFLICT` upsert — and the admin dry run (`POST /api/templates/sync/preview`, audited
+  like other mutations since it triggers outbound network work) reports added/changed/restored/
+  removed counts plus the exact sets that would lose active members — with the scan policies and
+  schedules that resolve those sets — before the switch is confirmed. Only `https://` repositories
+  are accepted. The dry run and the save-time probe both refuse a candidate whose ids would shadow
+  a custom template — the exact conflict that
+  aborts a sync run — so a confirmed switch can never queue a sync that fails on it. Probes do not
+  touch the sync clone cache: they fetch into a dedicated sibling cache
+  (`<TEMPLATE_SYNC_DIR>-probe`) so a typo, an unreachable candidate, or a cancelled dry run cannot
+  cost a multi-gigabyte re-clone, and they run under a short probe timeout with a fail-fast
+  `503` while the long sync lock is held. When the request carries the commit a dry run resolved
+  (`preview_commit`) and the ref still resolves to it, the save verifies that commit instead of
+  re-fetching and re-walking the catalog, so the usual admin flow fetches once. A real sync still
+  replaces the clone cache when the stored repository itself changes: a force fetch alone would
+  keep the previous repository's tags and remote refs, letting a higher stale semver tag win
+  `latest` or a leftover branch win ref lookup.
 - **template_sets** — an explicit `mode`: `exact` uses curated membership in
   `template_set_members`, `all` resolves every active catalog template at scan time, and `exclude`
   resolves every active template except explicit rows in `template_set_exclusions`. The retired POC

@@ -56,14 +56,14 @@ func TestTemplateSyncSourceSeedsOncePostgres(t *testing.T) {
 
 	// The admin switch replaces both columns; an explicit empty repo is the
 	// documented disabled state.
-	updated, err := st.UpdateTemplateSyncSource(ctx, TemplateSyncSource{Repo: "https://user:secret@example.test/templates.git", Ref: "v9.9.9"})
+	updated, err := st.UpdateTemplateSyncSource(ctx, TemplateSyncSource{Repo: "https://user:secret@example.test/templates.git", Ref: "v9.9.9"}, "admin-subject")
 	if err != nil {
 		t.Fatalf("update template sync source: %v", err)
 	}
 	if updated.Repo != "https://user:secret@example.test/templates.git" || updated.Ref != "v9.9.9" {
 		t.Fatalf("updated source = %+v, want credential-bearing repo and v9.9.9", updated)
 	}
-	updated, err = st.UpdateTemplateSyncSource(ctx, TemplateSyncSource{Repo: "", Ref: "latest"})
+	updated, err = st.UpdateTemplateSyncSource(ctx, TemplateSyncSource{Repo: "", Ref: "latest"}, "")
 	if err != nil {
 		t.Fatalf("update template sync source to disabled: %v", err)
 	}

@@ -129,7 +129,7 @@ func TestTemplateSyncSwitchAndReconcilePostgres(t *testing.T) {
 
 	switchTo := func(repo, ref string) {
 		t.Helper()
-		if _, err := st.UpdateTemplateSyncSource(ctx, store.TemplateSyncSource{Repo: repo, Ref: ref}); err != nil {
+		if _, err := st.UpdateTemplateSyncSource(ctx, store.TemplateSyncSource{Repo: repo, Ref: ref}, ""); err != nil {
 			t.Fatalf("switch template source to %s@%s: %v", repo, ref, err)
 		}
 		syncer.run(ctx, repo, ref)
@@ -161,22 +161,31 @@ func TestTemplateSyncSwitchAndReconcilePostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("preview main: %v", err)
 	}
-	if preview.Added != 1 || preview.Changed != 1 || preview.Removed != 1 {
-		t.Fatalf("preview counts = added %d changed %d removed %d, want 1/1/1", preview.Added, preview.Changed, preview.Removed)
+	if preview.Added != 1 || preview.Changed != 1 || preview.Restored != 0 || preview.Removed != 1 {
+		t.Fatalf("preview counts = added %d changed %d restored %d removed %d, want 1/1/0/1",
+			preview.Added, preview.Changed, preview.Restored, preview.Removed)
 	}
 	if len(preview.AffectedSets) != 1 || preview.AffectedSets[0].ID != set.ID ||
 		preview.AffectedSets[0].MemberCount != 2 || preview.AffectedSets[0].LosingCount != 1 {
 		t.Fatalf("preview affected sets = %+v, want %s with member 2 losing 1", preview.AffectedSets, set.ID)
+	}
+	if len(preview.RegainedSets) != 0 || len(preview.AffectedPolicies) != 0 || len(preview.AffectedSchedules) != 0 {
+		t.Fatalf("preview on the untouched catalog lists regained sets or users: %+v", preview)
 	}
 	if got := activeUpstreamIDs(t, st, ctx); len(got) != 3 {
 		t.Fatalf("preview wrote to the catalog: %v", got)
 	}
 
 	// 3. Switch to main: beta tombstoned (not deleted), gamma added, set
-	// membership rows survive pointing at the tombstoned id.
+	// membership rows survive pointing at the tombstoned id. The run row
+	// records the sanitized source it read, so history can show the switch.
 	switchTo(fixture, "main")
 	if got := activeUpstreamIDs(t, st, ctx); len(got) != 3 {
 		t.Fatalf("main catalog = %v, want alpha/gamma/shared", got)
+	}
+	if last, _, err := st.ListTemplateSyncRuns(ctx, 1, 0); err != nil ||
+		last[0].SourceRepo != SafeTemplateRepo(fixture) || last[0].SourceRef != "main" {
+		t.Fatalf("last run source = %+v, want sanitized fixture/main", last)
 	}
 	beta, err := st.GetTemplate(ctx, "beta")
 	if err != nil {
@@ -191,6 +200,29 @@ func TestTemplateSyncSwitchAndReconcilePostgres(t *testing.T) {
 	}
 	if afterSwitch.MemberCount != 2 {
 		t.Fatalf("set member count after switch = %d, want 2 (membership survives)", afterSwitch.MemberCount)
+	}
+
+	// 3b. Dry run of the stable source from main: gamma would be removed, beta
+	// would be restored. The set no longer holds any would-be-removed id, so
+	// the JSON carries a non-null empty affected_sets (the nil-slice regression
+	// from the PR #344 review) while the set appears in regained_sets — after
+	// the switch it becomes scannable again.
+	previewLatest, err := syncer.PreviewSource(ctx, fixture, "latest")
+	if err != nil {
+		t.Fatalf("preview latest from main: %v", err)
+	}
+	if previewLatest.Removed != 1 || previewLatest.Restored != 1 || previewLatest.Added != 0 || previewLatest.Changed != 1 {
+		t.Fatalf("preview latest counts = %+v, want removed 1 restored 1 added 0 changed 1 (alpha's content differs)", previewLatest)
+	}
+	if len(previewLatest.AffectedSets) != 0 {
+		t.Fatalf("preview latest affected sets = %+v, want none (no exact set holds gamma)", previewLatest.AffectedSets)
+	}
+	if blob, jerr := json.Marshal(previewLatest); jerr != nil || !bytes.Contains(blob, []byte(`"affected_sets":[]`)) {
+		t.Fatalf("preview latest JSON = %s (%v), want a non-null empty affected_sets", blob, jerr)
+	}
+	if len(previewLatest.RegainedSets) != 1 || previewLatest.RegainedSets[0].ID != set.ID ||
+		previewLatest.RegainedSets[0].MemberCount != 2 || previewLatest.RegainedSets[0].RegainingCount != 1 {
+		t.Fatalf("preview latest regained sets = %+v, want %s regaining 1 of 2", previewLatest.RegainedSets, set.ID)
 	}
 
 	// 4. Back to stable: beta is restored by the upsert, gamma tombstoned.
@@ -246,7 +278,7 @@ func TestTemplateSyncSwitchAndReconcilePostgres(t *testing.T) {
 	if err != nil {
 		t.Fatalf("count sync runs before disable: %v", err)
 	}
-	if _, err := st.UpdateTemplateSyncSource(ctx, store.TemplateSyncSource{Repo: "", Ref: "latest"}); err != nil {
+	if _, err := st.UpdateTemplateSyncSource(ctx, store.TemplateSyncSource{Repo: "", Ref: "latest"}, ""); err != nil {
 		t.Fatalf("disable upstream sync: %v", err)
 	}
 	syncer.sync(ctx)
@@ -449,6 +481,9 @@ func TestTemplateSyncConfigRBACAndAuditPostgres(t *testing.T) {
 	if event["old_ref"] != "v9.9.9" || event["new_ref"] != "latest" {
 		t.Fatalf("admin disable audit refs = %v → %v, want v9.9.9 → latest", event["old_ref"], event["new_ref"])
 	}
+	if event["old_repo"] != "https://example.test/templates.git" {
+		t.Fatalf("admin disable audit old_repo = %v, want the sanitized previous repository (PR #344 review #12)", event["old_repo"])
+	}
 	if event["repo"] != "" {
 		t.Fatalf("admin disable audit repo = %v, want sanitized/empty", event["repo"])
 	}
@@ -471,7 +506,7 @@ func TestTemplateSyncConfigRBACAndAuditPostgres(t *testing.T) {
 	fixture := buildTemplateRepoFixture(t)
 	if _, err := st.UpdateTemplateSyncSource(ctx, store.TemplateSyncSource{
 		Repo: fixture, Ref: "latest",
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("re-store resolvable source: %v", err)
 	}
 
@@ -513,13 +548,59 @@ func TestTemplateSyncConfigRBACAndAuditPostgres(t *testing.T) {
 		t.Fatalf("audit repo = %v, want the sanitized stored repository", event["repo"])
 	}
 
+	// A no-op save (identical source) short-circuits: 200, no probe, no queued
+	// sync (PR #344 review #14). The mutation wrapper still emits its one audit
+	// event — every mutating API call is audited — but with no old/new delta
+	// because nothing changed. A sync queued by the previous PUT may still be
+	// logging into the shared buffer, so assert on the audit events, not the
+	// whole buffer.
+	logs.Reset()
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, withCookie(httptest.NewRequest(http.MethodPut, "/api/templates/sync/config", strings.NewReader(`{"ref":"main"}`)), admin))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("no-op save status = %d, want 200 body %q", rr.Code, rr.Body.String())
+	}
+	noopUpdates := 0
+	for _, line := range bytes.Split(bytes.TrimRight(logs.Bytes(), "\n"), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var ev map[string]any
+		if json.Unmarshal(line, &ev) != nil || ev["event"] != "audit" || ev["action"] != "template_sync.config_update" {
+			continue
+		}
+		noopUpdates++
+		if ev["new_ref"] != nil {
+			t.Fatalf("no-op audit carried new_ref %v, want no old/new delta", ev["new_ref"])
+		}
+	}
+	if noopUpdates != 1 {
+		t.Fatalf("no-op save emitted %d template_sync.config_update audit events, want 1", noopUpdates)
+	}
+
+	// The preview dry run is audited (PR #344 review #7) and a transport
+	// failure surfaces as a generic 400 — the raw dial error names internal
+	// hosts and stays in the server log only.
+	logs.Reset()
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, withCookie(httptest.NewRequest(http.MethodPost, "/api/templates/sync/preview", strings.NewReader(`{"repo":"https://127.0.0.1:1/nope.git","ref":"main"}`)), admin))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("unreachable preview status = %d, want 400 body %q", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "unreachable, refused the connection") || strings.Contains(rr.Body.String(), "dial tcp") {
+		t.Fatalf("unreachable preview body = %q, want the generic message without the transport error", rr.Body.String())
+	}
+	if event := lastAudit(t, &logs); event["action"] != "template_sync.preview" || event["event_id"] != eventConfigChanged {
+		t.Fatalf("preview audit = %+v, want config_changed/template_sync.preview", event)
+	}
+
 	// GET status reports the DB-backed source with the channel label. Restore
 	// the credential-bearing URL at store level so the response also proves
 	// sanitization; the environment view marks the seed-only variables and
 	// shows the DB value.
 	if _, err := st.UpdateTemplateSyncSource(ctx, store.TemplateSyncSource{
 		Repo: "https://user:secret@example.test/templates.git", Ref: "main",
-	}); err != nil {
+	}, ""); err != nil {
 		t.Fatalf("re-store credential-bearing source: %v", err)
 	}
 	rr = httptest.NewRecorder()
@@ -536,8 +617,8 @@ func TestTemplateSyncConfigRBACAndAuditPostgres(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &syncStatus); err != nil {
 		t.Fatalf("decode sync status: %v", err)
 	}
-	if !syncStatus.Enabled || syncStatus.RefSource != templateSyncChannelPreview || syncStatus.Ref != "main" {
-		t.Fatalf("sync status = %+v, want enabled preview/main", syncStatus)
+	if !syncStatus.Enabled || syncStatus.RefSource != templateSyncChannelCustom || syncStatus.Ref != "main" {
+		t.Fatalf("sync status = %+v, want enabled custom/main (main is only preview on the default repository, PR #344 review #15)", syncStatus)
 	}
 	if syncStatus.Repo != "https://example.test/templates.git" {
 		t.Fatalf("sync status repo = %q, want sanitized", syncStatus.Repo)

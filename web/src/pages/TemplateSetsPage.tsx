@@ -155,7 +155,15 @@ function TemplateSetModal({
   };
   const selectMatching = useMutation({
     mutationFn: (mode: "select" | "deselect") =>
-      api.listTemplateIDs(filters).then((result) => ({ ...result, mode })),
+      api
+        .listTemplateIDs({
+          ...filters,
+          // Mirror the picker query: while editing an existing set it also
+          // lists unavailable templates, so select/deselect-all covers the
+          // same ids the page shows and counts (PR #344 review).
+          include_unavailable: existing != null && !duplicate,
+        })
+        .then((result) => ({ ...result, mode })),
     onSuccess: ({ ids, mode }) => updateSelection((next) => {
       ids.forEach((id) => mode === "select" ? next.add(id) : next.delete(id));
     }),

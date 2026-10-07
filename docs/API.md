@@ -572,6 +572,14 @@ curl -sb jar.txt -X DELETE -H 'Origin: http://localhost:8080' localhost:8080/api
 curl -sb jar.txt localhost:8080/api/templates/sync
 # queue an upstream refresh now (operator)
 curl -sb jar.txt -X POST -H 'Origin: http://localhost:8080' localhost:8080/api/templates/sync
+# switch the upstream source (admin): omit repo to keep the stored URL,
+# explicit "" disables upstream sync; the candidate is resolved against the
+# fetched repository before anything is stored
+curl -sb jar.txt -X PUT -H 'Origin: http://localhost:8080' -H 'Content-Type: application/json' \
+  localhost:8080/api/templates/sync/config -d '{"ref":"main"}'
+# dry-run a candidate source (admin): fetch + resolve + catalog diff, no writes
+curl -sb jar.txt -X POST -H 'Origin: http://localhost:8080' -H 'Content-Type: application/json' \
+  localhost:8080/api/templates/sync/preview -d '{"ref":"main"}'
 # recent upstream-sync outcomes (for the Sync view)
 curl -sb jar.txt localhost:8080/api/templates/sync-runs
 ```
@@ -599,19 +607,39 @@ create/update response also includes
 accepted it.
 
 `GET /api/templates/sync` returns whether upstream mirroring is enabled plus its interval,
-repository, ref, active catalog bundle digest (`templates_commit`), and active template count. The
+repository, ref, the derived channel (`ref_source`: `stable` for the `latest` release tag,
+`preview` for the `main` branch, `custom` for anything else), `default_repo` (the repository is
+the ProjectDiscovery community catalog, so the UI offers the Stable/Preview channel choice), the
+active catalog bundle digest (`templates_commit`), and active template count. The
 digest is the same identifier shown for each scanner node, so an administrator can see whether a
 node matches the backend catalog. The cache path is not exposed, and credentials/query strings are
 stripped from repository URLs. `POST /api/templates/sync` queues a refresh and returns `202`;
-requests coalesce behind a running or already-queued refresh. It returns `503` when
-`TEMPLATE_SYNC_REPO` is empty. The request is `operator`-only and audited as `config_changed`
-(`templates.sync_requested`); the eventual background outcome remains visible in
+requests coalesce behind a running or already-queued refresh. It returns `503` when the stored
+source has an empty repository (upstream sync disabled). The request is `operator`-only and audited
+as `config_changed` (`templates.sync_requested`); the eventual background outcome remains visible in
 `/api/templates/sync-runs`. Each completed run includes the resulting `templates_commit` and
 `template_count`; failed runs carry the unchanged active state. These historical bundle IDs let an
 administrator identify which catalog snapshot a stale scanner node still holds.
 Sync runs are retained in PostgreSQL rather than deleted. `GET /api/templates/sync-runs` returns
 the standard `{items,total,limit,offset}` page, ordered newest first, so the UI can page through the
 full history instead of silently capping it.
+
+The upstream source itself is admin-switchable at runtime (#343) — the repository and ref live in
+the `app_settings` singleton (seeded once from `TEMPLATE_SYNC_REPO`/`TEMPLATE_SYNC_REF`; afterward
+the database wins). `PUT /api/templates/sync/config` (admin) stores `{repo?, ref}`: omitting
+`repo` keeps the stored URL (write-only, like node tokens), an explicit empty string disables
+upstream sync, and the ref accepts `latest`, a git ref name, or a full/abbreviated commit SHA.
+The candidate is resolved against the fetched repository before anything is stored, so an
+unreachable repository or unknown ref is refused with `400`; a valid save queues an immediate
+sync and returns the new status. It is audited as `config_changed`
+(`template_sync.config_update`) with the old → new ref and the sanitized repository — never
+credentials. `POST /api/templates/sync/preview` (admin) is the read-only dry run behind the
+UI's impact confirm: it fetches and resolves the candidate in the clone cache, compares it with
+the stored catalog under the same reconcile rules the sync applies, and returns
+`{repo, ref, commit, skipped, added, changed, removed, affected_sets}` where each affected set is
+an exact set whose membership includes templates the switch would tombstone (members are kept
+and return if the template reappears). Nothing is persisted, so it is not audited as a mutation,
+but it is still origin-guarded since it is an authenticated POST that kicks off network work.
 
 Custom uploads are sanity-checked at write time (all `400` on failure): the body must be a single
 YAML document with a top-level `id`, a non-empty `info.name`, a severity in Nuclei's set

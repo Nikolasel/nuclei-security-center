@@ -16,6 +16,7 @@ import {
   Muted,
   Page,
   PageHeader,
+  Pill,
   Section,
   Spinner,
   Table,
@@ -80,6 +81,7 @@ function EnvConfigTable({ variables }: { variables: EnvVariable[] }) {
                 <Td>
                   <div className="flex min-w-0 items-center gap-1">
                     <span className="truncate font-mono text-xs">{v.name}</span>
+                    {v.seed_only && <Pill>seed-only</Pill>}
                     <EnvVarInfo name={v.name} description={v.description} />
                   </div>
                 </Td>

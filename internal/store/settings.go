@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -40,6 +41,73 @@ func (a AppSettings) RetentionCutoff(now time.Time) time.Time {
 		return time.Time{}
 	}
 	return now.AddDate(0, 0, -*a.ScanRetentionDays)
+}
+
+// TemplateSyncSource is the upstream template catalog's source of record
+// (#343): the repository URL (possibly credential-bearing; the API only ever
+// returns the sanitized URL) and the ref to mirror. Both live on the
+// app_settings singleton, seeded once from TEMPLATE_SYNC_REPO /
+// TEMPLATE_SYNC_REF at startup — NULL columns mean "never seeded"; afterward
+// the DB wins and env changes only log a drift note. An empty Repo is the
+// explicit "upstream sync disabled" state.
+type TemplateSyncSource struct {
+	Repo string `json:"repo"`
+	Ref  string `json:"ref"`
+}
+
+// GetTemplateSyncSource returns the stored (possibly empty, never-seeded)
+// template-sync source.
+func (s *Store) GetTemplateSyncSource(ctx context.Context) (TemplateSyncSource, error) {
+	var repo, ref *string
+	err := s.pool.QueryRow(ctx,
+		`SELECT template_sync_repo, template_sync_ref FROM app_settings WHERE id = true`).
+		Scan(&repo, &ref)
+	if err != nil {
+		return TemplateSyncSource{}, fmt.Errorf("get template sync source: %w", err)
+	}
+	return TemplateSyncSource{Repo: deref(repo), Ref: deref(ref)}, nil
+}
+
+// SeedTemplateSyncSource fills any still-NULL source column with the
+// environment-derived value (single statement, so concurrent replicas race to
+// the same seed-once outcome: the first stored value wins). It returns the
+// effective source after seeding — the caller compares it with the env values
+// to log a drift note (DB wins; env is never re-applied over stored values).
+func (s *Store) SeedTemplateSyncSource(ctx context.Context, source TemplateSyncSource) (TemplateSyncSource, error) {
+	var out TemplateSyncSource
+	var repo, ref *string
+	err := s.pool.QueryRow(ctx,
+		`UPDATE app_settings
+		    SET template_sync_repo = COALESCE(template_sync_repo, $1),
+		        template_sync_ref  = COALESCE(template_sync_ref, $2)
+		  WHERE id = true
+		  RETURNING template_sync_repo, template_sync_ref`,
+		source.Repo, source.Ref).
+		Scan(&repo, &ref)
+	if err != nil {
+		return TemplateSyncSource{}, fmt.Errorf("seed template sync source: %w", err)
+	}
+	out.Repo, out.Ref = deref(repo), deref(ref)
+	return out, nil
+}
+
+// UpdateTemplateSyncSource replaces both columns (the admin switch, #343) and
+// returns the stored row. The caller validates repo/ref and queues the sync.
+func (s *Store) UpdateTemplateSyncSource(ctx context.Context, source TemplateSyncSource) (TemplateSyncSource, error) {
+	var out TemplateSyncSource
+	var repo, ref *string
+	err := s.pool.QueryRow(ctx,
+		`UPDATE app_settings
+		    SET template_sync_repo = $1, template_sync_ref = $2
+		  WHERE id = true
+		  RETURNING template_sync_repo, template_sync_ref`,
+		source.Repo, source.Ref).
+		Scan(&repo, &ref)
+	if err != nil {
+		return TemplateSyncSource{}, fmt.Errorf("update template sync source: %w", err)
+	}
+	out.Repo, out.Ref = deref(repo), deref(ref)
+	return out, nil
 }
 
 // GetAppSettings returns the singleton settings row. The baseline seeds it, so

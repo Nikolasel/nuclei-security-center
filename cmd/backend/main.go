@@ -127,21 +127,29 @@ func main() {
 	}
 
 	apiSrv := backend.NewServer(st, orch, auth, archive, web.Handler(), log, exportSpoolDir)
-	// Template catalog sync (#85) mirrors nuclei-templates into Postgres. Like
-	// S3_ENDPOINT / OIDC_ISSUER, an empty TEMPLATE_SYNC_REPO disables the feature
-	// (a full clone is ~1 GB of .git and pointless in a headless dev stack).
-	if cfg := templateSyncConfig(); cfg.Repo == "" {
-		log.Warn("TEMPLATE_SYNC_REPO empty — upstream template catalog sync is DISABLED")
+	// Template catalog sync (#85, #343): TEMPLATE_SYNC_REPO / TEMPLATE_SYNC_REF
+	// seed the DB-backed source exactly once at startup; afterward the DB wins
+	// (env drift only logs a note, it is never re-applied) and admins switch the
+	// source in the UI. The syncer goroutine always runs: an empty stored repo
+	// means upstream sync is disabled while custom templates and distribution
+	// keep working.
+	syncCfg := templateSyncerConfig()
+	source, err := backend.SeedTemplateSyncConfig(ctx, st, templateSyncSourceFromEnv(), log)
+	if err != nil {
+		log.Error("seed template sync source", "err", err)
+		os.Exit(1)
+	}
+	templateSyncer, err := backend.NewTemplateSyncer(st, syncCfg, log)
+	if err != nil {
+		log.Error("configure template sync", "err", err)
+		os.Exit(1)
+	}
+	apiSrv.SetTemplateSyncer(templateSyncer)
+	templateSyncer.Start(ctx)
+	if source.Repo == "" {
+		log.Warn("template sync source repository is empty — upstream template catalog sync is DISABLED")
 	} else {
-		templateSyncer, err := backend.NewTemplateSyncer(st, cfg, log)
-		if err != nil {
-			log.Error("configure template sync", "err", err)
-			os.Exit(1)
-		}
-		apiSrv.SetTemplateSyncer(templateSyncer)
-		templateSyncer.Start(ctx)
-		log.Info("template syncer started", "repo", cfg.Repo, "ref", cfg.Ref, "dir", cfg.Dir)
-
+		log.Info("template syncer started", "repo", backend.SafeTemplateRepo(source.Repo), "ref", source.Ref, "dir", syncCfg.Dir)
 	}
 	// Template distribution (#85) also serves custom-only catalogs when upstream
 	// sync is disabled: hourly idle pushes, admin "sync now", and the mandatory
@@ -518,27 +526,36 @@ func templateDistributeInterval() time.Duration {
 	return time.Hour
 }
 
-// templateSyncConfig is deliberately backend-only: scanner nodes receive a
+// templateSyncerConfig is deliberately backend-only: scanner nodes receive a
 // resolved, immutable bundle in a later #85 slice and never clone upstream
-// repositories themselves. "latest" resolves to the highest stable semver tag.
-// The repo defaults to the community catalog (zero-config deployment), but an
-// explicitly empty TEMPLATE_SYNC_REPO disables sync — hence LookupEnv, so an
-// empty value is honored rather than falling back to the default.
-func templateSyncConfig() backend.TemplateSyncerConfig {
+// repositories themselves. TEMPLATE_SYNC_INTERVAL and TEMPLATE_SYNC_DIR stay
+// env-only; the repo/ref live in the DB (seeded once from
+// TEMPLATE_SYNC_REPO/TEMPLATE_SYNC_REF, switchable at runtime — #343).
+func templateSyncerConfig() backend.TemplateSyncerConfig {
 	interval := 6 * time.Hour
 	if v := os.Getenv("TEMPLATE_SYNC_INTERVAL"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			interval = d
 		}
 	}
+	return backend.TemplateSyncerConfig{
+		Interval: interval,
+		Dir:      envOr("TEMPLATE_SYNC_DIR", "/tmp/nsc-template-sync"),
+	}
+}
+
+// templateSyncSourceFromEnv reads the seed values, honoring the documented
+// semantics: the repo defaults to the community catalog (zero-config
+// deployment), but an explicitly empty TEMPLATE_SYNC_REPO disables sync — hence
+// LookupEnv, so an empty value is honored rather than falling back to the
+// default.
+func templateSyncSourceFromEnv() store.TemplateSyncSource {
 	repo := defaultTemplateRepo
 	if v, ok := os.LookupEnv("TEMPLATE_SYNC_REPO"); ok {
 		repo = v
 	}
-	return backend.TemplateSyncerConfig{
-		Interval: interval,
-		Repo:     repo,
-		Ref:      envOr("TEMPLATE_SYNC_REF", "latest"),
-		Dir:      envOr("TEMPLATE_SYNC_DIR", "/tmp/nsc-template-sync"),
+	return store.TemplateSyncSource{
+		Repo: repo,
+		Ref:  envOr("TEMPLATE_SYNC_REF", "latest"),
 	}
 }

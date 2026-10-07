@@ -63,6 +63,42 @@ type TemplateSyncStats struct {
 	Skipped int
 }
 
+// TemplateSetMemberLoss is one exact template set whose stored membership
+// includes templates a candidate source would tombstone (#343). Members are
+// kept (they stay pointing at the tombstoned ids and come back if the template
+// reappears upstream); the counts exist so the confirm dialog can state the
+// blast radius before an admin applies the switch.
+type TemplateSetMemberLoss struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	MemberCount int    `json:"member_count"`
+	LosingCount int    `json:"losing_count"`
+}
+
+// TemplateSyncPreview is the dry-run projection for a candidate upstream
+// source (#343): what a sync against it would add / change / remove compared
+// with the stored catalog (same rules ApplyUpstreamTemplates reconciles by),
+// plus the exact sets that would lose active members. The syncer fills the
+// counts; the Repo value is the sanitized URL (credentials never leave).
+type TemplateSyncPreview struct {
+	Repo         string                  `json:"repo"`
+	Ref          string                  `json:"ref"`
+	RefSource    string                  `json:"ref_source,omitempty"`
+	DefaultRepo  bool                    `json:"default_repo"`
+	Commit       string                  `json:"commit,omitempty"`
+	Skipped      int                     `json:"skipped"`
+	Added        int                     `json:"added"`
+	Changed      int                     `json:"changed"`
+	Removed      int                     `json:"removed"`
+	AffectedSets []TemplateSetMemberLoss `json:"affected_sets"`
+}
+
+// UpstreamTemplateState is one upstream template row's reconcilable state.
+type UpstreamTemplateState struct {
+	Hash         string
+	Availability string
+}
+
 // TemplateFilter narrows a catalog listing. Every field is optional; an empty
 // field does not constrain. It compiles to a fully parameterized WHERE clause —
 // user values never touch the SQL text.
@@ -641,6 +677,58 @@ func (s *Store) ApplyUpstreamTemplates(ctx context.Context, runID, ref string, i
 		return TemplateSyncStats{}, err
 	}
 	return stats, nil
+}
+
+// UpstreamTemplateStates returns every upstream catalog row's content hash and
+// availability, keyed by template id. The source-switch dry run (#343) diffs a
+// candidate snapshot against this with the same rules ApplyUpstreamTemplates
+// reconciles by, without writing anything.
+func (s *Store) UpstreamTemplateStates(ctx context.Context) (map[string]UpstreamTemplateState, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, content_sha256, availability FROM templates WHERE source = 'upstream'`)
+	if err != nil {
+		return nil, fmt.Errorf("list upstream template states: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[string]UpstreamTemplateState)
+	for rows.Next() {
+		var id string
+		var st UpstreamTemplateState
+		if err := rows.Scan(&id, &st.Hash, &st.Availability); err != nil {
+			return nil, err
+		}
+		out[id] = st
+	}
+	return out, rows.Err()
+}
+
+// TemplateSetsLosingMembers returns the exact template sets whose stored
+// membership includes any of the given ids, with each set's total member count
+// and how many of its members are in the id list — the impact preview for a
+// template-source switch (#343). Ordered by name for a stable dialog.
+func (s *Store) TemplateSetsLosingMembers(ctx context.Context, ids []string) ([]TemplateSetMemberLoss, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT ts.id, ts.name,
+		       (SELECT count(*) FROM template_set_members m2 WHERE m2.template_set_id = ts.id),
+		       count(m.template_id)
+		  FROM template_sets ts
+		  JOIN template_set_members m ON m.template_set_id = ts.id
+		 WHERE ts.mode = 'exact' AND m.template_id = ANY($1)
+		 GROUP BY ts.id, ts.name
+		 ORDER BY lower(ts.name), ts.id`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("list template sets losing members: %w", err)
+	}
+	defer rows.Close()
+	var out []TemplateSetMemberLoss
+	for rows.Next() {
+		var l TemplateSetMemberLoss
+		if err := rows.Scan(&l.ID, &l.Name, &l.MemberCount, &l.LosingCount); err != nil {
+			return nil, err
+		}
+		out = append(out, l)
+	}
+	return out, rows.Err()
 }
 
 // ReapStaleTemplateSyncRuns marks 'running' rows that have outlived the sync

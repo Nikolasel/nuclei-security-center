@@ -97,7 +97,16 @@ templates or an explicit set as a YAML tarball / JSON portability document; cust
 lossless, upstream entries stay sync-owned, and imports apply conflict policy plus set membership in
 one transaction. `internal/backend/template_syncer.go`,
 `internal/backend/distributor.go`, `internal/store/templates*.go`, and
-`internal/scanner/bundle.go`. Custom template create/update is additionally fail-closed behind
+`internal/scanner/bundle.go`. **The upstream source is admin-switchable at runtime (#343):** the
+repository and ref live on the `app_settings` singleton — env (`TEMPLATE_SYNC_REPO` /
+`TEMPLATE_SYNC_REF`) seeds the NULL columns exactly once at startup, after which the database
+wins and a differing env only logs drift. The syncer reads the effective source from the DB at
+the start of every run, so a switch (`PUT /api/templates/sync/config`, admin, audited
+`config_changed` / `template_sync.config_update`) queues an immediate reconcile without a
+redeploy; `POST /api/templates/sync/preview` (admin) is the read-only dry run reporting
+added/changed/removed counts and the exact sets that would lose members. Repos may embed
+credentials (stored verbatim, returned only sanitized); an empty repository disables upstream
+sync at runtime. Custom template create/update is additionally fail-closed behind
 authoritative validation by a known-healthy scanner node: authenticated
 `POST /v1/templates/validate` runs the pinned `nuclei -validate` with no target, a bounded body /
 timeout / diagnostic response, and reports the Nuclei version; invalid YAML maps to backend `400`,

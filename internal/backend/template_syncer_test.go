@@ -12,20 +12,55 @@ import (
 	"time"
 
 	git "github.com/go-git/go-git/v5"
+
+	"github.com/Nikolasel/nuclei-security-center/internal/store"
 )
 
 func TestTemplateSyncStatusRedactsRepositorySecrets(t *testing.T) {
-	s := &TemplateSyncer{config: TemplateSyncerConfig{
-		Interval: 6 * time.Hour,
-		Repo:     "https://user:secret@example.test/catalog.git?token=hidden#fragment",
-		Ref:      "v1.2.3",
-	}}
-	got := s.Status()
+	s := &TemplateSyncer{config: TemplateSyncerConfig{Interval: 6 * time.Hour}}
+	got := s.Status(store.TemplateSyncSource{
+		Repo: "https://user:secret@example.test/catalog.git?token=hidden#fragment",
+		Ref:  "v1.2.3",
+	})
 	if got.Repo != "https://example.test/catalog.git" {
 		t.Fatalf("Repo = %q", got.Repo)
 	}
 	if !got.Enabled || got.Interval != "6h0m0s" || got.Ref != "v1.2.3" {
 		t.Fatalf("unexpected status: %+v", got)
+	}
+	if got.RefSource != templateSyncChannelCustom {
+		t.Fatalf("RefSource = %q, want custom", got.RefSource)
+	}
+	if got.DefaultRepo {
+		t.Fatalf("DefaultRepo = true for a foreign repository")
+	}
+}
+
+func TestTemplateSyncStatusChannelsAndDisabled(t *testing.T) {
+	s := &TemplateSyncer{config: TemplateSyncerConfig{Interval: time.Hour}}
+	for _, tc := range []struct {
+		repo, ref, wantChannel   string
+		wantDefault, wantEnabled bool
+	}{
+		{repo: "https://github.com/projectdiscovery/nuclei-templates.git", ref: "latest", wantChannel: templateSyncChannelStable, wantDefault: true, wantEnabled: true},
+		{repo: "https://github.com/projectdiscovery/nuclei-templates.git", ref: "main", wantChannel: templateSyncChannelPreview, wantDefault: true, wantEnabled: true},
+		{repo: "https://user:pw@github.com/projectdiscovery/nuclei-templates.git", ref: "v9.9.9", wantChannel: templateSyncChannelCustom, wantDefault: true, wantEnabled: true},
+		{repo: "https://example.test/fork.git", ref: "dev-branch", wantChannel: templateSyncChannelCustom, wantEnabled: true},
+		{repo: "", ref: "latest", wantChannel: "", wantEnabled: false},
+	} {
+		got := s.Status(store.TemplateSyncSource{Repo: tc.repo, Ref: tc.ref})
+		if got.Enabled != tc.wantEnabled {
+			t.Errorf("repo %q: Enabled = %v, want %v", tc.repo, got.Enabled, tc.wantEnabled)
+		}
+		if got.RefSource != tc.wantChannel {
+			t.Errorf("repo %q ref %q: RefSource = %q, want %q", tc.repo, tc.ref, got.RefSource, tc.wantChannel)
+		}
+		if got.DefaultRepo != tc.wantDefault {
+			t.Errorf("repo %q: DefaultRepo = %v, want %v", tc.repo, got.DefaultRepo, tc.wantDefault)
+		}
+		if got.Repo != SafeTemplateRepo(tc.repo) {
+			t.Errorf("repo %q: sanitized = %q", tc.repo, got.Repo)
+		}
 	}
 }
 
@@ -38,6 +73,8 @@ func TestTemplateSyncRequestsCoalesce(t *testing.T) {
 	}
 }
 
+// GET reports the DB-backed source (empty repo = disabled) even when the syncer
+// is wired; POST queueing still works.
 func TestTemplateSyncHTTPDisabledAndQueued(t *testing.T) {
 	s := &Server{}
 	rr := httptest.NewRecorder()
@@ -52,13 +89,16 @@ func TestTemplateSyncHTTPDisabledAndQueued(t *testing.T) {
 	}
 
 	s.templateSyncer = &TemplateSyncer{
-		config:  TemplateSyncerConfig{Interval: time.Hour, Repo: "https://example.test/catalog.git", Ref: "latest"},
+		config:  TemplateSyncerConfig{Interval: time.Hour},
 		trigger: make(chan struct{}, 1),
 	}
 	rr = httptest.NewRecorder()
 	s.handleGetTemplateSync(rr, httptest.NewRequest(http.MethodGet, "/api/templates/sync", nil))
-	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"enabled":true`) {
-		t.Fatalf("enabled status without store = %d %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"enabled":false`) {
+		t.Fatalf("status without store = %d %s, want disabled", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "github.com") {
+		t.Fatalf("status without store leaked a repository: %s", rr.Body.String())
 	}
 
 	rr = httptest.NewRecorder()

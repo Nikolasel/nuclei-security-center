@@ -18,6 +18,13 @@ delete scan history.
   `503`, and nothing is persisted.
 - Sync history is retained and shows added, updated, removed, skipped, digest, and template count.
 - A template removed upstream becomes unavailable rather than disappearing from history.
+- **The upstream source is runtime-switchable (#343):** an admin changes the repository/ref under
+  Templates → Sync → Change source. Saving runs a dry run (added/changed/removed counts plus the
+  exact sets that would lose members) and queues an immediate reconcile; template IDs, set
+  memberships, and history survive, and a template that returns upstream is restored. `latest`
+  (stable) and `main` (preview) are the channels for the ProjectDiscovery catalog; preview
+  templates may need a newer Nuclei engine than the pinned scanner. An empty repository disables
+  upstream sync — custom templates and node distribution keep working.
 
 Upgrade Nuclei by rebuilding/deploying the scanner image with the pinned version, then verify node
 capabilities and custom-template validation.

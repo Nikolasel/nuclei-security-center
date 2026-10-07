@@ -59,12 +59,15 @@ type envSpec struct {
 	Group       string
 	Default     string
 	Sensitive   bool
+	SeedOnly    bool
 	Kind        envKind
 	Description string
 }
 
 // EnvVariable is one row of GET /api/settings/environment. Effective is omitted
 // (JSON null) for secrets whose raw value must never leave the backend.
+// SeedOnly marks variables that seed a DB-backed setting exactly once at
+// startup (#343): afterward the stored value wins and is what Effective shows.
 type EnvVariable struct {
 	Name        string  `json:"name"`
 	Group       string  `json:"group"`
@@ -72,6 +75,7 @@ type EnvVariable struct {
 	Effective   *string `json:"effective"`
 	Default     string  `json:"default"`
 	Sensitive   bool    `json:"sensitive"`
+	SeedOnly    bool    `json:"seed_only"`
 	Description string  `json:"description"`
 }
 
@@ -118,9 +122,9 @@ var backendEnvRegistry = []envSpec{
 	{Name: "S3_REGION", Group: envGroupObjectStore, Default: "us-east-1", Kind: envKindString, Description: "S3 region. Must match the store's configured region."},
 	{Name: "S3_USE_SSL", Group: envGroupObjectStore, Default: "true", Kind: envKindBoolNotFalse, Description: "TLS for the S3 endpoint. Set false only for local plaintext HTTP."},
 
-	{Name: "TEMPLATE_SYNC_INTERVAL", Group: envGroupTemplate, Default: "6h", Kind: envKindDuration, Description: "Upstream catalog refresh cadence."},
-	{Name: "TEMPLATE_SYNC_REPO", Group: envGroupTemplate, Default: defaultTemplateRepo, Kind: envKindTemplateRepo, Description: "Upstream catalog Git repository. Set to an explicit empty value to disable upstream sync while retaining custom templates and distribution."},
-	{Name: "TEMPLATE_SYNC_REF", Group: envGroupTemplate, Default: "latest", Kind: envKindString, Description: "Revision to mirror. latest is the highest stable tag; tags and SHAs are reproducible, branches advance."},
+	{Name: "TEMPLATE_SYNC_INTERVAL", Group: envGroupTemplate, Default: "6h", Kind: envKindDuration, Description: "Upstream catalog refresh cadence. Env-only; the source repository and ref are runtime settings."},
+	{Name: "TEMPLATE_SYNC_REPO", Group: envGroupTemplate, Default: defaultTemplateRepo, Kind: envKindTemplateRepo, SeedOnly: true, Description: "Upstream catalog Git repository. Seeds the DB-backed source once at startup; afterward the admin UI (Templates → Sync) is authoritative and this variable only matters when never seeded. An explicit empty value disables upstream sync while retaining custom templates and distribution."},
+	{Name: "TEMPLATE_SYNC_REF", Group: envGroupTemplate, Default: "latest", Kind: envKindString, SeedOnly: true, Description: "Revision to mirror. Seeds the DB-backed source once at startup; afterward the admin UI is authoritative. latest is the highest stable tag; tags and SHAs are reproducible, branches advance."},
 	{Name: "TEMPLATE_SYNC_DIR", Group: envGroupTemplate, Default: "/tmp/nsc-template-sync", Kind: envKindPath, Description: "Backend clone cache. Mount persistent storage to avoid repeated full clones."},
 	{Name: "TEMPLATE_DISTRIBUTE_INTERVAL", Group: envGroupTemplate, Default: "1h", Kind: envKindDuration, Description: "How often stale, idle scanner nodes receive the current full catalog bundle. Pre-dispatch top-up still runs."},
 
@@ -160,6 +164,7 @@ func resolveEnvSpec(spec envSpec) EnvVariable {
 		Set:         set,
 		Default:     spec.Default,
 		Sensitive:   spec.Sensitive,
+		SeedOnly:    spec.SeedOnly,
 		Description: spec.Description,
 	}
 	switch spec.Kind {

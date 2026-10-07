@@ -88,6 +88,21 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   node reporting an older digest can be matched to catalog history (a stray malformed file is
   skipped-and-counted, not fatal; the run fails closed only if nothing parses). Runs are retained
   in PostgreSQL and exposed through a paginated history; NSC does not silently prune them.
+- **app_settings (template-sync source)** — the upstream source (repository + ref) is a runtime
+  setting on the settings singleton (#343): the entrypoint seeds the NULL columns once from
+  `TEMPLATE_SYNC_REPO`/`TEMPLATE_SYNC_REF`, and afterward the database wins — a differing
+  environment only logs a drift note. The syncer reads the effective source from the database at
+  the start of every run (periodic, on-demand, and post-switch), so an admin switch
+  (`PUT /api/templates/sync/config`, audited) takes effect without a redeploy and replicas stay
+  consistent. An empty stored repository disables upstream sync (custom templates and node
+  distribution keep working). Repository URLs may embed credentials: they are stored verbatim but
+  only ever returned through sanitization (userinfo/query stripped), and an update that omits the
+  repository keeps the stored value (write-only, like node tokens). Switching reconciles in
+  place — the full-snapshot upsert + tombstone keeps template ids, exact-set memberships,
+  exclusions, lifecycle history, and scan provenance intact, and returning templates are restored
+  by the `ON CONFLICT` upsert — and the admin dry run (`POST /api/templates/sync/preview`) reports
+  added/changed/removed counts plus the exact sets that would lose active members before the
+  switch is confirmed.
 - **template_sets** — an explicit `mode`: `exact` uses curated membership in
   `template_set_members`, `all` resolves every active catalog template at scan time, and `exclude`
   resolves every active template except explicit rows in `template_set_exclusions`. The retired POC

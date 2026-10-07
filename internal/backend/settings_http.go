@@ -20,8 +20,35 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, settings)
 }
 
-func (s *Server) handleGetEnvironment(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, EnvConfigResponse{Variables: resolveEnvConfig()})
+func (s *Server) handleGetEnvironment(w http.ResponseWriter, r *http.Request) {
+	resp := EnvConfigResponse{Variables: resolveEnvConfig()}
+	// Seed-only template-sync source (#343): after the one-time startup seed the
+	// DB wins, so the effective value is what app_settings holds. The
+	// repository is shown sanitized — credentials never leave the backend.
+	if s.store != nil {
+		src, err := s.store.GetTemplateSyncSource(r.Context())
+		if err != nil {
+			s.serverError(w, "read template sync source", err)
+			return
+		}
+		if src.Repo != "" || src.Ref != "" {
+			for i := range resp.Variables {
+				switch resp.Variables[i].Name {
+				case "TEMPLATE_SYNC_REPO":
+					if src.Repo == "" {
+						resp.Variables[i].Effective = strPtr("")
+					} else {
+						resp.Variables[i].Effective = strPtr(SafeTemplateRepo(src.Repo))
+					}
+				case "TEMPLATE_SYNC_REF":
+					if src.Ref != "" {
+						resp.Variables[i].Effective = strPtr(src.Ref)
+					}
+				}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // updateSettingsRequest is the PUT /api/settings body. RetentionDays is a pointer

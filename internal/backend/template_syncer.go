@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	git "github.com/go-git/go-git/v5"
@@ -25,53 +26,82 @@ import (
 
 // syncTimeout bounds one refresh (clone/fetch + apply). It also defines
 // "stale": a template_sync_runs row still 'running' after this long belongs to a
-// crashed process and is reaped on the next tick.
+// crashed process and is reaped on the next tick. The source-switch probe
+// (preview / resolve at save time, #343) shares this budget because a first
+// probe on an empty cache does the same clone work.
 const syncTimeout = 30 * time.Minute
 
 // TemplateSyncerConfig controls the backend-owned mirror of the community
 // template catalog. The working directory is a cache only: PostgreSQL holds the
-// authoritative YAML after a successful run.
+// authoritative YAML after a successful run. Repo and ref are deliberately not
+// here — they live on the app_settings singleton (#343) so admins can switch
+// sources at runtime; the syncer reads them from the store at the start of
+// every run.
 type TemplateSyncerConfig struct {
 	Interval time.Duration
-	Repo     string
-	Ref      string
 	Dir      string
 }
 
 // TemplateSyncer periodically fetches one upstream template repository and
 // mirrors its YAML into the local catalog. It never exposes the clone to
-// scanners; a later bundle-distribution slice will use the stored YAML.
+// scanners; a later bundle-distribution slice will use the stored YAML. The
+// goroutine always runs: an empty stored repository is the runtime
+// "upstream sync disabled" state, checked per run.
 type TemplateSyncer struct {
 	store   *store.Store
 	config  TemplateSyncerConfig
 	log     *slog.Logger
 	trigger chan struct{}
+	// worktree guards the clone cache's fetch/checkout against a concurrent
+	// source probe (#343); both come from the HTTP handler and the sync loop.
+	worktree sync.Mutex
 }
 
 // TemplateSyncStatus is the safe, read-only configuration shown in the SPA.
 // The cache directory is intentionally omitted, and credentials/query strings
 // are removed from HTTP(S) repository URLs before they leave the backend.
+// RefSource is the channel label derived from the stored ref (stable = latest,
+// preview = main, custom = anything else); DefaultRepo reports whether the
+// sanitized repository is the ProjectDiscovery community catalog.
 type TemplateSyncStatus struct {
 	Enabled         bool   `json:"enabled"`
 	Interval        string `json:"interval,omitempty"`
 	Repo            string `json:"repo,omitempty"`
 	Ref             string `json:"ref,omitempty"`
+	RefSource       string `json:"ref_source,omitempty"`
+	DefaultRepo     bool   `json:"default_repo"`
 	TemplatesCommit string `json:"templates_commit,omitempty"`
 	TemplateCount   int    `json:"template_count"`
 }
 
-// NewTemplateSyncer validates and wires a catalog synchronizer. "latest" is a
-// deliberate ref value: it resolves to the highest stable semver Git tag,
-// avoiding a mutable default branch while retaining a zero-config setup.
+// templateSyncChannels are the ref-channel labels exposed by the status and
+// preview APIs. `latest` keeps its magic meaning (highest stable semver tag)
+// for any repository; `main` is the ProjectDiscovery preview channel.
+const (
+	templateSyncChannelStable  = "stable"
+	templateSyncChannelPreview = "preview"
+	templateSyncChannelCustom  = "custom"
+)
+
+// templateSyncChannel maps a stored ref to its channel label. The label is
+// purely derived from the ref so it cannot drift from what a sync would do.
+func templateSyncChannel(ref string) string {
+	switch ref {
+	case "latest":
+		return templateSyncChannelStable
+	case "main":
+		return templateSyncChannelPreview
+	default:
+		return templateSyncChannelCustom
+	}
+}
+
+// NewTemplateSyncer wires a catalog synchronizer. The repository and ref come
+// from the store (seeded from TEMPLATE_SYNC_REPO / TEMPLATE_SYNC_REF by the
+// entrypoint), so they are validated per run rather than here.
 func NewTemplateSyncer(st *store.Store, cfg TemplateSyncerConfig, log *slog.Logger) (*TemplateSyncer, error) {
 	if cfg.Interval <= 0 {
 		return nil, errors.New("template sync interval must be positive")
-	}
-	if strings.TrimSpace(cfg.Repo) == "" {
-		return nil, errors.New("template sync repo is required")
-	}
-	if strings.TrimSpace(cfg.Ref) == "" {
-		return nil, errors.New("template sync ref is required")
 	}
 	if strings.TrimSpace(cfg.Dir) == "" {
 		return nil, errors.New("template sync directory is required")
@@ -113,15 +143,29 @@ func (s *TemplateSyncer) RequestSync() {
 	}
 }
 
-// Status returns the non-secret configuration needed by the Sync tab.
-func (s *TemplateSyncer) Status() TemplateSyncStatus {
-	return TemplateSyncStatus{
-		Enabled: true, Interval: s.config.Interval.String(),
-		Repo: safeTemplateRepo(s.config.Repo), Ref: s.config.Ref,
+// Status returns the non-secret configuration needed by the Sync tab, built
+// from the DB-backed source (#343): an empty repository means upstream sync is
+// disabled, and credentials never leave the backend.
+func (s *TemplateSyncer) Status(src store.TemplateSyncSource) TemplateSyncStatus {
+	enabled := strings.TrimSpace(src.Repo) != ""
+	st := TemplateSyncStatus{
+		Enabled:  enabled,
+		Interval: s.config.Interval.String(),
+		Repo:     SafeTemplateRepo(src.Repo),
+		Ref:      src.Ref,
 	}
+	if enabled {
+		st.RefSource = templateSyncChannel(src.Ref)
+	}
+	st.DefaultRepo = isDefaultTemplateRepo(src.Repo)
+	return st
 }
 
-func safeTemplateRepo(raw string) string {
+// SafeTemplateRepo returns the credential-free form of a repository URL
+// (userinfo + query + fragment stripped) — the only repository shape the API
+// and logs expose. Package-level so the entrypoint can log seeded and drifted
+// source values without leaking embedded credentials.
+func SafeTemplateRepo(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme == "" {
 		return raw
@@ -132,23 +176,60 @@ func safeTemplateRepo(raw string) string {
 	return u.String()
 }
 
+// isDefaultTemplateRepo reports whether the stored repository (after
+// sanitization) is the ProjectDiscovery community catalog, so the UI can offer
+// the Stable/Preview channel choice for it.
+func isDefaultTemplateRepo(raw string) bool {
+	return strings.TrimSpace(raw) != "" && SafeTemplateRepo(strings.TrimSpace(raw)) == defaultTemplateRepo
+}
+
 func (s *TemplateSyncer) sync(ctx context.Context) {
 	ctx, cancel := context.WithTimeout(ctx, syncTimeout)
 	defer cancel()
 	// A crash mid-sync leaves a template_sync_runs row stuck at 'running'
 	// forever; reap any run older than our own timeout before starting a new one
-	// so the runs view reflects reality.
+	// so the runs view reflects reality. This also reaps runs left behind
+	// before the source was switched to an empty repo (disabled).
 	if n, err := s.store.ReapStaleTemplateSyncRuns(ctx, syncTimeout); err != nil {
 		s.log.Warn("reap stale template sync runs", "err", err)
 	} else if n > 0 {
 		s.log.Warn("reaped stale template sync runs", "count", n)
 	}
+	// The DB is the source of record for repo/ref (#343): each run resolves the
+	// effective configuration fresh, so periodic, on-demand, and post-switch
+	// runs all observe the same current value, and multiple backend replicas
+	// stay consistent.
+	src, err := s.store.GetTemplateSyncSource(ctx)
+	if err != nil {
+		s.log.Error("read template sync source", "err", err)
+		return
+	}
+	if strings.TrimSpace(src.Repo) == "" {
+		s.log.Debug("template sync skipped: upstream repository is empty (disabled)")
+		return
+	}
+	ref := strings.TrimSpace(src.Ref)
+	if ref == "" {
+		// The seed always pairs a repo with a ref; an admin update validates the
+		// ref. Treat a degraded row as the documented default rather than
+		// failing every run.
+		ref = "latest"
+	}
+	s.run(ctx, strings.TrimSpace(src.Repo), ref)
+}
+
+// run performs one full refresh against the given source: probe the clone
+// cache (under the worktree lock, shared with source probes #343), then apply
+// the snapshot to the store.
+func (s *TemplateSyncer) run(ctx context.Context, repo, ref string) {
 	run, err := s.store.StartTemplateSync(ctx)
 	if err != nil {
 		s.log.Error("start template sync", "err", err)
 		return
 	}
-	ref, entries, skipped, err := syncTemplateRepository(ctx, s.config, s.log)
+	s.worktree.Lock()
+	commit, entries, skipped, err := syncTemplateRepository(ctx, s.config.Dir, repo, ref, s.log)
+	s.worktree.Unlock()
 	if err != nil {
 		if ferr := s.store.FailTemplateSync(ctx, run.ID, err); ferr != nil {
 			s.log.Error("record failed template sync", "sync_err", err, "record_err", ferr)
@@ -157,7 +238,7 @@ func (s *TemplateSyncer) sync(ctx context.Context) {
 		s.log.Error("template sync failed", "err", err)
 		return
 	}
-	stats, err := s.store.ApplyUpstreamTemplates(ctx, run.ID, ref, entries, skipped)
+	stats, err := s.store.ApplyUpstreamTemplates(ctx, run.ID, commit, entries, skipped)
 	if err != nil {
 		if ferr := s.store.FailTemplateSync(ctx, run.ID, err); ferr != nil {
 			s.log.Error("record failed template sync", "sync_err", err, "record_err", ferr)
@@ -170,24 +251,98 @@ func (s *TemplateSyncer) sync(ctx context.Context) {
 	// mutation emits (see logSystemAudit) — a headless job, not a user.
 	s.log.Info("template sync complete", "event", "audit", "event_id", eventConfigChanged,
 		"action", "templates.sync", "object_type", "template_sync", "object_id", run.ID,
-		"actor_subject", "system", "actor_type", "system", "ref", ref,
+		"actor_subject", "system", "actor_type", "system", "repo", SafeTemplateRepo(repo), "ref", ref,
 		"added", stats.Added, "updated", stats.Updated, "removed", stats.Removed, "skipped", stats.Skipped)
 }
 
-func syncTemplateRepository(ctx context.Context, cfg TemplateSyncerConfig, log *slog.Logger) (string, []store.Template, int, error) {
-	repo, err := openOrCloneTemplateRepo(ctx, cfg.Dir, cfg.Repo)
+func syncTemplateRepository(ctx context.Context, dir, repo, ref string, log *slog.Logger) (string, []store.Template, int, error) {
+	r, err := openOrCloneTemplateRepo(ctx, dir, repo)
 	if err != nil {
 		return "", nil, 0, err
 	}
-	commit, err := checkoutTemplateRef(repo, cfg.Ref)
+	commit, err := checkoutTemplateRef(r, ref)
 	if err != nil {
 		return "", nil, 0, err
 	}
-	entries, skipped, err := readTemplateCatalog(cfg.Dir, log)
+	entries, skipped, err := readTemplateCatalog(dir, log)
 	if err != nil {
 		return "", nil, 0, err
 	}
 	return commit.String(), entries, skipped, nil
+}
+
+// PreviewSource resolves a candidate repo/ref in the clone cache — fetch,
+// checkout, and catalog walk — without writing anything to the store (#343).
+// The candidate snapshot is diffed against the stored upstream catalog the same
+// way ApplyUpstreamTemplates reconciles, so the returned counts are what the
+// real sync would record: added (unknown ids), changed (different content or a
+// tombstoned id returning), removed (active ids absent from the snapshot),
+// plus the exact template sets whose stored membership would be tombstoned.
+// A failed resolve (unreachable repo, unknown ref) is the caller's validation
+// error; the worktree lock keeps this off a concurrent sync's fetch/checkout.
+func (s *TemplateSyncer) PreviewSource(ctx context.Context, repo, ref string) (store.TemplateSyncPreview, error) {
+	preview := store.TemplateSyncPreview{
+		Repo: SafeTemplateRepo(repo), Ref: ref,
+		RefSource: templateSyncChannel(ref), DefaultRepo: isDefaultTemplateRepo(repo),
+		AffectedSets: []store.TemplateSetMemberLoss{},
+	}
+	s.worktree.Lock()
+	commit, entries, skipped, err := syncTemplateRepository(ctx, s.config.Dir, repo, ref, s.log)
+	s.worktree.Unlock()
+	if err != nil {
+		return preview, err
+	}
+	preview.Commit = commit
+	preview.Skipped = skipped
+	states, err := s.store.UpstreamTemplateStates(ctx)
+	if err != nil {
+		return preview, err
+	}
+	incoming := make(map[string]struct{}, len(entries))
+	for _, t := range entries {
+		incoming[t.ID] = struct{}{}
+		old, found := states[t.ID]
+		switch {
+		case !found:
+			preview.Added++
+		case old.Hash != t.ContentSHA256 || old.Availability != "active":
+			preview.Changed++
+		}
+	}
+	var removed []string
+	for id, st := range states {
+		if _, ok := incoming[id]; ok || st.Availability != "active" {
+			continue
+		}
+		removed = append(removed, id)
+	}
+	preview.Removed = len(removed)
+	if len(removed) > 0 {
+		losses, err := s.store.TemplateSetsLosingMembers(ctx, removed)
+		if err != nil {
+			return preview, err
+		}
+		preview.AffectedSets = losses
+	}
+	return preview, nil
+}
+
+// resolveTemplateSource probes a candidate repo/ref at save time (#343):
+// fetch into the clone cache and resolve the ref — nothing else, and no DB
+// writes. The returned commit is informational. Sharing the worktree lock with
+// sync/preview keeps three concurrent git fetches out of one cache.
+func (s *TemplateSyncer) resolveTemplateSource(ctx context.Context, repo, ref string) (string, error) {
+	s.worktree.Lock()
+	defer s.worktree.Unlock()
+	r, err := openOrCloneTemplateRepo(ctx, s.config.Dir, repo)
+	if err != nil {
+		return "", err
+	}
+	hash, err := resolveRefHash(r, ref)
+	if err != nil {
+		return "", err
+	}
+	return hash.String(), nil
 }
 
 func openOrCloneTemplateRepo(ctx context.Context, dir, remote string) (*git.Repository, error) {
@@ -239,13 +394,7 @@ func setTemplateRemote(repo *git.Repository, remote string) error {
 }
 
 func checkoutTemplateRef(repo *git.Repository, ref string) (plumbing.Hash, error) {
-	var hash plumbing.Hash
-	var err error
-	if ref == "latest" {
-		hash, err = latestReleaseCommit(repo)
-	} else {
-		hash, err = resolveTemplateRef(repo, ref)
-	}
+	hash, err := resolveRefHash(repo, ref)
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
@@ -257,6 +406,15 @@ func checkoutTemplateRef(repo *git.Repository, ref string) (plumbing.Hash, error
 		return plumbing.ZeroHash, fmt.Errorf("checkout template ref: %w", err)
 	}
 	return hash, nil
+}
+
+// resolveRefHash maps the stored ref vocabulary to a commit: "latest" is the
+// highest stable semver tag, anything else a git ref name or SHA.
+func resolveRefHash(repo *git.Repository, ref string) (plumbing.Hash, error) {
+	if ref == "latest" {
+		return latestReleaseCommit(repo)
+	}
+	return resolveTemplateRef(repo, ref)
 }
 
 func resolveTemplateRef(repo *git.Repository, ref string) (plumbing.Hash, error) {

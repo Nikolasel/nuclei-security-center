@@ -236,7 +236,18 @@ func (s *Server) handleDeleteTemplate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetTemplateSync(w http.ResponseWriter, r *http.Request) {
 	status := TemplateSyncStatus{Enabled: false}
 	if s.templateSyncer != nil {
-		status = s.templateSyncer.Status()
+		// The source of record is the app_settings row (#343); without a store
+		// (tests) only the interval is reportable.
+		src := store.TemplateSyncSource{}
+		if s.store != nil {
+			var err error
+			src, err = s.store.GetTemplateSyncSource(r.Context())
+			if err != nil {
+				s.serverError(w, "read template sync source", err)
+				return
+			}
+		}
+		status = s.templateSyncer.Status(src)
 	}
 	if s.store == nil {
 		writeJSON(w, http.StatusOK, status)
@@ -254,10 +265,23 @@ func (s *Server) handleGetTemplateSync(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, status)
 }
 
-func (s *Server) handleRequestTemplateSync(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleRequestTemplateSync(w http.ResponseWriter, r *http.Request) {
 	if s.templateSyncer == nil {
 		http.Error(w, "upstream template sync is disabled", http.StatusServiceUnavailable)
 		return
+	}
+	// An empty stored repository disables upstream sync at runtime (#343):
+	// refuse the explicit request instead of queueing a silent no-op.
+	if s.store != nil {
+		src, err := s.store.GetTemplateSyncSource(r.Context())
+		if err != nil {
+			s.serverError(w, "read template sync source", err)
+			return
+		}
+		if strings.TrimSpace(src.Repo) == "" {
+			http.Error(w, "upstream template sync is disabled: no repository is configured", http.StatusServiceUnavailable)
+			return
+		}
 	}
 	s.templateSyncer.RequestSync()
 	writeJSON(w, http.StatusAccepted, map[string]bool{"queued": true})

@@ -186,8 +186,39 @@ export interface TemplateSyncStatus {
   interval?: string;
   repo?: string;
   ref?: string;
+  // ref_source derives the channel label from the stored ref: "stable" (latest
+  // = highest stable tag), "preview" (main), or "custom" (anything else).
+  ref_source?: "stable" | "preview" | "custom";
+  // default_repo is true when the repository equals the ProjectDiscovery
+  // default, so the UI can offer the Stable/Preview channel picker.
+  default_repo: boolean;
   templates_commit?: string;
   template_count: number;
+}
+
+// TemplateSetMemberLoss (in a preview) is one exact set whose membership
+// includes templates the candidate source would tombstone. Members are kept
+// and return if the template reappears upstream.
+export interface TemplateSetMemberLoss {
+  id: string;
+  name: string;
+  member_count: number;
+  losing_count: number;
+}
+
+// TemplateSyncPreview is the admin dry-run (POST /api/templates/sync/preview):
+// what a sync against a candidate repo/ref would change, with no DB writes.
+export interface TemplateSyncPreview {
+  repo: string;
+  ref: string;
+  ref_source?: "stable" | "preview" | "custom";
+  default_repo: boolean;
+  commit?: string;
+  skipped: number;
+  added: number;
+  changed: number;
+  removed: number;
+  affected_sets: TemplateSetMemberLoss[];
 }
 
 // ScanPolicy (#87, reshaped by #137) is the reusable HOW-to-scan configuration:
@@ -552,6 +583,8 @@ export interface EnvVariable {
   effective: string | null;
   default: string;
   sensitive: boolean;
+  /** Seeds a DB-backed setting once at startup; afterward the stored value wins and Effective shows it. */
+  seed_only: boolean;
   /** Short purpose from the backend env registry (same text as Configuration.md). */
   description: string;
 }
@@ -863,6 +896,10 @@ export const api = {
   getTemplateSync: () => request<TemplateSyncStatus>("GET", "/api/templates/sync"),
   requestTemplateSync: () =>
     request<{ queued: boolean }>("POST", "/api/templates/sync"),
+  updateTemplateSyncConfig: (body: { repo?: string; ref: string }) =>
+    request<TemplateSyncStatus>("PUT", "/api/templates/sync/config", body),
+  templateSyncPreview: (body: { repo?: string; ref: string }) =>
+    request<TemplateSyncPreview>("POST", "/api/templates/sync/preview", body),
   listTemplateSyncRuns: (limit = 20, offset = 0) =>
     request<Page<TemplateSyncRun>>(
       "GET",

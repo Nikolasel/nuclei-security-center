@@ -17,7 +17,6 @@ import (
 	"time"
 
 	git "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
@@ -256,7 +255,7 @@ func (s *TemplateSyncer) run(ctx context.Context, repo, ref string) {
 }
 
 func syncTemplateRepository(ctx context.Context, dir, repo, ref string, log *slog.Logger) (string, []store.Template, int, error) {
-	r, err := openOrCloneTemplateRepo(ctx, dir, repo)
+	r, err := openOrCloneTemplateRepo(ctx, dir, repo, log)
 	if err != nil {
 		return "", nil, 0, err
 	}
@@ -334,7 +333,7 @@ func (s *TemplateSyncer) PreviewSource(ctx context.Context, repo, ref string) (s
 func (s *TemplateSyncer) resolveTemplateSource(ctx context.Context, repo, ref string) (string, error) {
 	s.worktree.Lock()
 	defer s.worktree.Unlock()
-	r, err := openOrCloneTemplateRepo(ctx, s.config.Dir, repo)
+	r, err := openOrCloneTemplateRepo(ctx, s.config.Dir, repo, s.log)
 	if err != nil {
 		return "", err
 	}
@@ -345,19 +344,31 @@ func (s *TemplateSyncer) resolveTemplateSource(ctx context.Context, repo, ref st
 	return hash.String(), nil
 }
 
-func openOrCloneTemplateRepo(ctx context.Context, dir, remote string) (*git.Repository, error) {
+func openOrCloneTemplateRepo(ctx context.Context, dir, remote string, log *slog.Logger) (*git.Repository, error) {
 	repo, err := git.PlainOpen(dir)
 	if err == nil {
-		if err := setTemplateRemote(repo, remote); err != nil {
-			return nil, err
+		url, uerr := originTemplateURL(repo)
+		if uerr == nil && url == remote {
+			err = repo.FetchContext(ctx, &git.FetchOptions{RemoteName: "origin", Force: true, Tags: git.AllTags})
+			if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
+				return nil, fmt.Errorf("fetch template repository: %w", err)
+			}
+			return repo, nil
 		}
-		err = repo.FetchContext(ctx, &git.FetchOptions{RemoteName: "origin", Force: true, Tags: git.AllTags})
-		if err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
-			return nil, fmt.Errorf("fetch template repository: %w", err)
+		// The cache points at a different repository (an admin source switch,
+		// or a cancelled probe against another URL that re-pointed origin): a
+		// force fetch never deletes the previous repository's tags or
+		// remote-tracking refs, so `latest` would still walk them and branch
+		// lookup would still prefer stale origin refs. Replace the cache with a
+		// fresh clone of the requested remote instead.
+		if log != nil {
+			log.Info("template clone cache points at a different repository; replacing it",
+				"old_repo", SafeTemplateRepo(url), "repo", SafeTemplateRepo(remote))
 		}
-		return repo, nil
-	}
-	if !errors.Is(err, git.ErrRepositoryNotExists) {
+		if err := os.RemoveAll(dir); err != nil {
+			return nil, fmt.Errorf("replace template clone cache: %w", err)
+		}
+	} else if !errors.Is(err, git.ErrRepositoryNotExists) {
 		return nil, fmt.Errorf("open template repository: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(dir), 0o750); err != nil {
@@ -370,27 +381,19 @@ func openOrCloneTemplateRepo(ctx context.Context, dir, remote string) (*git.Repo
 	return repo, nil
 }
 
-// setTemplateRemote makes TEMPLATE_SYNC_REPO an actual runtime setting even
-// when a cache directory already contains an older clone. Without this, an
-// operator changing the variable would quietly continue fetching the old repo.
-func setTemplateRemote(repo *git.Repository, remote string) error {
+// originTemplateURL returns the clone cache's origin URL (empty when no
+// single-URL origin is configured, e.g. an interrupted clone). It is what lets
+// the cache be replaced the moment it points somewhere else.
+func originTemplateURL(repo *git.Repository) (string, error) {
 	cfg, err := repo.Config()
 	if err != nil {
-		return fmt.Errorf("read template repository config: %w", err)
+		return "", fmt.Errorf("read template repository config: %w", err)
 	}
-	if cfg.Remotes == nil {
-		cfg.Remotes = make(map[string]*config.RemoteConfig)
+	rem, ok := cfg.Remotes["origin"]
+	if !ok || len(rem.URLs) != 1 {
+		return "", nil
 	}
-	current, ok := cfg.Remotes["origin"]
-	if !ok {
-		cfg.Remotes["origin"] = &config.RemoteConfig{Name: "origin", URLs: []string{remote}}
-	} else if len(current.URLs) != 1 || current.URLs[0] != remote {
-		current.URLs = []string{remote}
-	}
-	if err := repo.SetConfig(cfg); err != nil {
-		return fmt.Errorf("set template repository remote: %w", err)
-	}
-	return nil
+	return rem.URLs[0], nil
 }
 
 func checkoutTemplateRef(repo *git.Repository, ref string) (plumbing.Hash, error) {

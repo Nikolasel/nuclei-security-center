@@ -1,6 +1,8 @@
 package backend
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +14,8 @@ import (
 	"time"
 
 	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/Nikolasel/nuclei-security-center/internal/store"
 )
@@ -193,22 +197,88 @@ func TestReadTemplateCatalogFailsWhenNothingParses(t *testing.T) {
 	}
 }
 
-func TestSetTemplateRemoteHonorsConfigChanges(t *testing.T) {
-	repo, err := git.PlainInit(t.TempDir(), false)
+// writeTemplateRepoFixture creates a local repository standing in for an
+// upstream template catalog: one template file per id, an optional semver tag
+// and an optional extra branch, both pointing at the single commit.
+func writeTemplateRepoFixture(t *testing.T, ids []string, tag, branch string) (string, plumbing.Hash) {
+	t.Helper()
+	dir := t.TempDir()
+	repo, err := git.PlainInit(dir, false)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("init fixture repository: %v", err)
 	}
-	if err := setTemplateRemote(repo, "https://example.test/first.git"); err != nil {
-		t.Fatalf("set initial remote: %v", err)
-	}
-	if err := setTemplateRemote(repo, "https://example.test/second.git"); err != nil {
-		t.Fatalf("change remote: %v", err)
-	}
-	remote, err := repo.Remote("origin")
+	wt, err := repo.Worktree()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("open fixture worktree: %v", err)
 	}
-	if got := remote.Config().URLs; len(got) != 1 || got[0] != "https://example.test/second.git" {
-		t.Errorf("origin URLs = %v", got)
+	for _, id := range ids {
+		body := fmt.Sprintf("id: %s\ninfo:\n  name: %s\n  author: fixture\n  severity: medium\n  description: fixture\n", id, id)
+		if err := os.WriteFile(filepath.Join(dir, id+".yaml"), []byte(body), 0o644); err != nil {
+			t.Fatalf("write fixture template: %v", err)
+		}
+	}
+	if err := wt.AddWithOptions(&git.AddOptions{All: true}); err != nil {
+		t.Fatalf("stage fixture templates: %v", err)
+	}
+	sig := &object.Signature{Name: "fixture", Email: "fixture@example.test", When: time.Now()}
+	if _, err := wt.Commit("fixture catalog", &git.CommitOptions{Author: sig}); err != nil {
+		t.Fatalf("commit fixture templates: %v", err)
+	}
+	head, err := repo.Head()
+	if err != nil {
+		t.Fatalf("read fixture HEAD: %v", err)
+	}
+	if tag != "" {
+		if _, err := repo.CreateTag(tag, head.Hash(), &git.CreateTagOptions{Tagger: sig, Message: "fixture release"}); err != nil {
+			t.Fatalf("tag fixture release: %v", err)
+		}
+	}
+	if branch != "" {
+		if err := repo.Storer.SetReference(plumbing.NewHashReference(plumbing.NewBranchReferenceName(branch), head.Hash())); err != nil {
+			t.Fatalf("create fixture branch: %v", err)
+		}
+	}
+	return dir, head.Hash()
+}
+
+// Two upstream repositories share one clone cache. After syncing the old
+// repository, a switch to the new one must resolve against the new repository
+// alone: fetch+force never deletes the previous repository's tags or
+// remote-tracking refs, so without replacing the cache the old repo's higher
+// semver tag would win `latest` and its leftover branch would win ref lookup.
+func TestSyncTemplateRepositoryReplacesCacheOnRemoteSwitch(t *testing.T) {
+	oldRepo, oldHead := writeTemplateRepoFixture(t, []string{"old-template"}, "v9.9.9", "legacy")
+	newRepo, newHead := writeTemplateRepoFixture(t, []string{"new-template"}, "v1.0.0", "")
+	dir := filepath.Join(t.TempDir(), "clone-cache")
+	ctx := context.Background()
+	log := testLogger()
+
+	// Populate the cache from the old repository; its branch resolves too.
+	commit, entries, _, err := syncTemplateRepository(ctx, dir, oldRepo, "latest", log)
+	if err != nil {
+		t.Fatalf("sync old repository: %v", err)
+	}
+	if commit != oldHead.String() || len(entries) != 1 || entries[0].ID != "old-template" {
+		t.Fatalf("old catalog = commit %s entries %+v, want %s [old-template]", commit, entries, oldHead)
+	}
+	if commit, _, _, err := syncTemplateRepository(ctx, dir, oldRepo, "legacy", log); err != nil || commit != oldHead.String() {
+		t.Fatalf("old repository branch legacy = %s err %v, want %s", commit, err, oldHead)
+	}
+
+	// Switch to the new repository: the old v9.9.9 tag must not win latest.
+	commit, entries, _, err = syncTemplateRepository(ctx, dir, newRepo, "latest", log)
+	if err != nil {
+		t.Fatalf("sync new repository: %v", err)
+	}
+	if commit != newHead.String() || len(entries) != 1 || entries[0].ID != "new-template" {
+		t.Fatalf("new catalog = commit %s entries %+v, want %s [new-template]", commit, entries, newHead)
+	}
+
+	// Refs only the old repository ever had must not resolve from stale refs.
+	if _, _, _, err := syncTemplateRepository(ctx, dir, newRepo, "v9.9.9", log); err == nil {
+		t.Fatal("the old repository's tag resolved against the new repository, want error")
+	}
+	if _, _, _, err := syncTemplateRepository(ctx, dir, newRepo, "legacy", log); err == nil {
+		t.Fatal("the old repository's branch resolved against the new repository, want error")
 	}
 }

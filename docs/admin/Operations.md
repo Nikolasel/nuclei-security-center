@@ -21,10 +21,15 @@ delete scan history.
 - **The upstream source is runtime-switchable (#343):** an admin changes the repository/ref under
   Templates → Sync → Change source. Saving runs a dry run (added/changed/removed counts plus the
   exact sets that would lose members) and queues an immediate reconcile; template IDs, set
-  memberships, and history survive, and a template that returns upstream is restored. `latest`
+  memberships, and history survive, and a template that returns upstream is restored. A candidate
+  that would shadow a custom template id is refused at save time and in the dry run, since the
+  sync run itself aborts on that conflict. `latest`
   (stable) and `main` (preview) are the channels for the ProjectDiscovery catalog; preview
   templates may need a newer Nuclei engine than the pinned scanner. An empty repository disables
-  upstream sync — custom templates and node distribution keep working.
+  upstream sync — custom templates and node distribution keep working. Switching repositories
+  replaces the backend clone cache (a force fetch would otherwise keep the old repository's tags
+  and refs, which could win `latest`/branch resolution), so the first sync after a switch does a
+  full clone again.
 
 Upgrade Nuclei by rebuilding/deploying the scanner image with the pinned version, then verify node
 capabilities and custom-template validation.

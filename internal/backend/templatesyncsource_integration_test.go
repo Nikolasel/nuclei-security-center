@@ -223,15 +223,21 @@ func TestTemplateSyncSwitchAndReconcilePostgres(t *testing.T) {
 		t.Fatalf("gamma after re-switch = availability %q path %q, want active + gamma.yaml", gamma.Availability, gamma.Path)
 	}
 
-	// 6. Resolve-at-save: both refs resolve in the fetched clone.
-	if _, err := syncer.resolveTemplateSource(ctx, fixture, "latest"); err != nil {
-		t.Fatalf("resolve latest at save time: %v", err)
+	// 6. Resolve-at-save: both refs resolve in the fetched clone, and no custom
+	// template shadows the snapshot's ids (the refusal itself is covered by
+	// TestTemplateSyncSourceCustomCollisionRefusedPostgres, which needs a store
+	// without upstream rows).
+	if err := syncer.validateTemplateSource(ctx, fixture, "latest"); err != nil {
+		t.Fatalf("validate latest at save time: %v", err)
 	}
-	if _, err := syncer.resolveTemplateSource(ctx, fixture, "main"); err != nil {
-		t.Fatalf("resolve main at save time: %v", err)
+	if err := syncer.validateTemplateSource(ctx, fixture, "main"); err != nil {
+		t.Fatalf("validate main at save time: %v", err)
 	}
-	if _, err := syncer.resolveTemplateSource(ctx, fixture, "no-such-ref"); err == nil {
-		t.Fatal("resolve of an unknown ref succeeded, want error")
+	if err := syncer.validateTemplateSource(ctx, fixture, "no-such-ref"); err == nil {
+		t.Fatal("validate of an unknown ref succeeded, want error")
+	}
+	if id, err := st.FirstCustomTemplateConflict(ctx, []string{"alpha", "beta", "shared"}); err != nil || id != "" {
+		t.Fatalf("FirstCustomTemplateConflict on the snapshot's ids = %q, %v, want no conflict", id, err)
 	}
 
 	// 7. An explicitly empty repository disables upstream sync at runtime: the
@@ -253,6 +259,54 @@ func TestTemplateSyncSwitchAndReconcilePostgres(t *testing.T) {
 	}
 	if got := activeUpstreamIDs(t, st, ctx); len(got) != 3 {
 		t.Fatalf("disabled sync changed the catalog: %v", got)
+	}
+}
+
+// TestTemplateSyncSourceCustomCollisionRefusedPostgres covers the shadowing
+// refusal (#343): ApplyUpstreamTemplates aborts a whole run when an incoming id
+// matches a custom template, so both the dry run and the save-time probe must
+// refuse the candidate up front instead of letting a confirmed switch queue a
+// sync that fails. A fresh store keeps every catalog id free for the custom row.
+func TestTemplateSyncSourceCustomCollisionRefusedPostgres(t *testing.T) {
+	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("NSC_TEST_DATABASE_URL is not set")
+	}
+	fixture := buildTemplateRepoFixture(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	st := openScanRequestTestStore(t, ctx, dsn)
+
+	syncer, err := NewTemplateSyncer(st, TemplateSyncerConfig{Interval: time.Hour, Dir: filepath.Join(t.TempDir(), "clone-cache")}, testLogger())
+	if err != nil {
+		t.Fatalf("wire template syncer: %v", err)
+	}
+	if _, err := st.CreateCustomTemplate(ctx, store.Template{
+		ID: "alpha", Path: "custom/alpha.yaml", YAML: "id: alpha\n",
+		ContentSHA256: "sha-alpha", Name: "alpha", Severity: "low",
+	}); err != nil {
+		t.Fatalf("create shadowing custom template: %v", err)
+	}
+	if id, err := st.FirstCustomTemplateConflict(ctx, []string{"alpha", "beta"}); err != nil || id != "alpha" {
+		t.Fatalf("FirstCustomTemplateConflict = %q, %v, want alpha", id, err)
+	}
+	conflict := "conflicts with a custom template"
+	if err := syncer.validateTemplateSource(ctx, fixture, "latest"); err == nil || !strings.Contains(err.Error(), conflict) {
+		t.Fatalf("validate with a shadowing custom template = %v, want %q", err, conflict)
+	}
+	preview, err := syncer.PreviewSource(ctx, fixture, "latest")
+	if err == nil || !strings.Contains(err.Error(), conflict) {
+		t.Fatalf("preview with a shadowing custom template = %v, want the same refusal surfaced", err)
+	}
+	if preview.Added != 0 || preview.Changed != 0 || preview.Removed != 0 {
+		t.Fatalf("preview on the refused candidate returned counts %+v, want zeroed", preview)
+	}
+	if err := st.DeleteCustomTemplate(ctx, "alpha"); err != nil {
+		t.Fatalf("delete shadowing custom template: %v", err)
+	}
+	if err := syncer.validateTemplateSource(ctx, fixture, "latest"); err != nil {
+		t.Fatalf("validate after removing the custom template: %v", err)
 	}
 }
 
@@ -419,6 +473,28 @@ func TestTemplateSyncConfigRBACAndAuditPostgres(t *testing.T) {
 		Repo: fixture, Ref: "latest",
 	}); err != nil {
 		t.Fatalf("re-store resolvable source: %v", err)
+	}
+
+	// A candidate that would shadow a custom template is refused with 400 and
+	// the stored source stays untouched — the queued sync would otherwise fail
+	// after the switch was already confirmed.
+	if _, err := st.CreateCustomTemplate(ctx, store.Template{
+		ID: "alpha", Path: "custom/alpha.yaml", YAML: "id: alpha\n",
+		ContentSHA256: "sha-alpha", Name: "alpha", Severity: "low",
+	}); err != nil {
+		t.Fatalf("create shadowing custom template: %v", err)
+	}
+	logs.Reset()
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, withCookie(httptest.NewRequest(http.MethodPut, "/api/templates/sync/config", strings.NewReader(`{"ref":"main"}`)), admin))
+	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "conflicts with a custom template") {
+		t.Fatalf("shadowing PUT = %d %q, want 400 naming the custom-template conflict", rr.Code, rr.Body.String())
+	}
+	if src, err := st.GetTemplateSyncSource(ctx); err != nil || src.Repo != fixture || src.Ref != "latest" {
+		t.Fatalf("stored source after refused PUT = %+v (%v), want fixture@latest untouched", src, err)
+	}
+	if err := st.DeleteCustomTemplate(ctx, "alpha"); err != nil {
+		t.Fatalf("delete shadowing custom template: %v", err)
 	}
 	logs.Reset()
 	rr = httptest.NewRecorder()

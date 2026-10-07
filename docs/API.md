@@ -630,12 +630,15 @@ the database wins). `PUT /api/templates/sync/config` (admin) stores `{repo?, ref
 `repo` keeps the stored URL (write-only, like node tokens), an explicit empty string disables
 upstream sync, and the ref accepts `latest`, a git ref name, or a full/abbreviated commit SHA.
 The candidate is resolved against the fetched repository before anything is stored, so an
-unreachable repository or unknown ref is refused with `400`; a valid save queues an immediate
-sync and returns the new status. It is audited as `config_changed`
+unreachable repository, an unknown ref, or a snapshot whose ids would shadow a custom template
+is refused with `400` — the same failure the queued sync would hit after the source was
+already stored. A valid save queues an immediate sync and returns the new status. It is audited
+as `config_changed`
 (`template_sync.config_update`) with the old → new ref and the sanitized repository — never
 credentials. `POST /api/templates/sync/preview` (admin) is the read-only dry run behind the
 UI's impact confirm: it fetches and resolves the candidate in the clone cache, compares it with
-the stored catalog under the same reconcile rules the sync applies, and returns
+the stored catalog under the same reconcile rules the sync applies, and refuses the candidate
+with the same custom-template conflict error the save-time probe uses, returning
 `{repo, ref, commit, skipped, added, changed, removed, affected_sets}` where each affected set is
 an exact set whose membership includes templates the switch would tombstone (members are kept
 and return if the template reappears). Nothing is persisted, so it is not audited as a mutation,

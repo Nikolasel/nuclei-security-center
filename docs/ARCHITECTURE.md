@@ -102,7 +102,12 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   exclusions, lifecycle history, and scan provenance intact, and returning templates are restored
   by the `ON CONFLICT` upsert — and the admin dry run (`POST /api/templates/sync/preview`) reports
   added/changed/removed counts plus the exact sets that would lose active members before the
-  switch is confirmed.
+  switch is confirmed. The dry run and the save-time probe (a full fetch/checkout/catalog walk)
+  both refuse a candidate whose ids would shadow a custom template — the exact conflict that
+  aborts a sync run — so a confirmed switch can never queue a sync that fails on it. The clone
+  cache is replaced whenever the remote URL changes: a force fetch alone would keep the previous
+  repository's tags and remote refs, letting a higher stale semver tag win `latest` or a leftover
+  branch win ref lookup.
 - **template_sets** — an explicit `mode`: `exact` uses curated membership in
   `template_set_members`, `all` resolves every active catalog template at scan time, and `exclude`
   resolves every active template except explicit rows in `template_set_exclusions`. The retired POC

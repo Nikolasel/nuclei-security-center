@@ -679,6 +679,27 @@ func (s *Store) ApplyUpstreamTemplates(ctx context.Context, runID, ref string, i
 	return stats, nil
 }
 
+// FirstCustomTemplateConflict returns the first id among ids that already
+// exists as a custom template ("" when none). ApplyUpstreamTemplates re-runs
+// this check inside its transaction; the source-switch validation (#343) calls
+// it first, so a candidate snapshot that would shadow a custom template is
+// refused before the source is ever stored.
+func (s *Store) FirstCustomTemplateConflict(ctx context.Context, ids []string) (string, error) {
+	if len(ids) == 0 {
+		return "", nil
+	}
+	var id string
+	err := s.pool.QueryRow(ctx,
+		`SELECT id FROM templates WHERE source = 'custom' AND id = ANY($1) LIMIT 1`, ids).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("check custom template conflicts: %w", err)
+	}
+	return id, nil
+}
+
 // UpstreamTemplateStates returns every upstream catalog row's content hash and
 // availability, keyed by template id. The source-switch dry run (#343) diffs a
 // candidate snapshot against this with the same rules ApplyUpstreamTemplates

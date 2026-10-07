@@ -277,17 +277,16 @@ func syncTemplateRepository(ctx context.Context, dir, repo, ref string, log *slo
 // real sync would record: added (unknown ids), changed (different content or a
 // tombstoned id returning), removed (active ids absent from the snapshot),
 // plus the exact template sets whose stored membership would be tombstoned.
-// A failed resolve (unreachable repo, unknown ref) is the caller's validation
-// error; the worktree lock keeps this off a concurrent sync's fetch/checkout.
+// A failed resolve (unreachable repo, unknown ref) or a snapshot that would
+// shadow a custom template is the caller's validation error; the dry run must
+// refuse exactly what the queued sync would refuse after the source is stored.
 func (s *TemplateSyncer) PreviewSource(ctx context.Context, repo, ref string) (store.TemplateSyncPreview, error) {
 	preview := store.TemplateSyncPreview{
 		Repo: SafeTemplateRepo(repo), Ref: ref,
 		RefSource: templateSyncChannel(ref), DefaultRepo: isDefaultTemplateRepo(repo),
 		AffectedSets: []store.TemplateSetMemberLoss{},
 	}
-	s.worktree.Lock()
-	commit, entries, skipped, err := syncTemplateRepository(ctx, s.config.Dir, repo, ref, s.log)
-	s.worktree.Unlock()
+	commit, entries, skipped, err := s.resolveTemplateSnapshot(ctx, repo, ref)
 	if err != nil {
 		return preview, err
 	}
@@ -326,22 +325,45 @@ func (s *TemplateSyncer) PreviewSource(ctx context.Context, repo, ref string) (s
 	return preview, nil
 }
 
-// resolveTemplateSource probes a candidate repo/ref at save time (#343):
-// fetch into the clone cache and resolve the ref — nothing else, and no DB
-// writes. The returned commit is informational. Sharing the worktree lock with
-// sync/preview keeps three concurrent git fetches out of one cache.
-func (s *TemplateSyncer) resolveTemplateSource(ctx context.Context, repo, ref string) (string, error) {
+// resolveTemplateSnapshot fetches and checks out a candidate repo/ref in the
+// clone cache and reads its catalog — the exact work a sync against the
+// candidate would do — under the worktree lock shared with sync/preview
+// probes (#343). Before returning, the snapshot is refused when any incoming
+// id would shadow a custom template: ApplyUpstreamTemplates aborts the whole
+// run on that conflict, so both the dry run and the save-time probe must
+// surface it instead of letting a confirmed switch queue a sync that fails.
+func (s *TemplateSyncer) resolveTemplateSnapshot(ctx context.Context, repo, ref string) (string, []store.Template, int, error) {
 	s.worktree.Lock()
-	defer s.worktree.Unlock()
-	r, err := openOrCloneTemplateRepo(ctx, s.config.Dir, repo, s.log)
+	commit, entries, skipped, err := syncTemplateRepository(ctx, s.config.Dir, repo, ref, s.log)
+	s.worktree.Unlock()
 	if err != nil {
-		return "", err
+		return "", nil, 0, err
 	}
-	hash, err := resolveRefHash(r, ref)
+	conflict, err := s.store.FirstCustomTemplateConflict(ctx, templateIDs(entries))
 	if err != nil {
-		return "", err
+		return "", nil, 0, err
 	}
-	return hash.String(), nil
+	if conflict != "" {
+		return "", nil, 0, fmt.Errorf("upstream template id %q conflicts with a custom template", conflict)
+	}
+	return commit, entries, skipped, nil
+}
+
+// validateTemplateSource probes a candidate repo/ref at save time (#343):
+// fetch, checkout, catalog walk, and the custom-template shadow check — the
+// same refusals the queued sync would hit, run before the source is stored.
+// No DB writes.
+func (s *TemplateSyncer) validateTemplateSource(ctx context.Context, repo, ref string) error {
+	_, _, _, err := s.resolveTemplateSnapshot(ctx, repo, ref)
+	return err
+}
+
+func templateIDs(entries []store.Template) []string {
+	ids := make([]string, len(entries))
+	for i, t := range entries {
+		ids[i] = t.ID
+	}
+	return ids
 }
 
 func openOrCloneTemplateRepo(ctx context.Context, dir, remote string, log *slog.Logger) (*git.Repository, error) {

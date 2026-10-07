@@ -170,10 +170,11 @@ func SeedTemplateSyncConfig(ctx context.Context, st *store.Store, fromEnv store.
 }
 
 // handleUpdateTemplateSyncConfig stores a new upstream source and queues the
-// immediate sync (#343). The save-time resolve probes the candidate in the
-// clone cache, so an unreachable repository or unknown ref is refused before
-// anything is stored. The audit event carries the sanitized repository and the
-// old → new ref, never credentials.
+// immediate sync (#343). The save-time probe fetches and checks out the
+// candidate in the clone cache and walks its catalog, so an unreachable
+// repository, an unknown ref, or a snapshot that would shadow a custom
+// template is refused before anything is stored. The audit event carries the
+// sanitized repository and the old → new ref, never credentials.
 func (s *Server) handleUpdateTemplateSyncConfig(w http.ResponseWriter, r *http.Request) {
 	if s.templateSyncer == nil || s.store == nil {
 		s.serviceUnavailable(w, "update template sync source", errTemplateSyncUnavailable)
@@ -194,9 +195,9 @@ func (s *Server) handleUpdateTemplateSyncConfig(w http.ResponseWriter, r *http.R
 	}
 	if strings.TrimSpace(next.Repo) != "" {
 		ctx, cancel := context.WithTimeout(r.Context(), syncTimeout)
-		if _, err := s.templateSyncer.resolveTemplateSource(ctx, next.Repo, next.Ref); err != nil {
+		if err := s.templateSyncer.validateTemplateSource(ctx, next.Repo, next.Ref); err != nil {
 			cancel()
-			http.Error(w, fmt.Sprintf("candidate template source failed to resolve: %v", err), http.StatusBadRequest)
+			http.Error(w, fmt.Sprintf("candidate template source failed to validate: %v", err), http.StatusBadRequest)
 			return
 		}
 		cancel()

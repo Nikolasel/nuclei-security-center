@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -40,6 +41,111 @@ func (a AppSettings) RetentionCutoff(now time.Time) time.Time {
 		return time.Time{}
 	}
 	return now.AddDate(0, 0, -*a.ScanRetentionDays)
+}
+
+// TemplateSyncSource is the upstream template catalog's source of record
+// (#343): the repository URL (possibly credential-bearing; the API only ever
+// returns the sanitized URL) and the ref to mirror. Both live on the
+// app_settings singleton, seeded once from TEMPLATE_SYNC_REPO /
+// TEMPLATE_SYNC_REF at startup — NULL columns mean "never seeded"; afterward
+// the DB wins and env changes only log a drift note. An empty Repo is the
+// explicit "upstream sync disabled" state.
+type TemplateSyncSource struct {
+	Repo string `json:"repo"`
+	Ref  string `json:"ref"`
+}
+
+// GetTemplateSyncSource returns the stored (possibly empty, never-seeded)
+// template-sync source.
+func (s *Store) GetTemplateSyncSource(ctx context.Context) (TemplateSyncSource, error) {
+	var repo, ref *string
+	err := s.pool.QueryRow(ctx,
+		`SELECT template_sync_repo, template_sync_ref FROM app_settings WHERE id = true`).
+		Scan(&repo, &ref)
+	if err != nil {
+		return TemplateSyncSource{}, fmt.Errorf("get template sync source: %w", err)
+	}
+	return TemplateSyncSource{Repo: deref(repo), Ref: deref(ref)}, nil
+}
+
+// SeedTemplateSyncSource fills any still-NULL source column with the
+// environment-derived value (single statement, so concurrent replicas race to
+// the same seed-once outcome: the first stored value wins). It returns the
+// effective source after seeding — the caller compares it with the env values
+// to log a drift note (DB wins; env is never re-applied over stored values).
+func (s *Store) SeedTemplateSyncSource(ctx context.Context, source TemplateSyncSource) (TemplateSyncSource, error) {
+	var out TemplateSyncSource
+	var repo, ref *string
+	err := s.pool.QueryRow(ctx,
+		`UPDATE app_settings
+		    SET template_sync_repo = COALESCE(template_sync_repo, $1),
+		        template_sync_ref  = COALESCE(template_sync_ref, $2)
+		  WHERE id = true
+		  RETURNING template_sync_repo, template_sync_ref`,
+		source.Repo, source.Ref).
+		Scan(&repo, &ref)
+	if err != nil {
+		return TemplateSyncSource{}, fmt.Errorf("seed template sync source: %w", err)
+	}
+	out.Repo, out.Ref = deref(repo), deref(ref)
+	return out, nil
+}
+
+// UpdateTemplateSyncSource replaces both columns (the admin switch, #343) and
+// stamps who changed it — updated_at/by stay NULL while the source has only
+// ever been seeded from the environment, so the Sync view can distinguish
+// "seeded" from "changed by <admin>" (PR #344 review). The caller validates
+// repo/ref and queues the sync. Returns the stored row.
+func (s *Store) UpdateTemplateSyncSource(ctx context.Context, source TemplateSyncSource, updatedBy string) (TemplateSyncSource, error) {
+	var out TemplateSyncSource
+	var repo, ref *string
+	err := s.pool.QueryRow(ctx,
+		`UPDATE app_settings
+		    SET template_sync_repo = $1, template_sync_ref = $2,
+		        template_sync_source_updated_at = now(),
+		        template_sync_source_updated_by = NULLIF($3, '')
+		  WHERE id = true
+		  RETURNING template_sync_repo, template_sync_ref`,
+		source.Repo, source.Ref, updatedBy).
+		Scan(&repo, &ref)
+	if err != nil {
+		return TemplateSyncSource{}, fmt.Errorf("update template sync source: %w", err)
+	}
+	out.Repo, out.Ref = deref(repo), deref(ref)
+	return out, nil
+}
+
+// TemplateSyncSourceProvenance is who last changed the template sync source and
+// when. Both fields are unset while the source has only ever been seeded from
+// the environment (disable/re-enable count as changes — they produce no sync
+// run, so this is the only trace of them). UpdatedByName resolves the subject's
+// users-registry row to a display label (name, then email) for the Sync view —
+// the raw subject is an opaque OIDC UUID (PR #344 review E) — and stays empty
+// when the actor has no registry row (or is a service account, whose svc:
+// subject is already readable).
+type TemplateSyncSourceProvenance struct {
+	UpdatedAt     *time.Time
+	UpdatedBy     string
+	UpdatedByName string
+}
+
+// GetTemplateSyncSourceProvenance reads the source's last-change stamp,
+// resolving the acting subject against the users registry in the same query.
+func (s *Store) GetTemplateSyncSourceProvenance(ctx context.Context) (TemplateSyncSourceProvenance, error) {
+	var p TemplateSyncSourceProvenance
+	var by *string
+	err := s.pool.QueryRow(ctx,
+		`SELECT a.template_sync_source_updated_at, a.template_sync_source_updated_by,
+		        COALESCE(u.name, NULLIF(u.email, ''), '')
+		   FROM app_settings a
+		   LEFT JOIN users u ON u.subject = a.template_sync_source_updated_by
+		  WHERE a.id = true`).
+		Scan(&p.UpdatedAt, &by, &p.UpdatedByName)
+	if err != nil {
+		return TemplateSyncSourceProvenance{}, fmt.Errorf("get template sync source provenance: %w", err)
+	}
+	p.UpdatedBy = deref(by)
+	return p, nil
 }
 
 // GetAppSettings returns the singleton settings row. The baseline seeds it, so

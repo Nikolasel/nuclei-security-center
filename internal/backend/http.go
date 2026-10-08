@@ -30,7 +30,7 @@ type Server struct {
 	auth                   *Authenticator
 	archive                ObjectStore          // nil when object storage is not configured
 	searcher               FindingsSearcher     // reads the findings list; defaults to Postgres
-	templateSyncer         *TemplateSyncer      // nil when upstream catalog sync is disabled
+	templateSyncer         *TemplateSyncer      // nil when the syncer wiring is absent (tests); always started by the entrypoint
 	distributor            *TemplateDistributor // nil when template sync is disabled (#85)
 	templateValidator      func(context.Context, []byte) (types.TemplateValidationResult, error)
 	templateBatchValidator func(context.Context, []store.TemplateImportWrite) (types.TemplateBatchValidationResult, error)
@@ -208,6 +208,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/templates/sync", s.requireRole(RoleViewer, s.handleGetTemplateSync))
 	mux.HandleFunc("POST /api/templates/sync", s.mutation(eventConfigChanged, "templates.sync_requested", "template_sync", RoleOperator, s.handleRequestTemplateSync))
 	mux.HandleFunc("GET /api/templates/sync-runs", s.requireRole(RoleViewer, s.handleListTemplateSyncRuns))
+	mux.HandleFunc("PUT /api/templates/sync/config", s.mutation(eventConfigChanged, "template_sync.config_update", "template_sync", RoleAdmin, s.handleUpdateTemplateSyncConfig))
+	// The preview dry run is audited too (PR #344 review #7): it sends the
+	// backend to an admin-supplied host, so even though nothing is stored the
+	// attempt — and any denial — leaves a structured trace.
+	mux.HandleFunc("POST /api/templates/sync/preview", s.mutation(eventConfigChanged, "template_sync.preview", "template_sync", RoleAdmin, s.handlePreviewTemplateSyncSource))
 	mux.HandleFunc("POST /api/templates", s.mutation(eventConfigChanged, "template.create", "template", RoleOperator, s.handleCreateTemplate))
 	mux.HandleFunc("GET /api/templates/{id}", s.requireRole(RoleViewer, s.handleGetTemplate))
 	mux.HandleFunc("PUT /api/templates/{id}", s.mutation(eventConfigChanged, "template.update", "template", RoleOperator, s.handleUpdateTemplate))

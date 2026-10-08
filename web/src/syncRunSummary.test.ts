@@ -96,6 +96,47 @@ describe("formatSyncRunResult", () => {
     expect(view.title).toBe("");
   });
 
+  it("calls out restored templates in the breakdown", () => {
+    const view = formatSyncRunResult({
+      status: "success",
+      added: 0,
+      updated: 4,
+      removed: 0,
+      restored: 2,
+      skipped: 0,
+      ref_before: "aaaaaaaaaaaaaaaa",
+      ref_after: "bbbbbbbbbbbbbbbb",
+    });
+    expect(view.text).toBe("+0 / ~4 / 2 restored / −0 / 0 skipped");
+  });
+
+  it("treats a restored-only run as a change, not a no-op", () => {
+    const view = formatSyncRunResult({
+      status: "success",
+      added: 0,
+      updated: 0,
+      removed: 0,
+      restored: 4,
+      skipped: 0,
+      ref_before: "aaaaaaaaaaaaaaaa",
+      ref_after: "aaaaaaaaaaaaaaaa",
+    });
+    expect(view.text).toBe("+0 / ~0 / 4 restored / −0 / 0 skipped");
+  });
+
+  it("keeps legacy rows without a restored count unchanged", () => {
+    const view = formatSyncRunResult({
+      status: "success",
+      added: 0,
+      updated: 0,
+      removed: 0,
+      skipped: 0,
+      ref_before: "aaaaaaaaaaaaaaaa",
+      ref_after: "aaaaaaaaaaaaaaaa",
+    });
+    expect(view.text).toBe("No changes · aaaaaaaaaaaa → aaaaaaaaaaaa");
+  });
+
   it("does not claim no-change for a running run with zero counts", () => {
     const view = formatSyncRunResult({
       status: "running",

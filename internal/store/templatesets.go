@@ -32,25 +32,31 @@ func normalizeTemplateSetMode(mode TemplateSetMode) (TemplateSetMode, error) {
 	}
 }
 
-// TemplateSet selects which Nuclei templates a scan runs. Exact sets are
+// TemplateSet selects which Nuclei templates a scan resolves to. Exact sets are
 // driven by template_set_members; all sets resolve to every active catalog
 // template; exclude sets resolve to every active template except their stored
 // exclusions.
 type TemplateSet struct {
-	ID                  string          `json:"id"`
-	Name                string          `json:"name"`
-	Mode                TemplateSetMode `json:"mode"`
-	MemberCount         int             `json:"member_count"`
-	ExclusionCount      int             `json:"exclusion_count"`
-	ExcludedTemplateIDs []string        `json:"excluded_template_ids,omitempty"`
-	CreatedBy           string          `json:"created_by,omitempty"`
-	CreatedAt           time.Time       `json:"created_at"`
-	UpdatedAt           time.Time       `json:"updated_at"`
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	Mode           TemplateSetMode `json:"mode"`
+	MemberCount    int             `json:"member_count"`
+	ExclusionCount int             `json:"exclusion_count"`
+	// UnavailableMembers is the exact-set members currently tombstoned
+	// upstream (#343 review): a scan resolving this set is refused until the
+	// members return or the selection is updated. Always 0 for catalog-derived
+	// sets, which resolve active templates at dispatch.
+	UnavailableMembers  int       `json:"unavailable_members"`
+	ExcludedTemplateIDs []string  `json:"excluded_template_ids,omitempty"`
+	CreatedBy           string    `json:"created_by,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 // tmplSetCols is the read projection shared by Get/List/Update. member_count is
 // the effective selected count: stored exact membership for exact sets, or
 // active catalog rows minus exclusions for catalog-derived sets.
+// unavailable_members counts exact-set members that are tombstoned upstream.
 const tmplSetCols = `id, name, mode,
 	CASE WHEN mode IN ('all', 'exclude')
 	     THEN (SELECT count(*) FROM templates
@@ -63,6 +69,9 @@ const tmplSetCols = `id, name, mode,
 	     ELSE (SELECT count(*) FROM template_set_members m WHERE m.template_set_id = template_sets.id)
 	END,
 	(SELECT count(*) FROM template_set_exclusions e WHERE e.template_set_id = template_sets.id),
+	(SELECT count(*) FROM template_set_members m
+	   JOIN templates t ON t.id = m.template_id
+	  WHERE m.template_set_id = template_sets.id AND t.availability <> 'active'),
 	created_by, created_at, updated_at`
 
 // CreateTemplateSet inserts a template set and returns it populated.
@@ -214,7 +223,7 @@ func scanTemplateSet(row pgx.Row) (TemplateSet, error) {
 	var mode string
 	var createdBy *string
 	err := row.Scan(&t.ID, &t.Name, &mode,
-		&t.MemberCount, &t.ExclusionCount, &createdBy, &t.CreatedAt, &t.UpdatedAt)
+		&t.MemberCount, &t.ExclusionCount, &t.UnavailableMembers, &createdBy, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return TemplateSet{}, ErrNotFound

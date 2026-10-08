@@ -93,6 +93,9 @@ export interface TemplateSet {
   mode: TemplateSetMode;
   member_count: number;
   exclusion_count: number;
+  /** exact-set members currently tombstoned upstream; scans resolving the set
+   *  are refused until they return or the selection is updated (#343 review). */
+  unavailable_members: number;
   excluded_template_ids?: string[];
   created_by?: string;
   created_at: string;
@@ -177,8 +180,13 @@ export interface TemplateSyncRun {
   added: number;
   removed: number;
   updated: number;
+  restored?: number;
   skipped: number;
   error?: string;
+  /** the configured source this run actually read (present on runs since #343's
+   *  migration 0006; absent/empty on historical runs). */
+  source_repo?: string;
+  source_ref?: string;
 }
 
 export interface TemplateSyncStatus {
@@ -186,8 +194,72 @@ export interface TemplateSyncStatus {
   interval?: string;
   repo?: string;
   ref?: string;
+  // ref_source derives the channel label from the stored ref: "stable" (latest
+  // = highest stable tag), "preview" (main), or "custom" (anything else).
+  ref_source?: "stable" | "preview" | "custom";
+  // default_repo is true when the repository equals the ProjectDiscovery
+  // default, so the UI can offer the Stable/Preview channel picker.
+  default_repo: boolean;
   templates_commit?: string;
   template_count: number;
+  /** when/by the stored source was last changed (null = seeded from the
+   *  environment and never edited, #343). source_updated_by is the raw OIDC
+   *  subject (stable audit handle); source_updated_by_name resolves it to a
+   *  display label for the UI. */
+  source_updated_at?: string;
+  source_updated_by?: string;
+  source_updated_by_name?: string;
+}
+
+// TemplateSetMemberLoss (in a preview) is one exact set whose membership
+// includes templates the candidate source would tombstone. Members are kept
+// and return if the template reappears upstream.
+export interface TemplateSetMemberLoss {
+  id: string;
+  name: string;
+  member_count: number;
+  losing_count: number;
+}
+
+// TemplateSetMemberGain (in a preview) is one exact set whose tombstoned
+// members would come back under the candidate source (they are currently
+// unavailable, the candidate serves them again).
+export interface TemplateSetMemberGain {
+  id: string;
+  name: string;
+  member_count: number;
+  regaining_count: number;
+}
+
+// TemplateSetUser is a scan policy ("scan_policy") or schedule that references
+// one of the exact sets in a preview's affected_sets — the concrete launch
+// paths that would be refused (or resume) after the switch.
+export interface TemplateSetUser {
+  kind: "scan_policy" | "schedule";
+  id: string;
+  name: string;
+}
+
+// TemplateSyncPreview is the admin dry-run (POST /api/templates/sync/preview):
+// what a sync against a candidate repo/ref would change, with no DB writes.
+export interface TemplateSyncPreview {
+  repo: string;
+  ref: string;
+  ref_source?: "stable" | "preview" | "custom";
+  default_repo: boolean;
+  commit?: string;
+  skipped: number;
+  added: number;
+  changed: number;
+  restored: number;
+  removed: number;
+  affected_sets: TemplateSetMemberLoss[];
+  /** exact sets whose currently-unavailable members this source restores. */
+  regained_sets: TemplateSetMemberGain[];
+  /** scan policies (and their schedules) that launch from sets losing members
+   *  — these launches are refused after the switch until the set is updated. */
+  affected_policies: TemplateSetUser[];
+  affected_schedules: TemplateSetUser[];
 }
 
 // ScanPolicy (#87, reshaped by #137) is the reusable HOW-to-scan configuration:
@@ -552,6 +624,8 @@ export interface EnvVariable {
   effective: string | null;
   default: string;
   sensitive: boolean;
+  /** Seeds a DB-backed setting once at startup; afterward the stored value wins and Effective shows it. */
+  seed_only: boolean;
   /** Short purpose from the backend env registry (same text as Configuration.md). */
   description: string;
 }
@@ -719,12 +793,15 @@ async function fetchFindingsExport(
   };
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+type RequestOptions = { signal?: AbortSignal };
+
+async function request<T>(method: string, path: string, body?: unknown, opts?: RequestOptions): Promise<T> {
   const res = await fetch(path, {
     method,
     credentials: "same-origin",
     headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal: opts?.signal,
   });
   if (!res.ok) {
     const text = (await res.text()).trim();
@@ -863,6 +940,14 @@ export const api = {
   getTemplateSync: () => request<TemplateSyncStatus>("GET", "/api/templates/sync"),
   requestTemplateSync: () =>
     request<{ queued: boolean }>("POST", "/api/templates/sync"),
+  updateTemplateSyncConfig: (
+    body: { repo?: string; ref: string; preview_commit?: string },
+    opts?: RequestOptions,
+  ) => request<TemplateSyncStatus>("PUT", "/api/templates/sync/config", body, opts),
+  templateSyncPreview: (
+    body: { repo?: string; ref: string },
+    opts?: RequestOptions,
+  ) => request<TemplateSyncPreview>("POST", "/api/templates/sync/preview", body, opts),
   listTemplateSyncRuns: (limit = 20, offset = 0) =>
     request<Page<TemplateSyncRun>>(
       "GET",

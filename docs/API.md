@@ -528,7 +528,10 @@ curl -sb jar.txt localhost:8080/api/template-sets/<set_id>/exclusions
 
 A template set reports `mode` and a live `member_count`. For an exact set, the count is its stored
 membership; for `all`, it is the current active-catalog size; for `exclude`, it is the active-catalog
-size after exclusions. An exclude set also reports `exclusion_count`; the exclusions endpoint
+size after exclusions. An exact set also reports `unavailable_members` — the stored members that are
+currently tombstoned upstream — so the UI can flag sets whose scans are refused until the templates
+return or the selection is updated. An exclude set also reports `exclusion_count`; the exclusions
+endpoint
 returns the catalog rows and the editor displays their IDs. The old top-level
 `git_ref` / `severities` / `tags` / `paths` fields and their compatibility/conversion path are no
 longer part of the table or API contract.
@@ -572,6 +575,14 @@ curl -sb jar.txt -X DELETE -H 'Origin: http://localhost:8080' localhost:8080/api
 curl -sb jar.txt localhost:8080/api/templates/sync
 # queue an upstream refresh now (operator)
 curl -sb jar.txt -X POST -H 'Origin: http://localhost:8080' localhost:8080/api/templates/sync
+# switch the upstream source (admin): omit repo to keep the stored URL,
+# explicit "" disables upstream sync; the candidate is resolved against the
+# fetched repository before anything is stored
+curl -sb jar.txt -X PUT -H 'Origin: http://localhost:8080' -H 'Content-Type: application/json' \
+  localhost:8080/api/templates/sync/config -d '{"ref":"main"}'
+# dry-run a candidate source (admin): fetch + resolve + catalog diff, no writes
+curl -sb jar.txt -X POST -H 'Origin: http://localhost:8080' -H 'Content-Type: application/json' \
+  localhost:8080/api/templates/sync/preview -d '{"ref":"main"}'
 # recent upstream-sync outcomes (for the Sync view)
 curl -sb jar.txt localhost:8080/api/templates/sync-runs
 ```
@@ -599,19 +610,75 @@ create/update response also includes
 accepted it.
 
 `GET /api/templates/sync` returns whether upstream mirroring is enabled plus its interval,
-repository, ref, active catalog bundle digest (`templates_commit`), and active template count. The
+repository, ref, the derived channel (`ref_source`: `stable` for the `latest` release tag,
+`preview` for the `main` branch, `custom` for anything else), `default_repo` (the repository is
+the ProjectDiscovery community catalog, so the UI offers the Stable/Preview channel choice), the
+active catalog bundle digest (`templates_commit`), active template count, and the provenance of
+the stored source (`source_updated_at`/`source_updated_by`, absent when the source was seeded
+from the environment and never edited; `source_updated_by_name` resolves that subject against
+the users registry to a display label — name, then email — for the UI, while
+`source_updated_by` keeps the raw OIDC subject as the stable audit handle). The
 digest is the same identifier shown for each scanner node, so an administrator can see whether a
 node matches the backend catalog. The cache path is not exposed, and credentials/query strings are
 stripped from repository URLs. `POST /api/templates/sync` queues a refresh and returns `202`;
-requests coalesce behind a running or already-queued refresh. It returns `503` when
-`TEMPLATE_SYNC_REPO` is empty. The request is `operator`-only and audited as `config_changed`
-(`templates.sync_requested`); the eventual background outcome remains visible in
+requests coalesce behind a running or already-queued refresh. It returns `503` when the stored
+source has an empty repository (upstream sync disabled). The request is `operator`-only and audited
+as `config_changed` (`templates.sync_requested`); the eventual background outcome remains visible in
 `/api/templates/sync-runs`. Each completed run includes the resulting `templates_commit` and
-`template_count`; failed runs carry the unchanged active state. These historical bundle IDs let an
+`template_count`; failed runs carry the unchanged active state. Runs since the source became
+switchable also record which source they read (`source_repo` sanitized, `source_ref` as
+configured) and their `restored` count, so the history can show a Stable → Preview switch as such
+rather than an ordinary upstream change. These historical bundle IDs let an
 administrator identify which catalog snapshot a stale scanner node still holds.
 Sync runs are retained in PostgreSQL rather than deleted. `GET /api/templates/sync-runs` returns
 the standard `{items,total,limit,offset}` page, ordered newest first, so the UI can page through the
 full history instead of silently capping it.
+
+The upstream source itself is admin-switchable at runtime (#343) — the repository and ref live in
+the `app_settings` singleton (seeded once from `TEMPLATE_SYNC_REPO`/`TEMPLATE_SYNC_REF`; afterward
+the database wins). `PUT /api/templates/sync/config` (admin) stores `{repo?, ref, preview_commit?}`:
+omitting `repo` keeps the stored URL (write-only, like node tokens), an explicit empty string
+disables upstream sync, and the ref accepts `latest`, a git ref name, or a full/abbreviated commit
+SHA. Only `https://` repositories are accepted. The candidate is resolved against the fetched
+repository before anything is stored, so an unreachable repository, an unknown ref, or a snapshot
+whose ids would shadow a custom template is refused with `400` — the same failure the queued sync
+would hit after the source was already stored. A connection failure returns a generic message; the
+raw dial error is logged server-side only, so the endpoint cannot be used to probe the internal
+network. Saving the stored source unchanged is a `200` no-op (no probe, no queued sync; the
+mutation wrapper still emits its one audit event, marked `unchanged=true` and without an old → new
+delta). A valid
+save queues an immediate sync and returns the full new status (bundle digest and count included).
+When the body carries `preview_commit` — the commit a preceding dry run resolved — and the ref
+still resolves to that same commit, the save verifies it instead of re-fetching and re-walking the
+whole catalog, so the usual admin flow pays for exactly one fetch. Every audited outcome of this
+endpoint — including a failed probe — carries the sanitized candidate `repo` and `ref` (the
+failures are the ones that matter for spotting internal-host probing); a save that does change the
+source additionally records the old → new ref and both sanitized repositories (`old_repo` →
+`repo`) with the actor — never credentials. Disabling is audited the same way.
+`POST /api/templates/sync/preview` (admin) is the read-only dry run behind the UI's impact confirm:
+it fetches and resolves the candidate, so a dry run — or one the admin cancels — never writes
+anything, and compares it with the stored catalog under the same reconcile rules the sync applies.
+The candidate repository decides where that fetch happens: the configured repository is probed in
+the real sync clone (under the shared worktree lock a probe only fetches and moves the
+checked-out ref, both of which every sync re-does — no second clone of the same catalog), while
+any other candidate is probed in a throwaway directory removed afterwards, so a typo or an
+unreachable host can neither delete nor poison cached state.
+It refuses the candidate with the same custom-template conflict error the save-time probe uses,
+and connection failures return the same generic message as the save path. The response is
+`{repo, ref, ref_source, commit, skipped, added, changed, restored, removed, affected_sets,
+regained_sets, affected_policies, affected_schedules}`: each affected set is an exact set whose
+membership includes templates the switch would tombstone (members are kept and return if the
+template reappears upstream, but scans and schedules resolving such a set are refused until the
+set's explicit selection is updated — hence the affected policy/schedule lists), `restored` counts
+templates that come back from tombstoned, and `regained_sets` names the exact sets that become
+scannable again — only sets whose every currently-unavailable member the candidate restores and
+none of whose active members it would tombstone (a set that regains just part of its membership
+stays refused at dispatch and is reported only through the `restored` count). The dry run is
+audited as `config_changed` (`template_sync.preview`) because it triggers outbound network work —
+the sanitized candidate repo/ref are recorded before the probe, so failed dry runs are audited
+with what they tried, and a successful one adds the resolved commit — and it holds a
+bounded probe lock: while a sync or another probe is running it fails fast with `503`
+instead of queueing behind the long sync timeout.
 
 Custom uploads are sanity-checked at write time (all `400` on failure): the body must be a single
 YAML document with a top-level `id`, a non-empty `info.name`, a severity in Nuclei's set

@@ -83,11 +83,44 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   severity, description, tags, content_sha256`). The raw YAML is the sole complete
   representation; metadata is extracted only for catalog filtering.
 - **template_sync_runs** — backend-owned upstream catalog refresh history, including pinned
-  upstream commit, resulting canonical `templates_commit` + template count, and
-  added/updated/removed/skipped counts. Failed runs record the unchanged active bundle state, so a
+  upstream commit, resulting canonical `templates_commit` + template count,
+  added/updated/restored/removed/skipped counts, and the configured source the run read
+  (`source_repo` sanitized + `source_ref`, #343), so the history distinguishes an admin source
+  switch from an ordinary upstream change. Failed runs record the unchanged active bundle state, so a
   node reporting an older digest can be matched to catalog history (a stray malformed file is
   skipped-and-counted, not fatal; the run fails closed only if nothing parses). Runs are retained
   in PostgreSQL and exposed through a paginated history; NSC does not silently prune them.
+- **app_settings (template-sync source)** — the upstream source (repository + ref) is a runtime
+  setting on the settings singleton (#343): the entrypoint seeds the NULL columns once from
+  `TEMPLATE_SYNC_REPO`/`TEMPLATE_SYNC_REF`, and afterward the database wins — a differing
+  environment only logs a drift note. The syncer reads the effective source from the database at
+  the start of every run (periodic, on-demand, and post-switch), so an admin switch
+  (`PUT /api/templates/sync/config`, audited) takes effect without a redeploy and replicas stay
+  consistent. An empty stored repository disables upstream sync (custom templates and node
+  distribution keep working). Repository URLs may embed credentials: they are stored verbatim but
+  only ever returned through sanitization (userinfo/query stripped), and an update that omits the
+  repository keeps the stored value (write-only, like node tokens). Switching reconciles in
+  place — the full-snapshot upsert + tombstone keeps template ids, exact-set memberships,
+  exclusions, lifecycle history, and scan provenance intact, and returning templates are restored
+  by the `ON CONFLICT` upsert — and the admin dry run (`POST /api/templates/sync/preview`, audited
+  like other mutations since it triggers outbound network work) reports added/changed/restored/
+  removed counts plus the exact sets that would lose active members — with the scan policies and
+  schedules that resolve those sets — before the switch is confirmed. Only `https://` repositories
+  are accepted. The dry run and the save-time probe both refuse a candidate whose ids would shadow
+  a custom template — the exact conflict that
+  aborts a sync run — so a confirmed switch can never queue a sync that fails on it. A probe
+  never damages cached state: the configured repository is probed in the real sync clone (under
+  the shared worktree lock a probe only fetches and moves the checked-out ref, both of which
+  every sync re-does), and any other candidate — a typo, an unreachable host, wrong credentials —
+  is probed in a throwaway directory removed afterwards (PR #344 review), so nothing is ever
+  re-pointed or re-cloned from a failed dry run and probes need no second cache next to
+  TEMPLATE_SYNC_DIR. Probes run under a short probe timeout with a fail-fast
+  `503` while the long sync lock is held. When the request carries the commit a dry run resolved
+  (`preview_commit`) and the ref still resolves to it, the save verifies that commit instead of
+  re-fetching and re-walking the catalog, so the usual admin flow fetches once. A real sync still
+  replaces the clone cache when the stored repository itself changes: a force fetch alone would
+  keep the previous repository's tags and remote refs, letting a higher stale semver tag win
+  `latest` or a leftover branch win ref lookup.
 - **template_sets** — an explicit `mode`: `exact` uses curated membership in
   `template_set_members`, `all` resolves every active catalog template at scan time, and `exclude`
   resolves every active template except explicit rows in `template_set_exclusions`. The retired POC

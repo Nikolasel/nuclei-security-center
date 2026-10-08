@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   api,
@@ -12,16 +12,20 @@ import {
   type TemplateImportResponse,
   type TemplateSort,
   type TemplateSource,
+  type TemplateSyncPreview,
   type TemplateSyncRun,
+  type TemplateSyncStatus,
   type TemplatesQuery,
 } from "../api";
 import { hasRole, useMe } from "../auth";
 import { TemplateArchiveImportModal } from "../components/TemplateArchiveImportModal";
 import {
   Alert,
+  Badge,
   Button,
   Card,
   CardHeader,
+  Checkbox,
   DescriptionList,
   ErrorText,
   Field,
@@ -62,6 +66,7 @@ import {
   shortDigest,
   type SyncRunSummaryView,
 } from "../syncRunSummary";
+import { channelFor, describeSourceSwitch, isDefaultRepo, type SyncChannel } from "../syncSourceChannel";
 import { parseList } from "../util";
 
 const PAGE_SIZE = 30;
@@ -84,6 +89,7 @@ function TemplateDetailModal({
     queryKey: ["template", templateID],
     queryFn: () => api.getTemplate(templateID),
   });
+  const unavailable = detail.data != null && detail.data.availability !== "active";
   return (
     <Modal
       open
@@ -101,12 +107,28 @@ function TemplateDetailModal({
             <Meta label="Template ID">
               <span className="font-mono text-xs">{detail.data.id}</span>
             </Meta>
-            <Meta label="Source">{detail.data.source}</Meta>
+            <Meta label="Source">
+              <span className="inline-flex items-center gap-2">
+                {detail.data.source}
+                {unavailable && (
+                  <Badge tone="danger" title={detail.data.availability}>
+                    unavailable
+                  </Badge>
+                )}
+              </span>
+            </Meta>
             <Meta label="Author">{detail.data.author || <Muted />}</Meta>
             <Meta label="Revision">
               <span className="tabular-nums">{detail.data.revision}</span>
             </Meta>
           </DescriptionList>
+          {unavailable && (
+            <Alert tone="warning" title="Removed from the active catalog">
+              This template is not served by the current upstream source (availability:{" "}
+              {detail.data.availability}). Scans resolving a template set that still lists it are
+              refused until the set is updated or the template returns upstream.
+            </Alert>
+          )}
           {detail.data.description && <p className="text-sm text-neutral-600 dark:text-neutral-400">{detail.data.description}</p>}
           <pre className="max-h-[50dvh] overflow-auto rounded-md bg-neutral-950 p-4 text-xs text-neutral-100">
             {detail.data.yaml}
@@ -625,13 +647,25 @@ function SyncRunRow({
   result,
   indent = false,
   expander,
+  prev,
 }: {
   run: TemplateSyncRun;
   result: SyncRunSummaryView;
   indent?: boolean;
   expander?: ReactNode;
+  /** the run immediately older than this one (same page), for the
+   *  source-switch marker; absent at a page boundary or for legacy runs. */
+  prev?: TemplateSyncRun;
 }) {
   const upstream = formatRefRange(run.ref_before, run.ref_after);
+  const channel = run.source_ref ? channelFor(run.source_repo, run.source_ref) : undefined;
+  const switched =
+    run.source_ref && prev?.source_ref
+      ? describeSourceSwitch(
+          { repo: prev.source_repo, ref: prev.source_ref },
+          { repo: run.source_repo, ref: run.source_ref },
+        )
+      : "";
   return (
     <TRow>
       <Td className="whitespace-nowrap">
@@ -655,8 +689,19 @@ function SyncRunRow({
           </>
         ) : <Muted />}
       </Td>
-      <Td className="font-mono text-xs" title={upstream.title || undefined}>
-        {upstream.text}
+      <Td className="whitespace-nowrap" title={upstream.title || undefined}>
+        <div className="font-mono text-xs">{upstream.text}</div>
+        {channel && (
+          <div className="mt-0.5 flex items-center gap-1.5">
+            <span className="font-mono text-xs">{run.source_ref}</span>
+            <ChannelPill source={channel} />
+          </div>
+        )}
+        {switched && (
+          <div className="mt-0.5 text-xs text-amber-700 dark:text-amber-400">
+            Source switched: {switched}
+          </div>
+        )}
       </Td>
       <Td className="whitespace-nowrap text-neutral-500">{fmtTime(run.finished_at)}</Td>
       <Td className="max-w-md text-xs text-rose-600 dark:text-rose-400" title={run.error}>{run.error || <Muted />}</Td>
@@ -664,11 +709,274 @@ function SyncRunRow({
   );
 }
 
-function SyncTab({ canWrite }: { canWrite: boolean }) {
+const SYNC_CHANNELS: { value: SyncChannel; label: string }[] = [
+  { value: "stable", label: "Stable" },
+  { value: "preview", label: "Preview" },
+  { value: "custom", label: "Custom ref" },
+];
+
+function channelTone(source: "stable" | "preview" | "custom"): "neutral" | "warn" | "good" {
+  return source === "preview" ? "warn" : source === "custom" ? "neutral" : "good";
+}
+
+function ChannelPill({ source }: { source?: "stable" | "preview" | "custom" }) {
+  if (!source) return null;
+  return <Pill tone={channelTone(source)}>{source}</Pill>;
+}
+
+/** PreviewImpact is the dry-run summary the switch confirmation dialog shows. */
+function PreviewImpact({ preview }: { preview: TemplateSyncPreview }) {
+  const affected = preview.affected_sets ?? [];
+  const regained = preview.regained_sets ?? [];
+  const policies = preview.affected_policies ?? [];
+  const schedules = preview.affected_schedules ?? [];
+  return (
+    <div className="space-y-2.5 text-left text-sm">
+      <div className="flex flex-wrap gap-1.5">
+        <Pill tone={preview.added > 0 ? "good" : "neutral"}>{preview.added} added</Pill>
+        <Pill tone={preview.changed > 0 ? "warn" : "neutral"}>{preview.changed} changed</Pill>
+        {preview.restored > 0 && <Pill tone="good">{preview.restored} restored</Pill>}
+        <Pill tone={preview.removed > 0 ? "warn" : "neutral"}>{preview.removed} removed</Pill>
+        <Pill>{preview.skipped} skipped</Pill>
+      </div>
+      {affected.length > 0 && (
+        <p>
+          {affected.length === 1 ? "One exact set" : `${affected.length} exact sets`} would lose
+          active members:{" "}
+          {affected.map((s) => `${s.name} (${s.losing_count} of ${s.member_count})`).join(", ")}.{" "}
+          The members stay listed and return if the template reappears upstream, but{" "}
+          <span className="font-medium">scans and schedules using these sets are refused</span>{" "}
+          until their explicit selection is updated.
+        </p>
+      )}
+      {(policies.length > 0 || schedules.length > 0) && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-2.5 text-xs dark:border-amber-900/60 dark:bg-amber-950/40">
+          <p className="font-medium">Launches that will be refused after the switch:</p>
+          <ul className="mt-1 ml-4 list-disc space-y-0.5">
+            {policies.map((p) => (
+              <li key={`p-${p.id}`}>Scan policy {p.name}</li>
+            ))}
+            {schedules.map((s) => (
+              <li key={`s-${s.id}`}>Schedule {s.name}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {preview.removed > 0 && affected.length === 0 && (
+        <p>
+          Removed upstream templates stay listed in any exact set that holds them; scans naming one
+          are refused until the source serves it again or the set is updated.
+        </p>
+      )}
+      {regained.length > 0 && (
+        <p>
+          {regained.length === 1 ? "One exact set" : `${regained.length} exact sets`} regain
+          currently unavailable members —{" "}
+          {regained.map((s) => `${s.name} (${s.regaining_count} of ${s.member_count})`).join(", ")}{" "}
+          — and become scannable again after the sync.
+        </p>
+      )}
+      <p className="text-xs text-neutral-500">
+        Resolves to commit <span className="font-mono">{shortDigest(preview.commit)}</span>. The
+        switch queues an immediate sync; track it in the runs table below.
+      </p>
+    </div>
+  );
+}
+
+function ChangeSourceModal({
+  status,
+  onClose,
+  onSaved,
+}: {
+  status: TemplateSyncStatus;
+  onClose: () => void;
+  onSaved: (next: TemplateSyncStatus) => void;
+}) {
+  const confirm = useConfirm();
+  const [channel, setChannel] = useState<SyncChannel>(status.default_repo ? (status.ref_source ?? "stable") : "custom");
+  const [ref, setRef] = useState(status.ref || "latest");
+  const [repoDraft, setRepoDraft] = useState("");
+  const [disable, setDisable] = useState(false);
+  const [advanced, setAdvanced] = useState(!status.enabled);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const pickChannel = (next: SyncChannel) => {
+    setChannel(next);
+    if (next === "stable") setRef("latest");
+    else if (next === "preview") setRef("main");
+    else setRef((current) => (current === "latest" || current === "main" ? "" : current));
+  };
+
+  // Closing (or cancelling) aborts an in-flight dry run so a slow probe never
+  // traps the dialog (review #343 #5); the request's error is swallowed below.
+  const close = () => {
+    abortRef.current?.abort();
+    onClose();
+  };
+
+  // Write-only repository semantics: a blank field keeps the stored URL, an
+  // entered value replaces it, and the Disable checkbox is the explicit empty.
+  const needRepo = !status.enabled && repoDraft.trim() === "";
+  const canSave = ref.trim() !== "" && !needRepo;
+  // The Stable/Preview picker exists only for the ProjectDiscovery catalog, so
+  // it follows the repository being saved (the draft when one is typed, the
+  // stored one otherwise) — review #343 #15.
+  const effectiveRepo = disable ? "" : repoDraft.trim() !== "" ? repoDraft.trim() : (status.repo ?? "");
+  const pickerVisible = !disable && isDefaultRepo(effectiveRepo);
+
+  const save = async () => {
+    const body: { repo?: string; ref: string; preview_commit?: string } = { ref: ref.trim() };
+    if (disable) body.repo = "";
+    else if (repoDraft.trim() !== "") body.repo = repoDraft.trim();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setBusy(true);
+    setError(null);
+    try {
+      if (disable) {
+        const ok = await confirm({
+          title: "Disable upstream template sync?",
+          description:
+            "The community catalog mirror stops. Custom templates, template sets, and node distribution keep working, and upstream templates keep their current availability. Re-enable later from this dialog.",
+          confirmLabel: "Disable upstream sync",
+        });
+        if (!ok) return;
+      } else {
+        // The dry run doubles as the save-time validation: an unreachable
+        // repository or unknown ref fails here with the probe error. The
+        // previewed commit rides along to the PUT, so the queued sync verifies
+        // that commit instead of fetching and walking the catalog again.
+        const preview = await api.templateSyncPreview(body, { signal: controller.signal });
+        if (preview.commit) body.preview_commit = preview.commit;
+        const ok = await confirm({
+          title: "Switch the upstream template source?",
+          tone: "primary",
+          description: <PreviewImpact preview={preview} />,
+          confirmLabel: "Switch source",
+        });
+        if (!ok) return;
+      }
+      onSaved(await api.updateTemplateSyncConfig(body, { signal: controller.signal }));
+      onClose();
+    } catch (err) {
+      if ((err as { name?: string } | null)?.name !== "AbortError") setError(err);
+    } finally {
+      abortRef.current = null;
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onOpenChange={(open) => !open && close()}
+      title="Change upstream source"
+      description="The next sync mirrors this repository and ref; saving queues an immediate sync."
+    >
+      <div className="space-y-4">
+        {status.enabled && (
+          <Checkbox
+            label="Disable upstream sync"
+            description="Clears the stored repository. Custom templates, template sets, and node distribution keep working."
+            checked={disable}
+            onChange={(checked) => {
+              setDisable(checked);
+              if (checked) setRepoDraft("");
+            }}
+          />
+        )}
+        {!disable && pickerVisible && (
+          <Field
+            label="Upstream channel"
+            hint="Stable mirrors the highest stable release tag; Preview mirrors the moving main branch."
+          >
+            <div role="group" aria-label="Upstream channel" className="flex flex-wrap gap-1.5">
+              {SYNC_CHANNELS.map((c) => (
+                <Button key={c.value} size="sm" selected={channel === c.value} onClick={() => pickChannel(c.value)}>
+                  {c.label}
+                </Button>
+              ))}
+            </div>
+          </Field>
+        )}
+        {!disable && pickerVisible && channel === "preview" && (
+          <Alert tone="warning" title="Preview tracks the unreleased main branch">
+            Templates change between syncs and may require a newer Nuclei engine than the pinned scanner
+            (NUCLEI_VERSION in deploy/Dockerfile.scanner); those templates fail at runtime on the node.
+          </Alert>
+        )}
+        {!disable && (!pickerVisible || channel === "custom") && (
+          <Field label="Ref" hint="Branch, tag, or commit SHA; it must resolve in the fetched repository." required>
+            <Input
+              value={ref}
+              onChange={(event) => setRef(event.target.value)}
+              placeholder="v10.2.9"
+              spellCheck={false}
+              className="font-mono text-xs"
+            />
+          </Field>
+        )}
+        <div className="space-y-2 rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
+          <Button
+            variant="link"
+            aria-expanded={advanced}
+            className="gap-1 text-xs"
+            onClick={() => setAdvanced((v) => !v)}
+          >
+            {advanced ? (
+              <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            Advanced: repository URL
+          </Button>
+          {advanced && (
+            <div className="space-y-2">
+              <Field
+                label="Repository URL"
+                hint={
+                  disable
+                    ? "Disabled — the checkbox above clears the stored repository."
+                    : status.enabled
+                      ? "Leave blank to keep the stored repository. Credentials embedded in the URL are stored but never shown again."
+                      : "Required to enable upstream sync. Credentials embedded in the URL are stored but never shown again."
+                }
+              >
+                <Input
+                  value={repoDraft}
+                  onChange={(event) => setRepoDraft(event.target.value)}
+                  disabled={disable}
+                  placeholder={status.enabled ? status.repo : "https://github.com/projectdiscovery/nuclei-templates.git"}
+                  spellCheck={false}
+                  className="font-mono text-xs"
+                />
+              </Field>
+              {needRepo && <FormHint tone="warning">Enter a repository URL to enable upstream sync.</FormHint>}
+            </div>
+          )}
+        </div>
+        {error != null && <ErrorText error={error} />}
+        <ModalActions>
+          <Button onClick={close}>Cancel</Button>
+          <Button variant="primary" disabled={!canSave || busy} onClick={() => void save()}>
+            {busy ? "Running dry run…" : disable ? "Disable upstream sync" : "Save source"}
+          </Button>
+        </ModalActions>
+      </div>
+    </Modal>
+  );
+}
+
+function SyncTab({ canWrite, isAdmin }: { canWrite: boolean; isAdmin: boolean }) {
   const syncPageSize = 20;
   const qc = useQueryClient();
   const [offset, setOffset] = useState(0);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [changingSource, setChangingSource] = useState(false);
+  const [sourceNotice, setSourceNotice] = useState("");
   const status = useQuery({ queryKey: ["template-sync"], queryFn: () => api.getTemplateSync() });
   const runs = useQuery({
     queryKey: ["template-sync-runs", offset],
@@ -681,9 +989,29 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
       setTimeout(() => void qc.invalidateQueries({ queryKey: ["template-sync-runs"] }), 1000);
     },
   });
+  // The run immediately older than each listed run (same page), so the runs
+  // table can mark a source switch; the last row of a page has no marker.
+  const olderById = useMemo(() => {
+    const m = new Map<string, TemplateSyncRun>();
+    (runs.data?.items ?? []).forEach((r, i, arr) => m.set(r.id, arr[i + 1]));
+    return m;
+  }, [runs.data]);
+  const sourceSaved = (next: TemplateSyncStatus) => {
+    setChangingSource(false);
+    setSourceNotice(
+      next.enabled
+        ? `Upstream source switched to ${next.repo} at ${next.ref}; a sync is queued.`
+        : "Upstream sync disabled; custom templates and node distribution keep working.",
+    );
+    void qc.invalidateQueries({ queryKey: ["template-sync"] });
+    void qc.invalidateQueries({ queryKey: ["templates"] });
+    void qc.invalidateQueries({ queryKey: ["template-sets"] });
+    setTimeout(() => void qc.invalidateQueries({ queryKey: ["template-sync-runs"] }), 1000);
+  };
 
   return (
     <div className="space-y-4">
+      {sourceNotice && <Alert tone="success" onDismiss={() => setSourceNotice("")}>{sourceNotice}</Alert>}
       {status.isError ? <ErrorText error={status.error} /> : status.isLoading || !status.data ? <Spinner /> : (
         <Section
           title={
@@ -693,19 +1021,36 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
             </span>
           }
           actions={
-            canWrite && (
-              <Button variant="primary" disabled={!status.data.enabled || trigger.isPending} onClick={() => trigger.mutate()}>
-                {trigger.isPending ? "Queueing…" : trigger.isSuccess ? "Sync queued" : "Sync now"}
-              </Button>
-            )
+            <>
+              {isAdmin && (
+                <Button disabled={changingSource} onClick={() => setChangingSource(true)}>
+                  Change source
+                </Button>
+              )}
+              {canWrite && (
+                <Button variant="primary" disabled={!status.data.enabled || trigger.isPending} onClick={() => trigger.mutate()}>
+                  {trigger.isPending ? "Queueing…" : trigger.isSuccess ? "Sync queued" : "Sync now"}
+                </Button>
+              )}
+            </>
           }
         >
           <div className="space-y-3">
             {status.data.enabled ? (
               <DescriptionList>
                 <Meta label="Repository"><span className="break-all font-mono text-xs">{status.data.repo}</span></Meta>
-                <Meta label="Ref"><span className="font-mono text-xs">{status.data.ref}</span></Meta>
+                <Meta label="Ref">
+                  <span className="inline-flex items-center gap-2">
+                    <span className="font-mono text-xs">{status.data.ref}</span>
+                    <ChannelPill source={status.data.ref_source} />
+                  </span>
+                </Meta>
                 <Meta label="Interval">{status.data.interval}</Meta>
+                <Meta label="Last source change">
+                  {status.data.source_updated_at
+                    ? `Changed by ${status.data.source_updated_by_name || status.data.source_updated_by || "unknown"} at ${fmtTime(status.data.source_updated_at)}`
+                    : "Seeded from the environment"}
+                </Meta>
                 <Meta label="Active catalog bundle">
                   <span className="font-mono text-xs" title={status.data.templates_commit}>
                     {shortDigest(status.data.templates_commit)}
@@ -714,11 +1059,15 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
                 <Meta label="Active templates"><span className="tabular-nums">{status.data.template_count}</span></Meta>
               </DescriptionList>
             ) : (
-              <p className="text-sm text-neutral-500">Set TEMPLATE_SYNC_REPO to enable the community catalog mirror. Custom templates remain available.</p>
+              <p className="text-sm text-neutral-500">
+                Upstream sync is disabled: the stored source has no repository, so only custom templates are cataloged
+                and distributed. {isAdmin ? "Enable it with Change source." : "An administrator can enable it."}
+              </p>
             )}
             <FormHint>
-              Configure the mirror on the backend with TEMPLATE_SYNC_REPO, TEMPLATE_SYNC_REF,
-              and TEMPLATE_SYNC_INTERVAL. Changes take effect after a backend restart.
+              The repository and ref are runtime settings an administrator changes under Change source. The cadence
+              (TEMPLATE_SYNC_INTERVAL) and clone cache (TEMPLATE_SYNC_DIR) stay environment settings;
+              TEMPLATE_SYNC_REPO/TEMPLATE_SYNC_REF only seed the stored source on first boot.
             </FormHint>
             {trigger.isError && <ErrorText error={trigger.error} />}
           </div>
@@ -755,6 +1104,7 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
                     <Fragment key={groupKey}>
                       <SyncRunRow
                         run={run}
+                        prev={olderById.get(run.id)}
                         result={formatSyncRunRow(run, count, fmtTime(run.finished_at))}
                         expander={count > 1 && (
                           <Button
@@ -781,7 +1131,13 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
                       />
                       {isExpanded &&
                         rest.map((older) => (
-                          <SyncRunRow key={older.id} run={older} result={formatSyncRunResult(older)} indent />
+                          <SyncRunRow
+                            key={older.id}
+                            run={older}
+                            prev={olderById.get(older.id)}
+                            result={formatSyncRunResult(older)}
+                            indent
+                          />
                         ))}
                     </Fragment>
                   );
@@ -797,6 +1153,9 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
           />
         </Card>
       )}
+      {status.data && changingSource && (
+        <ChangeSourceModal status={status.data} onClose={() => setChangingSource(false)} onSaved={sourceSaved} />
+      )}
     </div>
   );
 }
@@ -804,6 +1163,7 @@ function SyncTab({ canWrite }: { canWrite: boolean }) {
 export function TemplatesPage() {
   const me = useMe();
   const canWrite = hasRole(me.data ?? undefined, "operator");
+  const canAdmin = hasRole(me.data ?? undefined, "admin");
   const canDelete = hasRole(me.data ?? undefined, "admin");
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedTemplateID = searchParams.get("template");
@@ -848,7 +1208,7 @@ export function TemplatesPage() {
       />
       {tab === "catalog" && <CatalogTab canWrite={canWrite} />}
       {tab === "custom" && <CustomTab canWrite={canWrite} canDelete={canDelete} />}
-      {tab === "sync" && <SyncTab canWrite={canWrite} />}
+      {tab === "sync" && <SyncTab canWrite={canWrite} isAdmin={canAdmin} />}
       {linkedTemplateID && (
         <TemplateDetailModal
           templateID={linkedTemplateID}

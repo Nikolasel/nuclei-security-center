@@ -21,17 +21,39 @@ documented separately because the backend never sees them.
 | `SCAN_ZONES` | unset | JSON array of additional seed nodes. Seed-only; PostgreSQL is authoritative afterward. |
 | `NODE_HEALTH_INTERVAL` | `30s` | Capability-poll interval. A node stays healthy for three times this interval after its last successful poll. |
 | `RETENTION_SWEEP_INTERVAL` | `1h` | How often the backend applies the DB-backed scan-retention policy. |
-| `TEMPLATE_SYNC_INTERVAL` | `6h` | Upstream catalog refresh cadence. |
-| `TEMPLATE_SYNC_REPO` | ProjectDiscovery `nuclei-templates` Git repository | Upstream catalog Git repository. Set to an explicit empty value to disable upstream sync while retaining custom templates and distribution. |
-| `TEMPLATE_SYNC_REF` | `latest` | Revision to mirror. latest is the highest stable tag; tags and SHAs are reproducible, branches advance. |
-| `TEMPLATE_SYNC_DIR` | `/tmp/nsc-template-sync` | Backend clone cache. Mount persistent storage to avoid repeated full clones. |
+| `TEMPLATE_SYNC_INTERVAL` | `6h` | Upstream catalog refresh cadence. Env-only; the source repository and ref are runtime settings. |
+| `TEMPLATE_SYNC_REPO` | ProjectDiscovery `nuclei-templates` Git repository | Upstream catalog Git repository. Seeds the DB-backed source once at startup; afterward the admin UI (Templates → Sync) is authoritative and this variable only matters when never seeded. An explicit empty value disables upstream sync while retaining custom templates and distribution. |
+| `TEMPLATE_SYNC_REF` | `latest` | Revision to mirror. Seeds the DB-backed source once at startup; afterward the admin UI is authoritative. latest is the highest stable tag; tags and SHAs are reproducible, branches advance. |
+| `TEMPLATE_SYNC_DIR` | `/tmp/nsc-template-sync` | Backend clone cache. Mount persistent storage to avoid repeated full clones. Source probes reuse this clone for the configured repository (under the sync worktree lock) and probe any other candidate in a throwaway temp directory that is removed afterwards, so a dry run never invalidates or duplicates the real clone. Previews of a different repository clone it into the system temp directory (os.TempDir(), usually /tmp): on a read-only root it must be writable, and if it is a memory-backed tmpfs the clone counts against the pod's memory for the duration of the preview. |
 | `TEMPLATE_DISTRIBUTE_INTERVAL` | `1h` | How often stale, idle scanner nodes receive the current full catalog bundle. Pre-dispatch top-up still runs. |
 | `EXPORT_SPOOL_DIR` | `os.TempDir()` (usually `/tmp`) | Writable scratch directory for findings exports and scan-bundle imports. |
 
 Reserve at least 512 MiB in `EXPORT_SPOOL_DIR` for four simultaneous 64 MiB exports plus up to
 512 MiB for the one in-flight scan-bundle ZIP spool; SARIF uses a second bounded rule spool. On a
-read-only-root deployment mount a writable `emptyDir`/volume and point this variable at it.
+read-only-root deployment mount a writable `emptyDir`/volume and point this variable at it, and keep
+the system temp directory (`/tmp`) writable as well: a preview of a different template repository
+clones that repository into `os.TempDir()` (see the `TEMPLATE_SYNC_DIR` note above).
 Generate `SCANNER_TOKEN` with `openssl rand -base64 24`.
+
+### Upstream template source: env seeds once, the database wins
+
+The upstream template source (repository + ref) is a **runtime setting**, not an environment
+setting. On first boot after this migration the NULL `app_settings` columns are seeded once from
+`TEMPLATE_SYNC_REPO` / `TEMPLATE_SYNC_REF` (including their defaults); from then on the stored
+values are authoritative and the environment is never re-applied over them. An env that differs
+from the stored source only logs a drift note at startup — change the source under
+**Templates → Sync → Change source** (admin), which stores, validates against the fetched
+repository, and queues an immediate sync. Only `https://` repositories are accepted (`http://`,
+`git://`, `file://` and bare paths are refused — plaintext remotes could tamper with templates that
+run against targets). SSH remotes are also refused: the go-git client would need an explicit key
+and `known_hosts` setup the container does not ship, so an `ssh://` URL could never resolve as
+configured; use `https://` with credentials embedded in the URL (stored, never shown). Connection
+failures surface as a generic error — the raw dial error goes only to the backend log.
+`TEMPLATE_SYNC_INTERVAL` (cadence) and
+`TEMPLATE_SYNC_DIR` (clone cache) remain env-only. An explicit empty repository means "upstream
+sync disabled" — custom templates and node distribution keep working. The effective environment
+view on Settings marks both seeding variables as seed-only and shows the stored value as
+effective (repository sanitized).
 
 Scanner nodes likewise need writable scratch: the image's HOME directory (`/home/scanner`) for nuclei/naabu/uncover config cache (`$HOME/.config`, `$HOME/nuclei-templates`) and `SCANNER_WORK_DIR` (defaults to a private `0700` dir under `os.TempDir()`/`/tmp`) for per-scan work dirs. On a `read_only: true` deployment mount writable `emptyDir`/tmpfs volumes at both paths, as with `EXPORT_SPOOL_DIR`/`TEMPLATE_SYNC_DIR` for the backend.
 

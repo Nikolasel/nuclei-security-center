@@ -8,6 +8,8 @@ export type SyncRunSummaryInput = {
   added: number;
   updated: number;
   removed: number;
+  /** templates that came back from unavailable (restored upstream, #343). */
+  restored?: number;
   skipped: number;
   ref_before?: string;
   ref_after?: string;
@@ -35,11 +37,13 @@ export function formatRefRange(before?: string, after?: string): SyncRunSummaryV
 }
 
 function actionBreakdown(run: SyncRunSummaryInput): string {
-  return `+${run.added} / ~${run.updated} / −${run.removed} / ${run.skipped} skipped`;
+  const restored = run.restored ?? 0;
+  const restoredPart = restored > 0 ? ` / ${restored} restored` : "";
+  return `+${run.added} / ~${run.updated}${restoredPart} / −${run.removed} / ${run.skipped} skipped`;
 }
 
 function isNoChange(run: SyncRunSummaryInput): boolean {
-  return run.added === 0 && run.updated === 0 && run.removed === 0;
+  return run.added === 0 && run.updated === 0 && run.removed === 0 && (run.restored ?? 0) === 0;
 }
 
 function malformedSkipped(count: number): string {

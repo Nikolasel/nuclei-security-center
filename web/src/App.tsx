@@ -1,8 +1,8 @@
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { useMe } from "./auth";
 import { Brand } from "./components/Brand";
 import { Layout } from "./components/Layout";
-import { buttonClass, ErrorText, Spinner } from "./components/ui";
+import { buttonClass, ErrorBoundary, ErrorText, Spinner } from "./components/ui";
 import { FindingDetailPage } from "./pages/FindingDetailPage";
 import { FindingsPage } from "./pages/FindingsPage";
 import { NodesPage } from "./pages/NodesPage";
@@ -36,6 +36,7 @@ function LoginScreen() {
 
 export default function App() {
   const me = useMe();
+  const location = useLocation();
 
   if (me.isLoading) {
     return (
@@ -55,24 +56,28 @@ export default function App() {
 
   return (
     <Layout identity={me.data}>
-      <Routes>
-        <Route path="/" element={<Navigate to="/findings" replace />} />
-        <Route path="/findings" element={<FindingsPage />} />
-        <Route path="/findings/:id" element={<FindingDetailPage />} />
-        <Route path="/occurrences/:id" element={<OccurrenceDetailPage />} />
-        <Route path="/scans" element={<ScansPage />} />
-        <Route path="/scans/:id" element={<ScanDetailPage />} />
-        <Route path="/schedules" element={<SchedulesPage />} />
-        <Route path="/targets" element={<TargetsPage />} />
-        <Route path="/templates" element={<TemplatesPage />} />
-        <Route path="/template-sets" element={<TemplateSetsPage />} />
-        <Route path="/scan-policies" element={<ScanPoliciesPage />} />
-        <Route path="/nodes" element={<NodesPage />} />
-        <Route path="/service-accounts" element={<ServiceAccountsPage />} />
-        <Route path="/sessions" element={<SessionsPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="*" element={<Navigate to="/findings" replace />} />
-      </Routes>
+      {/* Keyed by pathname so navigating away clears a caught render crash
+        instead of leaving every route stuck on the error panel. */}
+      <ErrorBoundary resetKey={location.pathname} label="on this page">
+        <Routes>
+          <Route path="/" element={<Navigate to="/findings" replace />} />
+          <Route path="/findings" element={<FindingsPage />} />
+          <Route path="/findings/:id" element={<FindingDetailPage />} />
+          <Route path="/occurrences/:id" element={<OccurrenceDetailPage />} />
+          <Route path="/scans" element={<ScansPage />} />
+          <Route path="/scans/:id" element={<ScanDetailPage />} />
+          <Route path="/schedules" element={<SchedulesPage />} />
+          <Route path="/targets" element={<TargetsPage />} />
+          <Route path="/templates" element={<TemplatesPage />} />
+          <Route path="/template-sets" element={<TemplateSetsPage />} />
+          <Route path="/scan-policies" element={<ScanPoliciesPage />} />
+          <Route path="/nodes" element={<NodesPage />} />
+          <Route path="/service-accounts" element={<ServiceAccountsPage />} />
+          <Route path="/sessions" element={<SessionsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="*" element={<Navigate to="/findings" replace />} />
+        </Routes>
+      </ErrorBoundary>
     </Layout>
   );
 }

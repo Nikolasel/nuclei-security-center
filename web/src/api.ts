@@ -184,7 +184,7 @@ export interface TemplateSyncRun {
   skipped: number;
   error?: string;
   /** the configured source this run actually read (present on runs since #343's
-   *  migration 0007; absent/empty on historical runs). */
+   *  migration 0006; absent/empty on historical runs). */
   source_repo?: string;
   source_ref?: string;
 }

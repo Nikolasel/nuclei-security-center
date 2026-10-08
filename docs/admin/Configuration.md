@@ -24,13 +24,15 @@ documented separately because the backend never sees them.
 | `TEMPLATE_SYNC_INTERVAL` | `6h` | Upstream catalog refresh cadence. Env-only; the source repository and ref are runtime settings. |
 | `TEMPLATE_SYNC_REPO` | ProjectDiscovery `nuclei-templates` Git repository | Upstream catalog Git repository. Seeds the DB-backed source once at startup; afterward the admin UI (Templates → Sync) is authoritative and this variable only matters when never seeded. An explicit empty value disables upstream sync while retaining custom templates and distribution. |
 | `TEMPLATE_SYNC_REF` | `latest` | Revision to mirror. Seeds the DB-backed source once at startup; afterward the admin UI is authoritative. latest is the highest stable tag; tags and SHAs are reproducible, branches advance. |
-| `TEMPLATE_SYNC_DIR` | `/tmp/nsc-template-sync` | Backend clone cache. Mount persistent storage to avoid repeated full clones. Source probes reuse this clone for the configured repository (under the sync worktree lock) and probe any other candidate in a throwaway temp directory that is removed afterwards, so a dry run never invalidates or duplicates the real clone. |
+| `TEMPLATE_SYNC_DIR` | `/tmp/nsc-template-sync` | Backend clone cache. Mount persistent storage to avoid repeated full clones. Source probes reuse this clone for the configured repository (under the sync worktree lock) and probe any other candidate in a throwaway temp directory that is removed afterwards, so a dry run never invalidates or duplicates the real clone. Previews of a different repository clone it into the system temp directory (os.TempDir(), usually /tmp): on a read-only root it must be writable, and if it is a memory-backed tmpfs the clone counts against the pod's memory for the duration of the preview. |
 | `TEMPLATE_DISTRIBUTE_INTERVAL` | `1h` | How often stale, idle scanner nodes receive the current full catalog bundle. Pre-dispatch top-up still runs. |
 | `EXPORT_SPOOL_DIR` | `os.TempDir()` (usually `/tmp`) | Writable scratch directory for findings exports and scan-bundle imports. |
 
 Reserve at least 512 MiB in `EXPORT_SPOOL_DIR` for four simultaneous 64 MiB exports plus up to
 512 MiB for the one in-flight scan-bundle ZIP spool; SARIF uses a second bounded rule spool. On a
-read-only-root deployment mount a writable `emptyDir`/volume and point this variable at it.
+read-only-root deployment mount a writable `emptyDir`/volume and point this variable at it, and keep
+the system temp directory (`/tmp`) writable as well: a preview of a different template repository
+clones that repository into `os.TempDir()` (see the `TEMPLATE_SYNC_DIR` note above).
 Generate `SCANNER_TOKEN` with `openssl rand -base64 24`.
 
 ### Upstream template source: env seeds once, the database wins

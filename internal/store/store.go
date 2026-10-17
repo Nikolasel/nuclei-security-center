@@ -54,7 +54,7 @@ const DefaultMaxLiveAuthFlows = 10_000
 // authorization-flow cap, preventing an unsafe accidental unbounded setting.
 const MaxConfiguredLiveAuthFlows = 100_000
 
-const unsupportedMigrationHistory = "migration history is not supported by the current fresh-deployment baseline; deploy a new empty database and restore portable exports"
+const unsupportedMigrationHistory = "the database was migrated by a newer release; run that release or newer"
 
 // immutableMigrationChanged is the guidance for a checksum mismatch on an
 // already-applied migration. Since the beta baseline freeze, released migration
@@ -218,21 +218,6 @@ func (s *Store) Migrate(ctx context.Context) error {
 		)
 	}
 
-	var hasChecksumColumn bool
-	if err := tx.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			  FROM information_schema.columns
-			 WHERE table_schema = current_schema()
-			   AND table_name = 'schema_migrations'
-			   AND column_name = 'checksum_sha256'
-		)`).Scan(&hasChecksumColumn); err != nil {
-		return fmt.Errorf("inspect migration checksum column: %w", err)
-	}
-	if !hasChecksumColumn {
-		return fmt.Errorf("migration history has no checksum column: %s", unsupportedMigrationHistory)
-	}
-
 	applied := make(map[string]*string, len(names))
 	rows, err = tx.Query(ctx, `SELECT version, checksum_sha256 FROM schema_migrations ORDER BY version`)
 	if err != nil {
@@ -258,17 +243,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if !ok {
 			continue
 		}
-		switch {
-		case recordedChecksum == nil:
-			return fmt.Errorf(
-				"migration %s has no recorded checksum: %s",
-				migration.name,
-				unsupportedMigrationHistory,
-			)
-		case *recordedChecksum != migration.checksum:
+		recorded := ""
+		if recordedChecksum != nil {
+			recorded = *recordedChecksum
+		}
+		if recorded != migration.checksum {
 			return fmt.Errorf(
 				"migration %s checksum mismatch: %s (recorded %s, embedded %s)",
-				migration.name, immutableMigrationChanged, *recordedChecksum, migration.checksum,
+				migration.name, immutableMigrationChanged, recorded, migration.checksum,
 			)
 		}
 	}

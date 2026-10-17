@@ -19,8 +19,8 @@ handlers return plain-text errors plus an appropriate status.
 ### Database migrations
 
 `internal/store/migrations/0001_init.sql` is the consolidated fresh-deployment baseline, frozen at
-the beta release with the schema carried over from the final alpha. It is now immutable; do not edit
-it. Alpha databases are intentionally rejected; do not add compatibility or upgrade logic for them.
+the first beta release. It is immutable; do not edit it. Unknown applied versions mean a newer
+release already migrated the database; run that release or newer.
 
 From beta onward, each schema change goes in a new numbered SQL file. The runner serializes startup
 migration work per database/schema, validates the complete recorded history, and applies unseen files
@@ -39,9 +39,8 @@ NSC_TEST_DATABASE_URL='postgres://nuclei:***@localhost:5432/nuclei?sslmode=disab
   go test ./internal/store -count=1 -v
 ```
 
-`TestBaselineMatchesAlphaChainPostgres` applies the preserved historical chain and the consolidated
-baseline to separate schemas, dumps both with `pg_dump --schema-only`, and requires identical
-normalized DDL. Install `pg_dump`, put it on `PATH`, or set `NSC_TEST_PG_DUMP=/path/to/pg_dump`.
+Install `pg_dump`, put it on `PATH`, or set `NSC_TEST_PG_DUMP=/path/to/pg_dump` when writing
+schema-upgrade tests that dump isolated schemas.
 
 ## Full local stack
 
@@ -127,7 +126,7 @@ Linux host or routable network. See [Administration troubleshooting](admin/Troub
 GitHub Actions runs:
 
 - Go formatting, vet, build, and race-enabled tests;
-- real-PostgreSQL store and backend integration tests, including baseline/alpha equivalence,
+- real-PostgreSQL store and backend integration tests, including migration checksums,
   lifecycle behavior, scope enforcement, and scan-bundle round trips; CI disables Go's test-result
   cache so every run exercises the fresh PostgreSQL service;
 - `npm ci`, `npm test`, and the production SPA build;

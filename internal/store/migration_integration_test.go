@@ -3,21 +3,15 @@ package store
 import (
 	"context"
 	"crypto/sha256"
-	"embed"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
-	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-//go:embed testdata/alpha_migrations/*.sql
-var alphaMigrationsFS embed.FS
 
 func currentMigrationCount(t *testing.T) int {
 	t.Helper()
@@ -34,35 +28,6 @@ func currentMigrationCount(t *testing.T) int {
 	return count
 }
 
-func TestAlphaMigrationFixtureIntegrity(t *testing.T) {
-	names, err := fs.Glob(alphaMigrationsFS, "testdata/alpha_migrations/*.sql")
-	if err != nil {
-		t.Fatalf("list alpha migration fixtures: %v", err)
-	}
-	sort.Strings(names)
-	if len(names) != 47 {
-		t.Fatalf("alpha migration fixture count = %d, want 47", len(names))
-	}
-
-	digest := sha256.New()
-	for _, fullName := range names {
-		name := strings.TrimPrefix(fullName, "testdata/alpha_migrations/")
-		body, err := alphaMigrationsFS.ReadFile(fullName)
-		if err != nil {
-			t.Fatalf("read alpha migration fixture %s: %v", name, err)
-		}
-		_, _ = digest.Write([]byte(name))
-		_, _ = digest.Write([]byte{0})
-		_, _ = digest.Write(body)
-		_, _ = digest.Write([]byte{0})
-	}
-
-	const want = "d961d4fd0e5a4d653d1e547bf2375975de06b5b7a553910995136ad115dfd111"
-	if got := fmt.Sprintf("%x", digest.Sum(nil)); got != want {
-		t.Fatalf("alpha migration fixture digest = %s, want %s; the chain is sealed post-beta — ship a new numbered migration under internal/store/migrations/ instead of changing this pin", got, want)
-	}
-}
-
 func TestMigrateRejectsUnknownAppliedVersionPostgres(t *testing.T) {
 	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -73,16 +38,18 @@ func TestMigrateRejectsUnknownAppliedVersionPostgres(t *testing.T) {
 	defer cancel()
 	st, _ := openEmptyIsolatedPostgres(t, ctx, dsn)
 
-	const legacyVersion = "0002_scanner_node_capacity.sql"
+	const newerVersion = "0099_future_release.sql"
 	if _, err := st.pool.Exec(ctx, `
 		CREATE TABLE schema_migrations (
 			version TEXT PRIMARY KEY,
+			checksum_sha256 TEXT,
 			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`); err != nil {
 		t.Fatalf("create unsupported migration history: %v", err)
 	}
 	if _, err := st.pool.Exec(ctx,
-		`INSERT INTO schema_migrations (version) VALUES ($1)`, legacyVersion); err != nil {
+		`INSERT INTO schema_migrations (version, checksum_sha256) VALUES ($1, $2)`,
+		newerVersion, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("record unsupported migration: %v", err)
 	}
 
@@ -90,24 +57,10 @@ func TestMigrateRejectsUnknownAppliedVersionPostgres(t *testing.T) {
 	if err == nil {
 		t.Fatal("Migrate accepted a database with an unsupported applied migration")
 	}
-	if !strings.Contains(err.Error(), legacyVersion) ||
-		!strings.Contains(err.Error(), "current fresh-deployment baseline") ||
-		!strings.Contains(err.Error(), "new empty database") {
-		t.Fatalf("Migrate error = %q, want legacy version and fresh-deploy guidance", err)
-	}
-	var checksumColumnAdded bool
-	if err := st.pool.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			  FROM information_schema.columns
-			 WHERE table_schema = current_schema()
-			   AND table_name = 'schema_migrations'
-			   AND column_name = 'checksum_sha256'
-		)`).Scan(&checksumColumnAdded); err != nil {
-		t.Fatalf("inspect rejected migration history: %v", err)
-	}
-	if checksumColumnAdded {
-		t.Fatal("Migrate altered migration history before rejecting it")
+	if !strings.Contains(err.Error(), newerVersion) ||
+		!strings.Contains(err.Error(), "migrated by a newer release") ||
+		!strings.Contains(err.Error(), "run that release or newer") {
+		t.Fatalf("Migrate error = %q, want unknown version and newer-release guidance", err)
 	}
 	var baselineApplied bool
 	if err := st.pool.QueryRow(ctx, `SELECT to_regclass('app_settings') IS NOT NULL`).Scan(&baselineApplied); err != nil {
@@ -115,76 +68,6 @@ func TestMigrateRejectsUnknownAppliedVersionPostgres(t *testing.T) {
 	}
 	if baselineApplied {
 		t.Fatal("Migrate partially applied the baseline before rejecting unsupported history")
-	}
-}
-
-func TestMigrateRejectsMissingChecksumPostgres(t *testing.T) {
-	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("NSC_TEST_DATABASE_URL is not set")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	st := openIsolatedPostgres(t, ctx, dsn)
-	if _, err := st.pool.Exec(ctx,
-		`UPDATE schema_migrations SET checksum_sha256 = NULL WHERE version = '0001_init.sql'`); err != nil {
-		t.Fatalf("clear baseline checksum: %v", err)
-	}
-
-	err := st.Migrate(ctx)
-	if err == nil {
-		t.Fatal("Migrate accepted an applied migration without a checksum")
-	}
-	if !strings.Contains(err.Error(), "has no recorded checksum") ||
-		!strings.Contains(err.Error(), "current fresh-deployment baseline") ||
-		!strings.Contains(err.Error(), "new empty database") {
-		t.Fatalf("Migrate error = %q, want missing-checksum and fresh-deploy guidance", err)
-	}
-}
-
-func TestMigrateRejectsLegacyHistoryWithoutChecksumColumnBeforeMutationPostgres(t *testing.T) {
-	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("NSC_TEST_DATABASE_URL is not set")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	st, _ := openEmptyIsolatedPostgres(t, ctx, dsn)
-	if _, err := st.pool.Exec(ctx, `
-		CREATE TABLE schema_migrations (
-			version TEXT PRIMARY KEY,
-			applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		);
-		INSERT INTO schema_migrations (version) VALUES ('0001_init.sql');
-	`); err != nil {
-		t.Fatalf("seed legacy migration history: %v", err)
-	}
-
-	err := st.Migrate(ctx)
-	if err == nil {
-		t.Fatal("Migrate accepted legacy history without a checksum column")
-	}
-
-	var checksumColumnAdded bool
-	if err := st.pool.QueryRow(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			  FROM information_schema.columns
-			 WHERE table_schema = current_schema()
-			   AND table_name = 'schema_migrations'
-			   AND column_name = 'checksum_sha256'
-		)`).Scan(&checksumColumnAdded); err != nil {
-		t.Fatalf("inspect rejected legacy migration history: %v", err)
-	}
-	if checksumColumnAdded {
-		t.Fatal("Migrate altered legacy migration history before rejecting it")
-	}
-	if !strings.Contains(err.Error(), "has no checksum column") ||
-		!strings.Contains(err.Error(), "current fresh-deployment baseline") ||
-		!strings.Contains(err.Error(), "new empty database") {
-		t.Fatalf("Migrate error = %q, want missing-column and fresh-deploy guidance", err)
 	}
 }
 
@@ -210,10 +93,10 @@ func TestMigrateRejectsChecksumMismatchPostgres(t *testing.T) {
 		!strings.Contains(err.Error(), "applied migrations are immutable") ||
 		!strings.Contains(err.Error(), "new numbered forward migration") ||
 		!strings.Contains(err.Error(), "recorded tampered") {
-		t.Fatalf("Migrate error = %q, want checksum-mismatch and post-beta immutability guidance", err)
+		t.Fatalf("Migrate error = %q, want checksum-mismatch and immutability guidance", err)
 	}
-	if strings.Contains(err.Error(), "fresh-deployment baseline") {
-		t.Fatalf("Migrate error = %q, want post-beta immutability guidance instead of alpha fresh-deploy guidance", err)
+	if strings.Contains(err.Error(), "newer release") {
+		t.Fatalf("Migrate error = %q, want immutability guidance instead of newer-release history guidance", err)
 	}
 }
 
@@ -593,95 +476,7 @@ func TestMigrateSerializesConcurrentStartsPostgres(t *testing.T) {
 	}
 }
 
-func TestBaselineMatchesAlphaChainPostgres(t *testing.T) {
-	dsn := os.Getenv("NSC_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("NSC_TEST_DATABASE_URL is not set")
-	}
-	pgDump := findPGDump(t)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	alpha, alphaSchema := openEmptyIsolatedPostgres(t, ctx, dsn)
-	baseline, baselineSchema := openEmptyIsolatedPostgres(t, ctx, dsn)
-
-	applySQLFiles(t, ctx, alpha, alphaMigrationsFS, "testdata/alpha_migrations")
-	baselineSQL, err := migrationsFS.ReadFile("migrations/0001_init.sql")
-	if err != nil {
-		t.Fatalf("read consolidated baseline: %v", err)
-	}
-	if _, err := baseline.pool.Exec(ctx, string(baselineSQL)); err != nil {
-		t.Fatalf("apply consolidated baseline: %v", err)
-	}
-
-	alphaDump := normalizedSchemaDump(t, ctx, pgDump, dsn, alphaSchema)
-	baselineDump := normalizedSchemaDump(t, ctx, pgDump, dsn, baselineSchema)
-	if alphaDump != baselineDump {
-		t.Fatalf("consolidated baseline differs from the alpha migration chain: %s", firstSchemaDifference(alphaDump, baselineDump))
-	}
-	alphaState := readInitialApplicationState(t, ctx, alpha)
-	baselineState := readInitialApplicationState(t, ctx, baseline)
-	if fmt.Sprint(alphaState) != fmt.Sprint(baselineState) {
-		t.Fatalf("consolidated baseline initial state = %#v, want alpha-chain state %#v", baselineState, alphaState)
-	}
-}
-
-type initialApplicationState struct {
-	appSettingsRows         int
-	templateSets            []string
-	findingsSequence        int64
-	findingsSequenceCalled  bool
-	lifecycleSequence       int64
-	lifecycleSequenceCalled bool
-}
-
-func readInitialApplicationState(t *testing.T, ctx context.Context, st *Store) initialApplicationState {
-	t.Helper()
-	var state initialApplicationState
-	if err := st.pool.QueryRow(ctx, `SELECT count(*) FROM app_settings`).Scan(&state.appSettingsRows); err != nil {
-		t.Fatalf("count initial app settings: %v", err)
-	}
-	if err := st.pool.QueryRow(ctx, `
-		SELECT coalesce(array_agg(name || ':' || mode ORDER BY name), ARRAY[]::text[])
-		  FROM template_sets
-	`).Scan(&state.templateSets); err != nil {
-		t.Fatalf("read initial template sets: %v", err)
-	}
-	if err := st.pool.QueryRow(ctx, `SELECT last_value, is_called FROM findings_id_seq`).
-		Scan(&state.findingsSequence, &state.findingsSequenceCalled); err != nil {
-		t.Fatalf("read initial findings sequence: %v", err)
-	}
-	if err := st.pool.QueryRow(ctx, `SELECT last_value, is_called FROM finding_lifecycle_id_seq`).
-		Scan(&state.lifecycleSequence, &state.lifecycleSequenceCalled); err != nil {
-		t.Fatalf("read initial lifecycle sequence: %v", err)
-	}
-	return state
-}
-
-func applySQLFiles(t *testing.T, ctx context.Context, st *Store, source fs.FS, dir string) {
-	t.Helper()
-	entries, err := fs.ReadDir(source, dir)
-	if err != nil {
-		t.Fatalf("read SQL fixtures: %v", err)
-	}
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
-			names = append(names, entry.Name())
-		}
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		sqlBytes, err := fs.ReadFile(source, dir+"/"+name)
-		if err != nil {
-			t.Fatalf("read SQL fixture %s: %v", name, err)
-		}
-		if _, err := st.pool.Exec(ctx, string(sqlBytes)); err != nil {
-			t.Fatalf("apply SQL fixture %s: %v", name, err)
-		}
-	}
-}
-
+// pg_dump helpers remain for later schema-upgrade tests.
 func findPGDump(t *testing.T) string {
 	t.Helper()
 	if configured := os.Getenv("NSC_TEST_PG_DUMP"); configured != "" {
@@ -730,20 +525,20 @@ func normalizedSchemaDump(t *testing.T, ctx context.Context, pgDump, dsn, schema
 	return strings.Join(normalized, "\n")
 }
 
-func firstSchemaDifference(alpha, baseline string) string {
-	alphaLines := strings.Split(alpha, "\n")
-	baselineLines := strings.Split(baseline, "\n")
-	maxLines := max(len(alphaLines), len(baselineLines))
+func firstSchemaDifference(left, right string) string {
+	leftLines := strings.Split(left, "\n")
+	rightLines := strings.Split(right, "\n")
+	maxLines := max(len(leftLines), len(rightLines))
 	for i := 0; i < maxLines; i++ {
-		var alphaLine, baselineLine string
-		if i < len(alphaLines) {
-			alphaLine = alphaLines[i]
+		var leftLine, rightLine string
+		if i < len(leftLines) {
+			leftLine = leftLines[i]
 		}
-		if i < len(baselineLines) {
-			baselineLine = baselineLines[i]
+		if i < len(rightLines) {
+			rightLine = rightLines[i]
 		}
-		if alphaLine != baselineLine {
-			return fmt.Sprintf("first difference at line %d\nalpha:    %q\nbaseline: %q", i+1, alphaLine, baselineLine)
+		if leftLine != rightLine {
+			return fmt.Sprintf("first difference at line %d\nleft:  %q\nright: %q", i+1, leftLine, rightLine)
 		}
 	}
 	return "dumps have different bytes but no differing lines"

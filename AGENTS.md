@@ -356,9 +356,8 @@ dev mode used in headless `curl` testing.
   migration's contents change). Every schema change goes in a new numbered file under
   `internal/store/migrations/`; the runner applies unseen files in filename order and records
   them in `schema_migrations`. Fix mistakes to applied migrations with a separately named
-  repair/forward migration. Alpha databases are not upgradeable and are rejected at startup;
-  the preserved `testdata/alpha_migrations/` chain is now a sealed test-only reference (its
-  digest is pinned in `migration_integration_test.go`) — do not append to it.
+  repair/forward migration. Unknown applied versions are rejected as a downgrade guard:
+  the database was migrated by a newer release, so run that release or newer.
 - Run `gofmt -w`, `go vet`, and `go test` before considering a change done.
 - **Dependency review (recurring):** at a natural review boundary, scan for hand-rolled code
   that duplicates a mature library (per invariant #5) and for unused/heavy deps to drop.

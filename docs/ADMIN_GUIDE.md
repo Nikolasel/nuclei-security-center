@@ -7,12 +7,10 @@ and on every `v*` version tag. Do not edit the wiki in the GitHub UI; those edit
 on the next publish.
 
 > [!IMPORTANT]
-> Beta deployments start from an **empty Postgres database**. Alpha databases are not upgradeable to
-> beta: the schema baseline was frozen at the alpha→beta boundary, so back up any data you need to
-> retain, deploy with a new empty database, and move portable data with template/template-set exports
-> and scan bundles. The backend rejects an unsupported migration history at startup instead of
-> attempting a partial upgrade. From beta onward, schema changes ship as new numbered migrations that
-> apply forward on an existing database.
+> The schema baseline is frozen. From that point onward, schema changes ship as new numbered
+> migrations that apply forward on an existing database. If this binary is older than the database
+> it is pointed at, startup refuses to run — use that newer release. Move portable data with
+> template/template-set exports and scan bundles.
 
 ## Chapters
 

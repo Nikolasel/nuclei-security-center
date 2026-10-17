@@ -55,4 +55,5 @@ There is deliberately no audit table in PostgreSQL. Configure the platform log c
   Leading/interior whitespace is preserved and trailing CR/LF is trimmed.
 - The schema baseline (`0001_init.sql`) is frozen as of the beta release. Migrations are ordered and
   checksum-immutable; never edit an applied migration — add a new numbered forward migration instead.
-- Do not point beta at an alpha database. The startup rejection is intentional; deploy fresh.
+- If startup reports unsupported migration versions, the database was migrated by a newer release;
+  run that release or newer.

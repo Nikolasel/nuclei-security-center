@@ -15,7 +15,7 @@ string keeps the git tag's leading `v`; GHCR image tags strip it (`v0.4.2-beta` 
 
 | Symptom | Meaning / action |
 |---|---|
-| Backend reports unsupported migration versions or a missing checksum | The database history is not supported by the current fresh-deployment baseline. Preserve exports/backups as needed, deploy a new empty database, and restore portable data. |
+| Backend reports unsupported migration versions | The database was migrated by a newer release than this binary. Run that release or newer. |
 | Backend cannot reach Postgres | Verify `DATABASE_URL`, TLS/network policy, credentials, and the password-file contents/permissions. |
 | Login loops or callback fails | Match `APP_BASE_URL`, `OIDC_ISSUER`, and registered `OIDC_REDIRECT_URL`; use `OIDC_DISCOVERY_URL` only for internal metadata routing. Opening the compose UI at `http://127.0.0.1:8080` is redirected to `http://localhost:8080` (the seeded `APP_BASE_URL`) before OIDC starts — cookies and the IdP redirect URI are host-specific. |
 | Login returns `503` temporarily | A short auth-flow admission collision survived the bounded retries. Retry the login navigation; sustained failures indicate database contention or availability trouble. |

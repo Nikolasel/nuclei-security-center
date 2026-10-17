@@ -78,8 +78,8 @@ the scanner on `:8081`, plus Postgres, Garage, and a seeded Keycloak IdP. Openin
 `http://127.0.0.1:8080` redirects to `localhost` before login — session cookies and the IdP
 callback are host-specific.
 
-> **Beta deployments must start with an empty PostgreSQL database.** Alpha databases are not
-> upgradeable; the backend rejects their migration history instead of attempting a partial upgrade.
+> If this binary is older than the database it is pointed at, startup refuses to run: the
+> migration history was written by a newer release, so run that release or newer.
 
 ## Repository layout
 

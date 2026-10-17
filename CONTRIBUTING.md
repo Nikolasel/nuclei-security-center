@@ -120,9 +120,9 @@ Each schema change goes in a **new numbered SQL file** under `internal/store/mig
 (e.g. `0003_….sql`); the runner applies unseen files in filename order and records them in
 `schema_migrations`. To fix a mistake in an applied migration, add a separately named
 forward/repair migration instead of editing. Migration SQL must be transaction-compatible
-(no `CREATE INDEX CONCURRENTLY` — see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)). Legacy
-alpha databases are rejected at startup; do not add compatibility or upgrade logic for them.
-If you're unsure, ask in the issue.
+(no `CREATE INDEX CONCURRENTLY` — see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)).
+Unknown applied versions mean the database was migrated by a newer release — run that
+release or newer. If you're unsure, ask in the issue.
 
 ## Pull requests
 

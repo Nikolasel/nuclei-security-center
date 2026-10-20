@@ -105,6 +105,15 @@ override must also set `build: !reset` on both services.
 Then `docker compose up` without `--build`. Leaving `build:` in place, or passing
 `--build`, compiles from this tree and retags over the pulled image.
 
+When upgrading a `v0.4.x-beta` stack, keep its Compose project name. The project is now named
+`gn-check`, and Compose names volumes after the project, so a new name starts Postgres, Garage
+and the template cache with empty volumes. `docker volume ls` shows the current name as the
+prefix of `<name>_pgdata`. Set `COMPOSE_PROJECT_NAME=<name>` in `.env`, which every later
+command picks up (`docker compose -p <name>` works too, but only if you pass it on every
+command). Or, with the stack down, copy each volume (`pgdata`, `garagemeta`, `garagedata`,
+`templatecache`) into its new `gn-check_*` volume, for example
+`docker run --rm -v <name>_pgdata:/from -v gn-check_pgdata:/to alpine cp -a /from/. /to/`.
+
 Every tag publishes the full semver (no leading `v`) and a `sha-<short>` git SHA. A
 non-prerelease such as `0.5.0` also publishes a floating `major.minor` tag (`0.5`) and `latest`.
 A prerelease (a tag with a suffix such as `-rc.1`) gets neither. The GHCR

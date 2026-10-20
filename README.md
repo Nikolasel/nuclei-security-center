@@ -92,6 +92,14 @@ needed:
    `ghcr.io/goodnightsec/gn-check-scanner`.
 2. Upgrade the backend and the scanner together.
 3. Keep the database, the bucket and the environment as they are.
+4. With the Compose stack from this repository, keep your current Compose project name. The
+   project is now named `gn-check`, and Compose names volumes after the project, so without this
+   Postgres, Garage and the template cache start with new, empty volumes. `docker volume ls` shows
+   your current name as the prefix of `<name>_pgdata`. Set `COMPOSE_PROJECT_NAME=<name>` in
+   `.env`, which every later command picks up (`docker compose -p <name>` works too, but only if
+   you pass it on every command). Or, with the stack down, copy each volume into its new
+   `gn-check_*` volume, for example
+   `docker run --rm -v <name>_pgdata:/from -v gn-check_pgdata:/to alpine cp -a /from/. /to/`.
 
 Sessions, service-account tokens, export clients and UI settings keep working, and scan bundles
 exported from a `v0.4.x-beta` release still import. Three changes are visible:

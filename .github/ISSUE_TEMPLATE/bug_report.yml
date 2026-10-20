@@ -8,7 +8,7 @@ body:
         Thanks for taking the time to file a detailed report!
         **Found a security vulnerability? Do not open an issue here** —
         report it privately via
-        [GitHub private vulnerability reporting](https://github.com/Nikolasel/nuclei-security-center/security/advisories/new)
+        [GitHub private vulnerability reporting](https://github.com/goodnightsec/gn-check/security/advisories/new)
         (see SECURITY.md).
   - type: textarea
     id: description
@@ -39,7 +39,7 @@ body:
     attributes:
       label: Version
       description: Release tag (see the Releases page), deployed container image tag / digest, or git commit SHA.
-      placeholder: v0.4.2-beta
+      placeholder: v0.5.0
     validations:
       required: true
   - type: textarea
@@ -48,7 +48,7 @@ body:
       label: Environment
       description: Deployment shape (docker compose / k8s / bare), browser, scanner-node details, relevant config (sanitized — no tokens or hostnames you don't own).
       placeholder: |
-        backend v0.4.2-beta, single scanner node (docker compose), PostgreSQL 16, Garage, Chrome.
+        backend v0.5.0, single scanner node (docker compose), PostgreSQL 16, Garage, Chrome.
   - type: textarea
     id: logs
     attributes:

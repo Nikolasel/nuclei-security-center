@@ -18,11 +18,12 @@ handlers return plain-text errors plus an appropriate status.
 
 ### Database migrations
 
-`internal/store/migrations/0001_init.sql` is the consolidated fresh-deployment baseline, frozen at
-the first beta release. It is immutable; do not edit it. Unknown applied versions mean a newer
+`internal/store/migrations/0001_init.sql` is the consolidated fresh-deployment baseline, frozen
+since `v0.4.0-beta`. It is immutable; do not edit it, not even its first-line comment, which still
+names the product by its old name. Unknown applied versions mean a newer
 release already migrated the database; run that release or newer.
 
-From beta onward, each schema change goes in a new numbered SQL file. The runner serializes startup
+Since then, each schema change goes in a new numbered SQL file. The runner serializes startup
 migration work per database/schema, validates the complete recorded history, and applies unseen files
 plus their history records in one transaction. Files run in filename order and use SHA-256 checksums
 in `schema_migrations`. Applied files are immutable: never edit one after a database may have recorded

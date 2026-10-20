@@ -2,7 +2,7 @@
 
 The operator guide lives in [`docs/admin/`](admin/). That directory is the **source of truth**.
 GitHub Actions publishes it to the
-[GitHub wiki](https://github.com/Nikolasel/nuclei-security-center/wiki) on every push to `main`
+[GitHub wiki](https://github.com/goodnightsec/gn-check/wiki) on every push to `main`
 and on every `v*` version tag. Do not edit the wiki in the GitHub UI; those edits are overwritten
 on the next publish.
 

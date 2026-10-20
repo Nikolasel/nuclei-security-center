@@ -3,7 +3,7 @@
 The JSON API lives under `/api/*`. Interactive callers authenticate with the session cookie
 (see [Administration → Authentication](admin/Authentication.md)); headless
 automation authenticates with a **service-account token** presented as
-`Authorization: Bearer $NSC_TOKEN` (see [Service accounts](#service-accounts)). The examples
+`Authorization: Bearer $CHECK_TOKEN` (see [Service accounts](#service-accounts)). The examples
 below assume a cookie jar `jar.txt` populated by a real login, or
 [auth-disabled dev mode](admin/Configuration.md#authentication-and-sessions) for headless use.
 
@@ -24,14 +24,14 @@ liveness probe — `GET /healthz` stays unauthenticated for that. With authentic
 local development, the endpoint is available to the dev identity like every other route.
 
 ```json
-{"tag":"v0.5.0-beta","commit":"<40-char sha>","version":"v0.5.0-beta (3beec52)"}
+{"tag":"v0.5.0","commit":"<40-char sha>","version":"v0.5.0 (3beec52)"}
 ```
 
 | Field | Meaning |
 |---|---|
 | `tag` | Git tag the image was built from, including a leading `v`. Empty when the build was not cut from a tag. This is not the GHCR image tag (those drop the leading `v`). |
 | `commit` | Full commit SHA. Empty when the binary has no VCS stamp. |
-| `version` | Display string. A tag leads: `v0.5.0-beta (3beec52)`. An untagged build is `dev (3beec52)`. No commit at all is `dev (unknown)`. |
+| `version` | Display string. A tag leads: `v0.5.0 (3beec52)`. An untagged build is `dev (3beec52)`. No commit at all is `dev (unknown)`. |
 
 The short commit in `version` is the first seven hex characters of `commit`. Go's `(devel)`
 pseudo-version is never returned. The same `version`, `tag`, and `commit` values are logged once
@@ -400,20 +400,20 @@ formats from an **Export** menu on the Findings view.
 
 ## Downstream tooling (DefectDojo, etc.)
 
-NSC deliberately doesn't ship built-in integrations for any specific downstream
+Goodnight Check deliberately doesn't ship built-in integrations for any specific downstream
 vulnerability-management tool — dashboards, SLA tracking, ticketing, and remediation
 workflows are explicitly out of scope (closed as "well covered by DefectDojo or a similar
 VM tool downstream" — see #11, #12, #14, #16, #17, #20). `/api/findings/export` is the
 general-purpose extension point: it's a normal, filterable, session-cookie-authenticated
-REST endpoint, so anything downstream round-trips through NSC's existing API and the
-other tool's own API — no NSC code or config coupled to one vendor.
+REST endpoint, so anything downstream round-trips through Check's existing API and the
+other tool's own API — no Check code or config coupled to one vendor.
 
 **Worked example — DefectDojo.** DefectDojo ships a native **"Nuclei Scan"** import
 parser that consumes exactly the `format=raw` shape above (Nuclei's own `out.jsonl`), so
 no translation step is needed:
 
 ```sh
-# 1. pull NSC's raw export for the view you want to push (same filters as /api/findings)
+# 1. pull Check's raw export for the view you want to push (same filters as /api/findings)
 curl -sb jar.txt "localhost:8080/api/findings/export?format=raw&target_id=$TARGET_ID" -o findings.jsonl
 
 # 2. hand it to DefectDojo's reimport-scan API — "reimport" (not "import") so repeat runs
@@ -428,16 +428,16 @@ curl -s "$DEFECTDOJO_URL/api/v2/reimport-scan/" \
 
 Run that as a small script — cron, CI job, whatever your team already uses for scheduled
 glue — after a scan (or its schedule) completes. A few things worth being explicit about,
-since none of this lives in NSC:
+since none of this lives in Check:
 
 - **Target ↔ Product/Engagement mapping** is a decision made in the script or on the
   DefectDojo side (by name, by a lookup table, however your team organizes DefectDojo) —
-  NSC has no concept of it and stores nothing DefectDojo-specific.
+  Check has no concept of it and stores nothing DefectDojo-specific.
 - **Auth uses a service-account token** — mint one with an `Authorization: Bearer` token
   scoped to `viewer` (export is a read) and revoke it independently of any human login.
   See [Service accounts](#service-accounts) below. (The session cookie still works too, but
   a token is the right fit for unattended pullers.)
-- **The push is your automation's problem to make reliable**, not NSC's — retries,
+- **The push is your automation's problem to make reliable**, not Check's — retries,
   failure alerting, and backoff belong in the script/job, the same way you'd treat any
   other external integration you own.
 
@@ -594,7 +594,7 @@ tombstoned upstream rows (removed upstream but retained so curated sets don't si
 members). Sorting accepts `sort=name|severity|source|inserted|revision` plus
 `order=asc|desc`; severity uses Nuclei's semantic critical-to-info order. CVE templates use the
 canonical `cve` tag, so no separate CVE-only filter is needed. `sort=inserted&order=desc` orders
-by NSC's `created_at` ingestion timestamp, newest first; this is labelled
+by Check's `created_at` ingestion timestamp, newest first; this is labelled
 **Inserted** because the upstream catalog does not provide an authoritative ProjectDiscovery
 added/updated timestamp. `GET /api/templates/ids` accepts the same filters and returns all matching
 ids without pagination.
@@ -697,7 +697,7 @@ bounded batch process, described under [Template portability](#template-portabil
 ### Template portability
 
 Viewer-role users can export selected templates or one template set; operators can import
-those files into another NSC instance:
+those files into another Check instance:
 
 ```sh
 # export selected templates as a lossless YAML tarball
@@ -889,7 +889,7 @@ created. The allowlist **fails closed** — with no approved targets, no scan ca
 
 ## Service accounts
 
-Service accounts are NSC-local identities for **headless/automation** access — a cron job or CI
+Service accounts are Check-local identities for **headless/automation** access — a cron job or CI
 step pulling `/api/findings/export`, for instance — so a script doesn't have to impersonate a
 human login. They are additive to, not a replacement for, the OIDC/BFF session cookie, which
 stays the only path for interactive users.
@@ -913,7 +913,7 @@ curl -sb jar.txt -X POST localhost:8080/api/service-accounts \
 #          "token":"nsc_…"  }   <-- copy the token now; it is never shown again
 
 # Use it — no cookie, just the bearer token:
-curl -H "Authorization: Bearer $NSC_TOKEN" \
+curl -H "Authorization: Bearer $CHECK_TOKEN" \
   "localhost:8080/api/findings/export?format=raw&target_id=$TARGET_ID"
 
 # List (admin) — never returns tokens, only prefixes + last_used_at.
@@ -940,7 +940,7 @@ auth. Successful token calls appear in the [audit log](#audit-log) as
 
 ## Sessions
 
-NSC is a BFF: the browser holds only an httpOnly session cookie; server-side rows in
+Check is a BFF: the browser holds only an httpOnly session cookie; server-side rows in
 `POST /api/auth/callback` capture the IdP groups claim at login. Roles are **frozen for the
 life of the session** — at most `SESSION_TTL` (`12h` default, capped at `24h`). To revoke a
 user early (offboarding, demotion), an administrator terminates their live sessions:

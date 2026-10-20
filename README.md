@@ -1,11 +1,12 @@
-# nuclei-security-center
+# Goodnight Check
 
-[![CI](https://github.com/Nikolasel/nuclei-security-center/actions/workflows/ci.yml/badge.svg)](https://github.com/Nikolasel/nuclei-security-center/actions/workflows/ci.yml)
+[![CI](https://github.com/goodnightsec/gn-check/actions/workflows/ci.yml/badge.svg)](https://github.com/goodnightsec/gn-check/actions/workflows/ci.yml)
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/Nikolasel/nuclei-security-center?include_prereleases)](https://github.com/Nikolasel/nuclei-security-center/releases)
+[![Release](https://img.shields.io/github/v/release/goodnightsec/gn-check)](https://github.com/goodnightsec/gn-check/releases)
 
-A web interface for running and triaging [Nuclei](https://github.com/projectdiscovery/nuclei)
-scans, built for a small internal security/eng team and portable to any cloud.
+Goodnight Check is a self-hosted vulnerability scanner for a small security or engineering team.
+It runs [Nuclei](https://github.com/projectdiscovery/nuclei) templates against approved targets,
+on demand or on a schedule, and keeps the results for triage. It is portable to any cloud.
 
 A logged-in user defines **targets** and **template sets**, runs scans (on demand or on a
 **cron schedule**), and triages the results through a **Tenable-style finding lifecycle** —
@@ -16,8 +17,8 @@ guardrail** keeps every scan inside approved targets, every mutating call
 is written to a structured **audit log**, and raw scanner output is archived to object storage.
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/nuclei-security-center-preview-dark.png">
-  <img alt="Nuclei Security Center findings page" src="docs/assets/nuclei-security-center-preview-light.png">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/gn-check-preview-dark.png">
+  <img alt="Goodnight Check findings page" src="docs/assets/gn-check-preview-light.png">
 </picture>
 
 *Live application screenshot: populated Findings from a honey.scanme.sh full-catalog scan, in the light or dark theme to match yours.*
@@ -81,6 +82,30 @@ callback are host-specific.
 > If this binary is older than the database it is pointed at, startup refuses to run: the
 > migration history was written by a newer release, so run that release or newer.
 
+## Upgrading from NSC
+
+Goodnight Check is the new name of the product. `v0.5.0` is the first release under the new
+name, and every `v0.4.x-beta` installation upgrades to it in place. No migration script is
+needed:
+
+1. Point both services at the new images, `ghcr.io/goodnightsec/gn-check-backend` and
+   `ghcr.io/goodnightsec/gn-check-scanner`.
+2. Upgrade the backend and the scanner together.
+3. Keep the database, the bucket and the environment as they are.
+
+Sessions, service-account tokens, export clients and UI settings keep working, and scan bundles
+exported from a `v0.4.x-beta` release still import. Three changes are visible:
+
+- **The image names,** as above.
+- **The SARIF tool** is now `gn-check`. GitHub code scanning treats it as a new tool, so alerts
+  uploaded under the old name are closed once and reopened under the new one.
+- **The mail subject** now starts with `[Goodnight Check]`.
+
+Some technical identifiers keep the old short name `nsc` on purpose, because renaming them would
+break installations, clients or stored data: the `nsc_` token prefix, the session cookies, the
+`X-NSC-Export-*` headers, the export fields, the `*.nsc-bundle.*` file names, the browser storage
+keys and the `/var/lib/nsc` data directory. The default bucket stays `nuclei-raw`.
+
 ## Repository layout
 
 ```
@@ -99,7 +124,7 @@ docker-compose.yml   postgres + garage + keycloak + scanner + backend
 
 - **[Architecture](docs/ARCHITECTURE.md)** — design principles, components, data model, and decisions.
 - **[API reference](docs/API.md)** — REST endpoints for scans, findings, dispositions, exports, and schedules.
-- **[Administration guide](docs/ADMIN_GUIDE.md)** — deployment, environment variables, authentication, bootstrap, operations, audit, and troubleshooting. Chapters live in [`docs/admin/`](docs/admin/) and are published to the [GitHub wiki](https://github.com/Nikolasel/nuclei-security-center/wiki) from `main` and each `v*` tag.
+- **[Administration guide](docs/ADMIN_GUIDE.md)** — deployment, environment variables, authentication, bootstrap, operations, audit, and troubleshooting. Chapters live in [`docs/admin/`](docs/admin/) and are published to the [GitHub wiki](https://github.com/goodnightsec/gn-check/wiki) from `main` and each `v*` tag.
 - **[Development](docs/DEVELOPMENT.md)** — local dev workflow, auth-disabled mode, tests, and CI/CD.
 - **[UI style guide](docs/UI_STYLE_GUIDE.md)** — design system for the web app: layout, buttons, tables, forms, dialogs, and feedback.
 - **[Contributing](CONTRIBUTING.md)** — setup, verification gates, invariants, and PR conventions.
@@ -107,7 +132,11 @@ docker-compose.yml   postgres + garage + keycloak + scanner + backend
 
 ## License
 
-Copyright (C) 2026 nuclei-security-center contributors
+Goodnight Check is licensed under the GNU Affero General Public License v3.0 or later
+(AGPL-3.0-or-later). Contributions are accepted under the same license, with a DCO sign-off on
+every commit; see [Contributing](CONTRIBUTING.md#license-and-sign-off).
+
+Copyright (C) 2026 Goodnight Check contributors
 
 This program is free software: you can redistribute it and/or modify it under
 the terms of the GNU Affero General Public License as published by the Free

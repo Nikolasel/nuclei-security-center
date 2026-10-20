@@ -2,7 +2,7 @@
 
 ## Requirements
 
-NSC needs:
+Goodnight Check needs:
 
 - the backend and one or more scanner containers;
 - PostgreSQL 16 or newer;
@@ -55,7 +55,7 @@ Raw scan output is archived to Garage (`dxflrs/garage`, S3 API on port 3900). Th
 defaults to `v2.3.0` and can be overridden with `GARAGE_VERSION` (see
 [Configuration](Configuration.md)); `dxflrs/garage` publishes no `latest` tag. The image is
 the unmodified upstream build and is AGPL-3.0. Running it for local development or self-hosting
-does not change NSC's license. If a deployment modifies Garage and distributes that build, AGPL-3.0
+does not change Check's license. If a deployment modifies Garage and distributes that build, AGPL-3.0
 requires publishing the corresponding Garage source; prefer staying on the pinned upstream image
 unless that obligation is acceptable. Garage's admin API is bound to loopback inside the container.
 `deploy/garage/garage.toml` sets `s3_region` to `us-east-1` so it matches the backend's `S3_REGION`.
@@ -72,17 +72,17 @@ Each `v*` git tag publishes public multi-arch images to GHCR. Anonymous pull wor
 `docker login` is required:
 
 ```sh
-# Replace with a tag from https://github.com/Nikolasel/nuclei-security-center/releases
-# Git tag v0.4.2-beta → image tag 0.4.2-beta (the leading v is stripped).
-VERSION=0.4.2-beta
-docker pull ghcr.io/nikolasel/nuclei-security-center-backend:$VERSION
-docker pull ghcr.io/nikolasel/nuclei-security-center-scanner:$VERSION
+# Replace with a tag from https://github.com/goodnightsec/gn-check/releases
+# Git tag v0.5.0 → image tag 0.5.0 (the leading v is stripped).
+VERSION=0.5.0
+docker pull ghcr.io/goodnightsec/gn-check-backend:$VERSION
+docker pull ghcr.io/goodnightsec/gn-check-scanner:$VERSION
 ```
 
 Coordinates:
 
-- `ghcr.io/nikolasel/nuclei-security-center-backend:<version>`
-- `ghcr.io/nikolasel/nuclei-security-center-scanner:<version>`
+- `ghcr.io/goodnightsec/gn-check-backend:<version>`
+- `ghcr.io/goodnightsec/gn-check-scanner:<version>`
 
 GHCR package names are lowercase.
 
@@ -93,9 +93,9 @@ the backend's `depends_on` (postgres/keycloak health, scanner, garage) in place:
 
 ```yaml
 # backend — delete `build:`, set:
-image: ghcr.io/nikolasel/nuclei-security-center-backend:0.4.2-beta
+image: ghcr.io/goodnightsec/gn-check-backend:0.5.0
 # scanner — delete `build:`, set:
-image: ghcr.io/nikolasel/nuclei-security-center-scanner:0.4.2-beta
+image: ghcr.io/goodnightsec/gn-check-scanner:0.5.0
 ```
 
 That YAML is not a drop-in second Compose file. `docker-compose.override.yml` (or a
@@ -106,13 +106,13 @@ Then `docker compose up` without `--build`. Leaving `build:` in place, or passin
 `--build`, compiles from this tree and retags over the pulled image.
 
 Every tag publishes the full semver (no leading `v`) and a `sha-<short>` git SHA. A
-non-prerelease also publishes a floating `major.minor` tag and `latest`. Prereleases such
-as `0.4.2-beta` get neither, so `docker pull …:latest` and `…:0.4` 404 today. The GHCR
+non-prerelease such as `0.5.0` also publishes a floating `major.minor` tag (`0.5`) and `latest`.
+A prerelease (a tag with a suffix such as `-rc.1`) gets neither. The GHCR
 package UI labels the most recently published tag as “Latest”; that is not a `:latest`
 image tag.
 
 After sign-in, the account menu and `GET /api/version` report the build that is actually
-running. A tagged image shows the git tag plus commit (`v0.4.2-beta (3beec52)`); an untagged
+running. A tagged image shows the git tag plus commit (`v0.5.0 (3beec52)`); an untagged
 build shows `dev` plus the commit. Include that string when reporting a problem. See
 [Troubleshooting](Troubleshooting.md#reporting-the-running-version).
 
@@ -120,10 +120,10 @@ build shows `dev` plus the commit. Include that string when reporting a problem.
 
 1. Provision an empty PostgreSQL database and a bucket (optional but recommended).
 2. Deploy one scanner per reachable network zone from
-   `ghcr.io/nikolasel/nuclei-security-center-scanner:<version>` (see
+   `ghcr.io/goodnightsec/gn-check-scanner:<version>` (see
    [Run from published images](#run-from-published-images)). Give every scanner a strong,
    distinct bearer token and TLS; use mTLS for untrusted segments.
-3. Deploy `ghcr.io/nikolasel/nuclei-security-center-backend:<version>` with Postgres, OIDC,
+3. Deploy `ghcr.io/goodnightsec/gn-check-backend:<version>` with Postgres, OIDC,
    object-store, and initial scanner seed configuration.
 4. Terminate browser TLS at the backend or an ingress and keep `COOKIE_SECURE=true`.
 5. Plan for all existing browser sessions to require sign-in again when this session-hardening

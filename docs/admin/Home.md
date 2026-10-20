@@ -1,11 +1,11 @@
 # Administration guide
 
-This guide covers deploying and operating Nuclei Security Center (NSC). For endpoint-level details,
+This guide covers deploying and operating Goodnight Check. For endpoint-level details,
 see the [API reference](../API.md); for design rationale and security boundaries, see
 [Architecture](../ARCHITECTURE.md).
 
 `docs/admin/` in the repository is the **source of truth**. GitHub Actions publishes these files to
-the [GitHub wiki](https://github.com/Nikolasel/nuclei-security-center/wiki) on every push to `main`
+the [GitHub wiki](https://github.com/goodnightsec/gn-check/wiki) on every push to `main`
 and on every `v*` version tag. Edit the Markdown in a pull request; do not edit the wiki in the
 GitHub UI.
 

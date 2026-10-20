@@ -2,7 +2,7 @@
 
 ## Findings, triage, exports, and scan bundles
 
-NSC keeps immutable per-scan **occurrences** and a globally deduplicated **finding lifecycle**.
+Goodnight Check keeps immutable per-scan **occurrences** and a globally deduplicated **finding lifecycle**.
 Detection state is derived from scan evidence:
 
 | State | Meaning |
@@ -53,7 +53,7 @@ There is deliberately no audit table in PostgreSQL. Configure the platform log c
   moving environments.
 - Rotate DB credentials through `DATABASE_PASSWORD_FILE` using a secret-rendering sidecar/agent.
   Leading/interior whitespace is preserved and trailing CR/LF is trimmed.
-- The schema baseline (`0001_init.sql`) is frozen as of the beta release. Migrations are ordered and
+- The schema baseline (`0001_init.sql`) is frozen since `v0.4.0-beta`. Migrations are ordered and
   checksum-immutable; never edit an applied migration — add a new numbered forward migration instead.
 - If startup reports unsupported migration versions, the database was migrated by a newer release;
   run that release or newer.

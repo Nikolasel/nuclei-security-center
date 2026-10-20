@@ -1,4 +1,4 @@
-name: nuclei-security-center
+name: gn-check
 
 services:
   postgres:
@@ -52,8 +52,9 @@ services:
       retries: 12
       start_period: 5s
 
-  # Local OIDC identity provider. Seeded with realm "nsc": a confidential client
-  # for the backend BFF, groups admin/operator/viewer, and one demo user each
+  # Local OIDC identity provider. Seeded with realm "nsc" (display name
+  # "Goodnight Check"; the development realm keeps the old short name on
+  # purpose): a confidential client "gn-check-backend" for the backend BFF, groups admin/operator/viewer, and one demo user each
   # (admin/operator/viewer, password = username). Browser reaches it at
   # localhost:8082; the backend reaches it in-network at keycloak:8080.
   keycloak:
@@ -107,7 +108,7 @@ services:
       APP_BASE_URL: "http://localhost:8080"
       OIDC_ISSUER: "http://localhost:8082/realms/nsc"
       OIDC_DISCOVERY_URL: "http://keycloak:8080/realms/nsc"
-      OIDC_CLIENT_ID: "nuclei-backend"
+      OIDC_CLIENT_ID: "gn-check-backend"
       OIDC_CLIENT_SECRET: "${OIDC_CLIENT_SECRET:-dev-oidc-secret-change-me}"
       # This local stack serves plaintext http://localhost:8080, so the session
       # cookie must not be Secure (browsers withhold Secure cookies over HTTP).
@@ -116,6 +117,9 @@ services:
       # S3-compatible object storage for raw scan-output archival. Garage
       # creates nuclei-raw before this service is healthy; the backend still
       # ensures the bucket on startup. Region matches deploy/garage/garage.toml.
+      # The bucket keeps the name nuclei-raw on purpose: it names the Nuclei
+      # output it holds, and renaming it would point existing installations at
+      # an empty bucket.
       S3_ENDPOINT: "garage:3900"
       S3_BUCKET: "nuclei-raw"
       S3_ACCESS_KEY_ID: "GKnsc-dev-local"
@@ -125,6 +129,8 @@ services:
       # Persist the nuclei-templates clone cache on a named volume so a restart
       # re-fetches deltas instead of re-cloning ~1 GB of .git every `up`. Set
       # TEMPLATE_SYNC_REPO="" to disable the sync entirely in a slim dev stack.
+      # /var/lib/nsc keeps the old short name on purpose: installations mount
+      # their named volume there, and a new path would leave it behind.
       TEMPLATE_SYNC_DIR: "/var/lib/nsc/template-sync"
     volumes:
       - templatecache:/var/lib/nsc

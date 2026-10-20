@@ -15,8 +15,8 @@ import (
 
 // Set at link time, for example:
 //
-//	-X github.com/Nikolasel/nuclei-security-center/internal/version.versionTag=v0.5.0-beta
-//	-X github.com/Nikolasel/nuclei-security-center/internal/version.gitCommit=<40-char sha>
+//	-X github.com/goodnightsec/gn-check/internal/version.versionTag=v0.5.0
+//	-X github.com/goodnightsec/gn-check/internal/version.gitCommit=<40-char sha>
 var (
 	versionTag string
 	gitCommit  string

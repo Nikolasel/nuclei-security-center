@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/backend"
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/backend"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 // TestBuildAuthenticatorFailsClosed verifies auth is fail-closed: an unset

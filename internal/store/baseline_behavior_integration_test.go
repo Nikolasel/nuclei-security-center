@@ -11,7 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 func TestBaselineOccurrenceScanScopeConstraintPostgres(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // DefaultMaxConcurrentScans is the node-side fallback used when a direct node

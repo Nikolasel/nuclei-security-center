@@ -302,7 +302,7 @@ export function Layout({
 
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
-      <header className="border-b border-cyan-300/20 bg-slate-950 text-white shadow-[0_1px_28px_rgba(34,211,238,0.12)] dark:bg-slate-950">
+      <header className="border-b border-lantern/20 bg-midnight text-on-brand shadow-brand">
         <div className="mx-auto flex max-w-[96rem] items-center gap-3 px-4 pt-[env(safe-area-inset-top)]">
           {/* Mobile-only hamburger; the sidebar is a dialog on small viewports. */}
           <button
@@ -310,7 +310,7 @@ export function Layout({
             onClick={() => setMobileOpen(true)}
             aria-label="Open navigation"
             aria-haspopup="dialog"
-            className="rounded-md p-2 text-slate-100 hover:bg-white/10 md:hidden"
+            className="rounded-md p-2 text-on-brand hover:bg-on-brand-hover md:hidden"
           >
             <Menu className="h-5 w-5" aria-hidden />
           </button>
@@ -324,13 +324,13 @@ export function Layout({
               onClick={toggle}
               aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
               title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-              className="rounded-md p-2 text-slate-100 hover:bg-white/10"
+              className="rounded-md p-2 text-on-brand hover:bg-on-brand-hover"
             >
               {theme === "dark" ? <Sun className="h-5 w-5" aria-hidden /> : <Moon className="h-5 w-5" aria-hidden />}
             </button>
             <DropdownMenu.Root>
-              <DropdownMenu.Trigger className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-slate-100 hover:bg-white/10">
-                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-cyan-300 to-violet-500 text-xs font-bold text-slate-950 shadow-[0_0_14px_rgba(103,232,249,0.42)]">
+              <DropdownMenu.Trigger className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-on-brand hover:bg-on-brand-hover">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-gradient-to-br from-moonlight to-dusk text-xs font-bold text-midnight shadow-[0_0_14px_rgba(103,232,249,0.42)]">
                   {who.slice(0, 2).toUpperCase()}
                 </span>
                 <span className="hidden sm:inline">{who}</span>

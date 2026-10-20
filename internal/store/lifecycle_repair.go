@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 	"github.com/jackc/pgx/v5"
 )
 

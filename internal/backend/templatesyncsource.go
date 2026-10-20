@@ -11,7 +11,7 @@ import (
 
 	"github.com/go-git/go-git/v5/plumbing"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 // Upstream template source switching (#343): the app_settings row is the

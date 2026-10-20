@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 func ptr[T any](v T) *T { return &v }

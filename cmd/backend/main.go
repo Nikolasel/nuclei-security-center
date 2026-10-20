@@ -17,10 +17,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/backend"
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
-	"github.com/Nikolasel/nuclei-security-center/internal/version"
-	"github.com/Nikolasel/nuclei-security-center/web"
+	"github.com/goodnightsec/gn-check/internal/backend"
+	"github.com/goodnightsec/gn-check/internal/store"
+	"github.com/goodnightsec/gn-check/internal/version"
+	"github.com/goodnightsec/gn-check/web"
 )
 
 func main() {
@@ -383,7 +383,9 @@ func buildObjectStore(ctx context.Context, log *slog.Logger) (backend.ObjectStor
 		return nil, nil
 	}
 	cfg := backend.ObjectStoreConfig{
-		Endpoint:  endpoint,
+		Endpoint: endpoint,
+		// nuclei-raw stays the default: it names the Nuclei output it holds,
+		// and a new default would point existing installations at an empty bucket.
 		Bucket:    envOr("S3_BUCKET", "nuclei-raw"),
 		AccessKey: os.Getenv("S3_ACCESS_KEY_ID"),
 		SecretKey: os.Getenv("S3_SECRET_ACCESS_KEY"),

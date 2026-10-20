@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // TemplateImportWrite is one already-validated custom template mutation.

@@ -32,8 +32,14 @@ import (
 // rejects a bundle newer than it understands and never silently guesses.
 
 const (
-	// ScanBundleFormat is the manifest's self-describing format marker.
-	ScanBundleFormat = "nuclei-security-center/scan-bundle"
+	// ScanBundleFormat is the manifest's self-describing format marker,
+	// written on every export.
+	ScanBundleFormat = "goodnightsec/gn-check/scan-bundle"
+	// LegacyScanBundleFormat is the marker that releases before v0.5.0 wrote,
+	// under the product's old name. It can't change: import still accepts it,
+	// so bundles exported from those releases keep importing. It is never
+	// written and never shown.
+	LegacyScanBundleFormat = "nuclei-security-center/scan-bundle"
 	// ScanBundleFormatVersion is the current manifest version. Bump on any
 	// breaking change; import accepts only <= this version.
 	ScanBundleFormatVersion = 1
@@ -195,7 +201,7 @@ func (b *ScanBundle) Validate() error {
 	if b == nil {
 		return errors.New("scan bundle is empty")
 	}
-	if b.Format != ScanBundleFormat {
+	if b.Format != ScanBundleFormat && b.Format != LegacyScanBundleFormat {
 		return fmt.Errorf("%w: format %q (want %q)", ErrBundleUnsupported, b.Format, ScanBundleFormat)
 	}
 	if b.FormatVersion <= 0 {

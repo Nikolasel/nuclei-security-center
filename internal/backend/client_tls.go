@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 // mTLS for the backend→scanner path (#26). This upgrades the service auth from

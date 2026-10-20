@@ -19,8 +19,8 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
-	"github.com/Nikolasel/nuclei-security-center/internal/templates"
+	"github.com/goodnightsec/gn-check/internal/store"
+	"github.com/goodnightsec/gn-check/internal/templates"
 )
 
 // syncTimeout bounds one refresh (clone/fetch + apply). It also defines

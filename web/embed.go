@@ -22,7 +22,7 @@ var distFS embed.FS
 // dist/index.html so that no file Vite overwrites is tracked by git.
 const notBuiltHTML = `<!doctype html>
 <meta charset="utf-8">
-<title>Nuclei Security Center</title>
+<title>Goodnight Check</title>
 <p>Frontend not built. Run <code>npm ci &amp;&amp; npm run build</code> in <code>web/</code>.</p>
 `
 

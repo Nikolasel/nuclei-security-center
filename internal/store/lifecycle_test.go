@@ -9,7 +9,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 func TestBuildFindingWhere(t *testing.T) {

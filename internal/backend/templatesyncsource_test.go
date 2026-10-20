@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 func TestValidateTemplateSyncRepo(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 const maxDigestFindingsInMail = 100
@@ -138,7 +138,7 @@ func composeDigestMail(base string, scan store.ScanRow, p store.ScanDigestPayloa
 	if scan.TargetName != "" {
 		title = "Scan result changes — " + scan.TargetName
 	}
-	subject := fmt.Sprintf("[NSC] %s: %d new, %d changed, %d fixed",
+	subject := fmt.Sprintf("[Goodnight Check] %s: %d new, %d changed, %d fixed",
 		shortScan(scan.ID), p.New.Total(), p.Changed.Total(), p.Fixed.Total())
 
 	listed := p.Findings
@@ -163,7 +163,7 @@ func composeDigestMail(base string, scan store.ScanRow, p store.ScanDigestPayloa
 			joinURL(base, fmt.Sprintf("/findings/%d", f.ID)))
 	}
 	if extra > 0 {
-		fmt.Fprintf(&text, "… and %d more (open the scan in NSC)\n", extra)
+		fmt.Fprintf(&text, "… and %d more (open the scan in Goodnight Check)\n", extra)
 	}
 
 	html, err := renderMailTemplate("digest.html", newDigestMailData(scan, base, title, subject, p, listed, extra))
@@ -187,7 +187,7 @@ func composeFailedMail(base string, scan store.ScanRow, p store.ScanFailedPayloa
 	if reason == "" {
 		reason = "scan failed"
 	}
-	subject := fmt.Sprintf("[NSC] Scan failed %s", shortScan(scan.ID))
+	subject := fmt.Sprintf("[Goodnight Check] Scan failed %s", shortScan(scan.ID))
 	title := "Scan failed"
 	if scan.TargetName != "" {
 		title = "Scan failed — " + scan.TargetName

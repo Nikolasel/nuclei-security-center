@@ -11,7 +11,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // Server wires the Runner to the scanner node's HTTP API.

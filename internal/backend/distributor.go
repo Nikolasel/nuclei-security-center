@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/store"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // TemplateDistributor pushes the full template catalog to each scanner node so a

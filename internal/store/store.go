@@ -17,9 +17,13 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
+// The first line of migrations/0001_init.sql still names the product by its
+// old name. That comment can't change: applied migrations are checksummed, and
+// editing the file would stop every existing backend from starting.
+//
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 

@@ -7,7 +7,7 @@ import (
 	"html/template"
 	"strings"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 // The notification mail documents live as template files so the markup stays
@@ -18,17 +18,18 @@ import (
 //go:embed mailtemplates/*.html
 var mailTemplateFS embed.FS
 
-// The brand logo in the mail header is a PNG rendition (rendered with headless
-// Chrome) of web/public/nuclei-logo.svg — Gmail and Outlook don't render SVG.
-// It rides along as an inline CID part (Content-ID <nuclei-logo.png>, set by
-// go-mail from the file name), so the markup references src="cid:nuclei-logo.png"
-// and the mail still loads nothing from the network.
+// The brand logo in the mail header is the GoodnightSec mark as a PNG (the
+// 180 px rendition of web/public/goodnightsec-mark.svg), because
+// Gmail and Outlook don't render SVG. It rides along as an inline CID part
+// (Content-ID <goodnightsec-mark.png>, set by go-mail from the file name), so the
+// markup references src="cid:goodnightsec-mark.png" and the mail still loads
+// nothing from the network.
 //
-//go:embed mailtemplates/nuclei-logo.png
+//go:embed mailtemplates/goodnightsec-mark.png
 var mailLogoPNG []byte
 
 // mailLogoCID is the cid: reference the mail templates use for the logo.
-const mailLogoCID = "cid:nuclei-logo.png"
+const mailLogoCID = "cid:goodnightsec-mark.png"
 
 // mailLogoInline is the inline logo attachment carried by both HTML mails.
 func mailLogoInline() []MailImage {

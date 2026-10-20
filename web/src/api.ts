@@ -13,7 +13,7 @@ export interface Identity {
 // AppVersion is the backend build identity from GET /api/version.
 // `tag` is empty for an untagged build. `commit` is the full SHA, or empty
 // when the binary has no VCS stamp. `version` is the display string
-// (`v0.5.0-beta (3beec52)`, `dev (3beec52)`, or `dev (unknown)`).
+// (`v0.5.0 (3beec52)`, `dev (3beec52)`, or `dev (unknown)`).
 export interface AppVersion {
   tag: string;
   commit: string;
@@ -330,7 +330,7 @@ export interface Schedule {
   updated_at: string;
 }
 
-// ServiceAccount is an NSC-local identity for headless automation (#70), scoped
+// ServiceAccount is a Check-local identity for headless automation (#70), scoped
 // to one role and authenticated with a bearer token. Only the token's hash is
 // stored server-side, so `token_prefix` (the cleartext leading characters) is all
 // the UI can show of an existing token — enough to match a row to the string an

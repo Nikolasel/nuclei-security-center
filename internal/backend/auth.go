@@ -18,7 +18,7 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 // AuthConfig configures the backend as a confidential OIDC client (the BFF).
@@ -218,10 +218,10 @@ func discoverEndSessionEndpoint(p *oidc.Provider) string {
 }
 
 // endSessionURL builds the RP-initiated logout URL for the browser to visit
-// after the local NSC session has been cleared. It appends client_id and
+// after the local Check session has been cleared. It appends client_id and
 // post_logout_redirect_uri so the IdP can validate the return and terminate
 // its own SSO cookie. The IdP session is the reason a shared-workstation
-// attacker could otherwise re-mint an NSC session with one click after the
+// attacker could otherwise re-mint a Check session with one click after the
 // victim's local logout — this URL drives the IdP to clear it. When the
 // provider does not advertise an end_session_endpoint the caller must fall
 // back to local-only logout.

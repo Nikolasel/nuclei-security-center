@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // Nuclei progress stats (#66). Run with -stats-json -stats-interval N, Nuclei

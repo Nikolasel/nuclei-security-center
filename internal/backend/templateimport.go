@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
-	templatespkg "github.com/Nikolasel/nuclei-security-center/internal/templates"
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/store"
+	templatespkg "github.com/goodnightsec/gn-check/internal/templates"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 type portableTemplateWritePlan struct {

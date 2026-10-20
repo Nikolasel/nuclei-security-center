@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 // Findings export (Phase 2, slice 3). The deduplicated lifecycle list is
@@ -40,7 +40,7 @@ const (
 	exportMaxBytesHeader           = "X-NSC-Export-Max-Bytes"
 	exportMissingOccurrencesHeader = "X-NSC-Export-Missing-Occurrences"
 	sarifResultsPrefix             = `{"$schema":"https://json.schemastore.org/sarif-2.1.0.json","version":"2.1.0","runs":[{"results":[`
-	sarifToolPrefix                = `],"tool":{"driver":{"name":"nuclei-security-center","informationUri":"https://github.com/Nikolasel/nuclei-security-center","rules":[`
+	sarifToolPrefix                = `],"tool":{"driver":{"name":"gn-check","informationUri":"https://github.com/goodnightsec/gn-check","rules":[`
 	sarifSuffix                    = `]}}}]}`
 )
 

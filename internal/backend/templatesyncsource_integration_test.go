@@ -18,8 +18,8 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/store"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // buildTemplateRepoFixture creates a local repository standing in for an

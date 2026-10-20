@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/goodnightsec/gn-check/internal/store"
 	"golang.org/x/oauth2"
 )
 

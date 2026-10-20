@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // TestDecodeScanBundleJSONStreamsFindingsCount verifies the decoder bounds the
@@ -22,7 +22,7 @@ func TestDecodeScanBundleJSONStreamsFindingsCount(t *testing.T) {
 		if count > 0 {
 			findings = findings[:len(findings)-1]
 		}
-		return []byte(fmt.Sprintf(`{"format":"nuclei-security-center/scan-bundle","format_version":1,"exported_at":"2026-07-01T12:00:00Z","scan":{"id":"11111111-1111-1111-1111-111111111111","state":"complete","source":"adhoc","created_at":"2026-07-01T12:00:00Z","spec":{}},"findings":[%s]}`,
+		return []byte(fmt.Sprintf(`{"format":"goodnightsec/gn-check/scan-bundle","format_version":1,"exported_at":"2026-07-01T12:00:00Z","scan":{"id":"11111111-1111-1111-1111-111111111111","state":"complete","source":"adhoc","created_at":"2026-07-01T12:00:00Z","spec":{}},"findings":[%s]}`,
 			findings))
 	}
 

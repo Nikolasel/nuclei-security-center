@@ -291,7 +291,7 @@ export function FindingDetailPage() {
               to={`/templates?template=${encodeURIComponent(f.template_id)}`}
               target="_blank"
               rel="noopener noreferrer"
-              title="Open the NSC template in a new tab"
+              title="Open the template in Goodnight Check in a new tab"
               className={`font-mono text-xs ${linkClass}`}
             >
               {f.template_id}

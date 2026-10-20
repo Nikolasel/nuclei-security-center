@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // ErrScanCapacity means the backend cannot admit another scan for the selected

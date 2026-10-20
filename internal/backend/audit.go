@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 // Audit log (Phase 3). Every mutating API call and rejected authentication emits

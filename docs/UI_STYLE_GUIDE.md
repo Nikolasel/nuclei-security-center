@@ -29,7 +29,7 @@ Colors come from Tailwind's default palette and always carry a role:
 |---|---|---|
 | Surface | `neutral` (`bg-neutral-50` page, `bg-white` cards; `neutral-950`/`neutral-900` dark) | Backgrounds, borders, body text |
 | Accent | `indigo` | Primary buttons, links, focus rings, selection, active nav, progress |
-| Brand | `slate-950` + `cyan`/`violet` glow | **Only** the top header bar, brand mark and login screen |
+| Brand | `midnight`, `lantern` and the neon gradient (`moonlight` → `skyline` → `dusk`) | **Only** the top header bar, brand mark and login screen |
 | Success | `green` / `emerald` | Healthy, complete, enabled, mitigated |
 | Warning | `amber` | Caveats, partial results, needs-attention notes |
 | Danger | `red` / `rose` | Errors, failures, destructive actions |
@@ -43,6 +43,25 @@ Rules:
 - Muted text is `text-neutral-500`. Placeholders and empty values are `text-neutral-400` (use `<Muted />`).
 - Don't use color as the only signal. A badge always has a text label.
 - Don't pick a new hue for a new state. Map it onto an existing role.
+- Brand is not accent: cyan never marks something clickable, and indigo never decorates.
+
+### Brand
+
+The brand colors come from the GoodnightSec theme in `web/src/goodnightsec-tailwind.css`, imported
+by `index.css`. That file is generated; don't edit it, replace it with a newer copy of the theme.
+
+- The header bar and the login screen use `bg-midnight`, `border-lantern/20`, `shadow-brand`,
+  `text-on-brand` and `hover:bg-on-brand-hover`. Don't use `slate`, `cyan` or `violet` classes
+  for them.
+- `Brand.tsx` is the product lockup: the GoodnightSec mark (`web/public/goodnightsec-mark.svg`)
+  plus a two-line name, the kicker "GOODNIGHT" (`text-[11px] font-bold uppercase
+  tracking-[0.22em] text-lantern`) and the product "Check" (`text-sm font-semibold
+  text-on-brand`). Use the component; don't rebuild the lockup, recolor or stretch the mark, or
+  put anything inside it.
+- The favicons in `web/public/` (`favicon-32.png`, `apple-touch-icon.png`) are renditions of the
+  same mark.
+- Notification mails (`internal/backend/mailtemplates/`) repeat the lockup with inline styles and
+  the mark as a PNG, because mail clients ignore classes and don't render SVG.
 
 ### Typography
 

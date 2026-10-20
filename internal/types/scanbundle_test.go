@@ -39,6 +39,24 @@ func TestScanBundleValidate(t *testing.T) {
 	}
 }
 
+// Bundles exported before v0.5.0 carry the old marker and must still import.
+func TestScanBundleValidateAcceptsLegacyFormat(t *testing.T) {
+	b := sampleBundle()
+	b.Format = LegacyScanBundleFormat
+	if err := b.Validate(); err != nil {
+		t.Fatalf("legacy bundle rejected: %v", err)
+	}
+}
+
+func TestScanBundleFormatIsNew(t *testing.T) {
+	if ScanBundleFormat != "goodnightsec/gn-check/scan-bundle" {
+		t.Fatalf("ScanBundleFormat = %q, want the gn-check marker", ScanBundleFormat)
+	}
+	if ScanBundleFormat == LegacyScanBundleFormat {
+		t.Fatal("the written marker must differ from the legacy one")
+	}
+}
+
 func TestScanBundleValidateRejects(t *testing.T) {
 	t0 := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 	cases := []struct {

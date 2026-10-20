@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 type recordingSender struct {

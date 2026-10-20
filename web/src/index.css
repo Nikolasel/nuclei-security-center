@@ -1,4 +1,7 @@
 @import "tailwindcss";
+/* The GoodnightSec theme (generated, don't edit): brand colors, on-* text
+   colors, brand shadow. See docs/UI_STYLE_GUIDE.md, Brand. */
+@import "./goodnightsec-tailwind.css";
 
 /* Class-based dark mode (#292): `dark:` utilities respond to the `dark` class
    on <html>, which the header theme toggle flips. The class is seeded from the

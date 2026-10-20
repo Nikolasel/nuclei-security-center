@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 func sampleBundleForTest() types.ScanBundle {
@@ -63,7 +63,7 @@ func TestIsZipBundle(t *testing.T) {
 		{"zip local header", []byte{'P', 'K', 3, 4, 0, 0}, true},
 		{"zip empty archive", []byte{'P', 'K', 5, 6}, true},
 		{"zip spanned", []byte{'P', 'K', 7, 8}, true},
-		{"json document", []byte(`{"format":"nuclei-security-center/scan-bundle"}`), false},
+		{"json document", []byte(`{"format":"goodnightsec/gn-check/scan-bundle"}`), false},
 		{"too short", []byte{'P', 'K'}, false},
 		{"garbage", []byte("PKXX"), false},
 	}
@@ -77,7 +77,7 @@ func TestIsZipBundle(t *testing.T) {
 }
 
 func TestReadZipBundleManifest(t *testing.T) {
-	manifest := []byte(`{"format":"nuclei-security-center/scan-bundle","format_version":1}`)
+	manifest := []byte(`{"format":"goodnightsec/gn-check/scan-bundle","format_version":1}`)
 
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
@@ -135,7 +135,7 @@ func TestReadZipBundleManifestRejects(t *testing.T) {
 		zw := zip.NewWriter(&buf)
 		for range 2 {
 			f, _ := zw.Create(types.ScanBundleManifestName)
-			_, _ = f.Write([]byte(`{"format":"nuclei-security-center/scan-bundle"}`))
+			_, _ = f.Write([]byte(`{"format":"goodnightsec/gn-check/scan-bundle"}`))
 		}
 		_ = zw.Close()
 		if _, err := readZipBundleManifest(buf.Bytes()); err == nil || !strings.Contains(err.Error(), "more than one manifest.json") {

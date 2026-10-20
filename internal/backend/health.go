@@ -9,8 +9,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/store"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // HealthMonitor derives scanner node liveness by polling each registered node's

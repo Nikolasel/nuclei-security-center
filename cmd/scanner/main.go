@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/scanner"
+	"github.com/goodnightsec/gn-check/internal/scanner"
 )
 
 func main() {

@@ -8,10 +8,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
-// ServiceAccount is an NSC-local identity for headless/automation callers (#70).
+// ServiceAccount is a Check-local identity for headless/automation callers (#70).
 // It carries a single role (the same RBAC the session cookie uses) and
 // authenticates with a bearer token whose hash is all that's stored — the token
 // itself is returned to the operator once, at creation/rotation, and never again.

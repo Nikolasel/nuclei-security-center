@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96" role="img" aria-label="GoodnightSec">
+  <title>GoodnightSec</title>
+  <defs>
+    <linearGradient id="gns-tile" x1="12" y1="10" x2="86" y2="90" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#111B40"/>
+      <stop offset="1" stop-color="#080B1F"/>
+    </linearGradient>
+    <linearGradient id="gns-neon" x1="24" y1="18" x2="74" y2="82" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#62F6FF"/>
+      <stop offset=".48" stop-color="#49C8FF"/>
+      <stop offset="1" stop-color="#B56CFF"/>
+    </linearGradient>
+  </defs>
+  <rect width="96" height="96" rx="24" fill="url(#gns-tile)"/>
+  <rect x="1" y="1" width="94" height="94" rx="23" fill="none" stroke="#77F8FF" stroke-opacity=".26" stroke-width="2"/>
+  <path fill="url(#gns-neon)" d="M42.85 17.88L22 25.5V46C22 62.5 32.5 75 48 81C63.5 75 74 62.5 74 46V45.65A21 21 0 0 1 42.85 17.88Z"/>
+  <path fill="#62F6FF" d="M60 21Q61.44 28.56 69 30Q61.44 31.44 60 39Q58.56 31.44 51 30Q58.56 28.56 60 21Z"/>
+</svg>

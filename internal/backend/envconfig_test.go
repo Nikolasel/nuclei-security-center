@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 var backendEnvDocName = regexp.MustCompile(`^[A-Z][A-Z0-9_]+$`)

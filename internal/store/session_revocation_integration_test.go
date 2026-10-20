@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // TestListAndRevokeSessions pins the admin revocation path (#189): an admin can

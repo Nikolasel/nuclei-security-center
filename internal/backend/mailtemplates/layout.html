@@ -7,7 +7,8 @@ must survive with nothing but these attributes.
 
 Colors mirror the web app's light theme (docs/UI_STYLE_GUIDE.md): neutral
 surfaces, indigo links/buttons, the severity ramp red→orange→amber→yellow→sky
-and the midnight/lantern-cyan brand bar from web/src/components/Brand.tsx.
+and the midnight brand bar with the Goodnight Check lockup from
+web/src/components/Brand.tsx.
 
 Typography mirrors web/src/index.css: the system UI sans stack sits inline on
 <body> and every table cell, because many clients ignore <style> blocks and
@@ -17,17 +18,7 @@ UI_STYLE_GUIDE.md) is kept inline for machine values only.
 
 {{define "brand"}}
 <td style="background-color:#020617;padding:18px 32px;border-radius:8px 8px 0 0;font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-  <table role="presentation" cellpadding="0" cellspacing="0" border="0">
-    <tr>
-      <td style="padding-right:12px;vertical-align:middle;">
-        <img src="cid:goodnightsec-mark.png" alt="" width="36" height="36" style="display:block;width:36px;height:36px;border:0;">
-      </td>
-      <td style="vertical-align:middle;font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-        <span style="display:block;font-size:11px;font-weight:700;letter-spacing:0.22em;text-transform:uppercase;color:#67e8f9;">Goodnight</span>
-        <span style="display:block;margin-top:2px;font-size:14px;font-weight:600;letter-spacing:0.02em;color:#ffffff;">Check</span>
-      </td>
-    </tr>
-  </table>
+  <img src="cid:goodnight-check-lockup-on-dark.png" alt="Goodnight Check" width="193" height="36" style="display:block;width:193px;height:36px;border:0;font-family:ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;font-weight:700;line-height:36px;color:#67e8f9;">
 </td>
 {{end}}
 

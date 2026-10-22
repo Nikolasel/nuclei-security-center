@@ -53,15 +53,20 @@ by `index.css`. That file is generated; don't edit it, replace it with a newer c
 - The header bar and the login screen use `bg-midnight`, `border-lantern/20`, `shadow-brand`,
   `text-on-brand` and `hover:bg-on-brand-hover`. Don't use `slate`, `cyan` or `violet` classes
   for them.
-- `Brand.tsx` is the product lockup: the GoodnightSec mark (`web/public/goodnightsec-mark.svg`)
-  plus a two-line name, the kicker "GOODNIGHT" (`text-[11px] font-bold uppercase
-  tracking-[0.22em] text-lantern`) and the product "Check" (`text-sm font-semibold
-  text-on-brand`). Use the component; don't rebuild the lockup, recolor or stretch the mark, or
-  put anything inside it.
+- `Brand.tsx` is the product lockup: the Goodnight Check lockup from the corporate design,
+  copied to `web/public/goodnight-check-lockup-on-dark.svg`. It is the tile, "Goodnight" in Manrope
+  Bold and "Check" in Manrope Medium, lantern cyan, outlined in the SVG. The header is midnight in
+  both themes, so it is always the `-on-dark` file, 36 px high (`h-9 w-auto`). The compact form, on
+  the login screen and in the mobile navigation, is the GoodnightSec mark alone
+  (`web/public/goodnightsec-mark.svg`). Use the component; don't retype the name, rebuild the
+  lockup, recolor or stretch it, or put anything inside it. A newer lockup replaces the file with a
+  newer copy from the corporate design.
 - The favicons in `web/public/` (`favicon-32.png`, `apple-touch-icon.png`) are renditions of the
   same mark.
-- Notification mails (`internal/backend/mailtemplates/`) repeat the lockup with inline styles and
-  the mark as a PNG, because mail clients ignore classes and don't render SVG.
+- Notification mails (`internal/backend/mailtemplates/`) show the same lockup on the same midnight
+  bar, as a PNG rendition of the `-on-dark` file (`goodnight-check-lockup-on-dark.png`, 108 px high,
+  shown at 36 px), because mail clients ignore classes and don't render SVG. A newer lockup
+  replaces that PNG too.
 
 ### Typography
 

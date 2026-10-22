@@ -476,7 +476,7 @@ func TestMigrateSerializesConcurrentStartsPostgres(t *testing.T) {
 	}
 }
 
-// pg_dump helpers remain for later schema-upgrade tests.
+// pg_dump helpers for the schema-upgrade tests (upgrade_v047beta_integration_test.go).
 func findPGDump(t *testing.T) string {
 	t.Helper()
 	if configured := os.Getenv("NSC_TEST_PG_DUMP"); configured != "" {

@@ -40,8 +40,13 @@ NSC_TEST_DATABASE_URL='postgres://nuclei:***@localhost:5432/nuclei?sslmode=disab
   go test ./internal/store -count=1 -v
 ```
 
-Install `pg_dump`, put it on `PATH`, or set `NSC_TEST_PG_DUMP=/path/to/pg_dump` when writing
-schema-upgrade tests that dump isolated schemas.
+The schema-upgrade tests need the PostgreSQL client. Install `pg_dump` and `psql`, put them on
+`PATH`, or set `NSC_TEST_PG_DUMP=/path/to/pg_dump` and `NSC_TEST_PSQL=/path/to/psql` (a `psql`
+next to `pg_dump` is found on its own). `TestUpgradeFromV047BetaPostgres` builds a v0.4.7-beta
+database from migrations 0001 to 0005 (release commit `2252888`), fills it with synthetic rows,
+dumps and restores it, runs `Migrate`, and checks the schema against a fresh install and every row
+against the seed. A migration that adds a column to a seeded table lists the value upgraded rows
+hold in `columnsAddedSinceV047Beta`.
 
 ## Full local stack
 

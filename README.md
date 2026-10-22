@@ -100,13 +100,17 @@ needed:
    you pass it on every command). Or, with the stack down, copy each volume into its new
    `gn-check_*` volume, for example
    `docker run --rm -v <name>_pgdata:/from -v gn-check_pgdata:/to alpine cp -a /from/. /to/`.
+5. With the Compose stack's development Keycloak, recreate it once:
+   `docker compose up -d --force-recreate keycloak`. The backend's client is now
+   `gn-check-backend`. Keycloak imports the realm only if it doesn't exist yet, and keeps it in
+   the container, so a kept container still has the old client and sign-in fails. Recreating it
+   imports the demo realm again: users added in it are lost, and the demo users come back with
+   new IDs, so the backend records them as new users.
 
 Sessions, service-account tokens, export clients and UI settings keep working, and scan bundles
-exported from a `v0.4.x-beta` release still import. Three changes are visible:
+exported from a `v0.4.x-beta` release still import. Two changes are visible:
 
 - **The image names,** as above.
-- **The SARIF tool** is now `gn-check`. GitHub code scanning treats it as a new tool, so alerts
-  uploaded under the old name are closed once and reopened under the new one.
 - **The mail subject** now starts with `[Goodnight Check]`.
 
 Some technical identifiers keep the old short name `nsc` on purpose, because renaming them would

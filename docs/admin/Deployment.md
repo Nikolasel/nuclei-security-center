@@ -114,6 +114,13 @@ command). Or, with the stack down, copy each volume (`pgdata`, `garagemeta`, `ga
 `templatecache`) into its new `gn-check_*` volume, for example
 `docker run --rm -v <name>_pgdata:/from -v gn-check_pgdata:/to alpine cp -a /from/. /to/`.
 
+With the development Keycloak from `docker-compose.yml`, recreate it once after the upgrade:
+`docker compose up -d --force-recreate keycloak`. The backend's client is now `gn-check-backend`.
+Keycloak imports the realm only if it doesn't exist yet, and keeps it in the container (the
+service has no data volume). Compose keeps an unchanged container, so it still has the old client
+`nuclei-backend` and sign-in fails. Recreating it imports the demo realm again: users added in it
+are lost, and the demo users come back with new IDs, so the backend records them as new users.
+
 Every tag publishes the full semver (no leading `v`) and a `sha-<short>` git SHA. A
 non-prerelease such as `0.5.0` also publishes a floating `major.minor` tag (`0.5`) and `latest`.
 A prerelease (a tag with a suffix such as `-rc.1`) gets neither. The GHCR

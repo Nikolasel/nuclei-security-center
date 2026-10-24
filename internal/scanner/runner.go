@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // Runner owns all in-flight and finished scans for this node. Scans live in

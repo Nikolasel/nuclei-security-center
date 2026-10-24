@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/store"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // Scanner node config seeding (#22). The DB (scanner_nodes) is the system of

@@ -60,11 +60,12 @@ representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement at
-`nikolas.e@mail.de`. All complaints will be reviewed and investigated
+`info@goodnightsec.com`. All complaints will be reviewed and investigated
 promptly and fairly.
 
 Keep the two channels separate: the address above is for conduct matters;
-[SECURITY.md](SECURITY.md) (GitHub private vulnerability reporting) is
+[SECURITY.md](SECURITY.md) (GitHub private vulnerability reporting or
+`security@goodnightsec.com`) is
 exclusively for software vulnerabilities.
 
 All community leaders are obligated to respect the privacy and security of the

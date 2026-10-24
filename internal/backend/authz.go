@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 // The three roles, ordered by privilege. Roles are assigned by the IdP (a

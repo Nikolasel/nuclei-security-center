@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/store"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // seedBundleScan builds a complete completed scan (target/template-set/policy +
@@ -220,7 +220,7 @@ func TestScanBundleHTTPRoundTripPostgres(t *testing.T) {
 
 	// Rejecting a malformed bundle: wrong format value.
 	var malformed types.ScanBundle = jsonBundle
-	malformed.Format = "nuclei-security-center/not-a-bundle"
+	malformed.Format = "goodnightsec/gn-check/not-a-bundle"
 	malformedBytes, _ := json.Marshal(malformed)
 	badRR := post(dest, "/api/scans/import", malformedBytes)
 	if badRR.Code != http.StatusBadRequest {

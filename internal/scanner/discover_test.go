@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 func mustPair(t *testing.T, args []string, flag, val string) {

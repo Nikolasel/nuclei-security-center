@@ -11,7 +11,7 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 // cronParser accepts standard 5-field crontab syntax plus the @hourly/@daily/…

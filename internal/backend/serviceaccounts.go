@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
-// Service-account API tokens (#70). An additive, NSC-local credential for
+// Service-account API tokens (#70). An additive, Check-local credential for
 // unattended automation (cron/CI pulling GET /api/findings/export into
 // DefectDojo, etc.): scoped to one role, revocable independently of any human's
 // IdP session, individually auditable, and long-lived-but-expiring. It does NOT
@@ -54,7 +54,7 @@ func hashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// bearerToken extracts an NSC service-account token from the Authorization
+// bearerToken extracts a Check service-account token from the Authorization
 // header. ok is false when there's no bearer token to consider, so the caller
 // falls through to the session-cookie path.
 func bearerToken(r *http.Request) (string, bool) {

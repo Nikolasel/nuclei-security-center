@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/store"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // Scan bundle (#136): export a complete scan result as a self-contained,

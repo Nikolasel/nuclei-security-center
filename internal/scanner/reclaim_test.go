@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 func TestDeleteScanRemovesDirAndMapEntry(t *testing.T) {

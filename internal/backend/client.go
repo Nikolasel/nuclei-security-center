@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // ErrScannerBusy marks an operation the node refused because a scan currently

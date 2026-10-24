@@ -197,7 +197,7 @@ export function SettingsPage() {
 
   return (
     <Page narrow>
-      <PageHeader title="Settings" description="Global configuration for this Nuclei Security Center." />
+      <PageHeader title="Settings" description="Global configuration for this Goodnight Check installation." />
 
       {settings.isLoading ? (
         <Spinner />

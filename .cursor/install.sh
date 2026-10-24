@@ -70,7 +70,7 @@ retry() {
 }
 # Compose project name comes from the `name:` in docker-compose.yml, which fixes
 # the built image names to <project>-<service>.
-project="nuclei-security-center"
+project="gn-check"
 
 if image_present "${project}-backend" && image_present "${project}-scanner"; then
   log "backend + scanner images already built"

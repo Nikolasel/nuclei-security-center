@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/scanner"
+	"github.com/goodnightsec/gn-check/internal/scanner"
 )
 
 // TestScanRetentionExceedsBackendOverhead asserts the cross-package invariant

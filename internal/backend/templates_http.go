@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
-	"github.com/Nikolasel/nuclei-security-center/internal/templates"
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/store"
+	"github.com/goodnightsec/gn-check/internal/templates"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // maxTemplateYAML caps any individual template YAML upload. Nuclei templates

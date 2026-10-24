@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // defaultDiscoveryTimeout caps the naabu pre-pass when the policy sets no

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/version"
+	"github.com/goodnightsec/gn-check/internal/version"
 )
 
 func TestVersionAuthDisabledMatchesCurrent(t *testing.T) {

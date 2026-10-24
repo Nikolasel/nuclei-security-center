@@ -3,7 +3,7 @@ package backend
 import (
 	"net/http"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 // Global app settings API (#95, #336). Admin-only: the settings surface is

@@ -4,9 +4,22 @@ Guidance for agentic runs in this repo. Keep it current when structure or conven
 
 ## What this is
 
-`nuclei-security-center` — a web interface for running and triaging [Nuclei](https://github.com/projectdiscovery/nuclei)
-scans, for a small internal security/eng team, built cloud-portable.
-Repo: `git@github.com:Nikolasel/nuclei-security-center.git`.
+**Goodnight Check** (`gn-check`, "Check" after the first mention) — a self-hosted vulnerability
+scanner that runs [Nuclei](https://github.com/projectdiscovery/nuclei) templates and triages the
+results, for a small security/eng team, built cloud-portable.
+Repo: `git@github.com:goodnightsec/gn-check.git`.
+
+**Naming:** `nsc` is the product's old short name. It stays on purpose in identifiers that
+installations, clients or stored data depend on: the `nsc_` service-account token prefix, the
+`nsc_session` / `nsc_auth_state` cookies, the `X-NSC-Export-*` headers, the `_nsc_lifecycle_id` /
+`nsc_lifecycle_id` export fields, `*.nsc-bundle.*` files, the `nsc.*` localStorage keys,
+`/var/lib/nsc`, the default `TEMPLATE_SYNC_DIR`, the `"nsc-auth"` advisory-lock key, the SQL object
+names in migrations, and test/development names (`NSC_TEST_*`, `nsc_test`, the dev realm `nsc`,
+Garage dev keys, temp-file prefixes, the `nsc-pad` mail class). Don't rename them. Names that can't
+change at all: the first-line comment of `0001_init.sql` (checksummed), the old scan bundle marker
+`types.LegacyScanBundleFormat` (import still accepts it), and the default bucket `nuclei-raw`.
+**New identifiers use `gn-check` or a generic name**, and text people read (UI copy, mail, docs)
+says Goodnight Check. "Nuclei" appears only as the engine it runs ("runs Nuclei templates").
 
 **`docs/ARCHITECTURE.md` is the source of truth for design decisions.** Read it before making
 architectural changes. `README.md` is the visitor-facing overview; the practical guides live
@@ -14,7 +27,7 @@ under `docs/` (`admin/` plus an `ADMIN_GUIDE.md` index, `API.md`, `DEVELOPMENT.m
 **`docs/UI_STYLE_GUIDE.md` is the contract for the web UI** — read it before adding or changing a
 screen in `web/`.
 
-The product is a working beta: a logged-in user manages targets/template-sets, runs scans
+In the product, a logged-in user manages targets/template-sets, runs scans
 (on demand or on a cron **schedule**), and triages a **Tenable-style finding lifecycle** (dedup +
 first/last-seen + detection state + dispositions/recast), exporting the lifecycle list as
 JSON/CSV/SARIF/raw. OIDC/BFF auth with IdP-driven roles fronts a React SPA. Cross-cutting: a
@@ -89,7 +102,7 @@ their not-yet-run executors. CRUD at `GET/POST /api/scan-policies`,
 **Template catalog (#85):** Postgres owns the lossless YAML catalog (`templates`) and template
 sets. Exact sets use `template_set_members`; `all` sets resolve every active catalog template at
 dispatch; `exclude` sets resolve every active catalog template minus explicit exclusions. The retired
-POC filter columns and compatibility code are not part of the beta schema. Scans carry concrete
+POC filter columns and compatibility code are not part of the current schema. Scans carry concrete
 `template_ids` plus the full-catalog `templates_commit`.
 The backend pushes that full catalog to nodes; nodes select IDs from their verified active bundle
 and reject missing IDs or digest drift. Viewer exports and operator imports round-trip selected
@@ -351,7 +364,7 @@ dev mode used in headless `curl` testing.
 - Config via environment variables (see the table in `docs/admin/Configuration.md`); required vars fail fast.
 - Errors wrapped with `%w` and context; HTTP handlers return plain-text errors + status.
 - `internal/store/migrations/0001_init.sql` is the consolidated fresh-deployment baseline,
-  **frozen at the first beta release and immutable — never edit it or any other applied
+  **frozen and immutable — never edit it (not even its first-line comment) or any other applied
   migration file** (the runner stores SHA-256 checksums and fails fast if a checksummed
   migration's contents change). Every schema change goes in a new numbered file under
   `internal/store/migrations/`; the runner applies unseen files in filename order and records

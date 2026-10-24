@@ -9,10 +9,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
-// Template is one Nuclei template known to NSC. YAML is intentionally the
+// Template is one Nuclei template known to Check. YAML is intentionally the
 // only complete representation: all other content fields are extracted solely
 // for filtering and display, so exporting or dispatching never has to rebuild
 // YAML from a lossy intermediary representation.

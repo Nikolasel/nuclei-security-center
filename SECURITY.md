@@ -1,35 +1,40 @@
-# Security Policy
+# Security policy
 
-`nuclei-security-center` is a tool for running and triaging vulnerability scans, so we take
-its own security seriously. Thanks for helping keep it and its users safe.
-
-## Supported versions
-
-The project is in active beta development. Security fixes land on the latest `main` and the
-most recent tagged release; older tags are not maintained.
-
-| Version | Supported |
-|---|---|
-| latest `main` / newest release | ✅ |
-| older releases | ❌ |
+Goodnight Check is a tool for running and triaging vulnerability scans, so we take its own
+security seriously. Thanks for helping keep it and its users safe.
 
 ## Reporting a vulnerability
 
-**Please report vulnerabilities privately — do not open a public issue, PR, or discussion.**
+Please report vulnerabilities privately. Do not open a public issue, pull
+request or discussion.
 
-Use GitHub's private vulnerability reporting: open the repository's **Security** tab and click
-**Report a vulnerability** to start a private advisory visible only to the maintainers.
+- **GitHub:** open the **Security** tab of this repository and choose
+  **Report a vulnerability**.
+- **Email:** `security@goodnightsec.com`.
 
 Please include:
 
-- the affected component — backend, scanner node, or the SPA;
-- the version or commit SHA;
-- a description of the issue and its impact;
-- reproduction steps or a proof of concept.
+- the affected component and version, or the commit;
+- what the vulnerability is and what an attacker could do with it;
+- the steps to reproduce it, or a proof of concept.
 
-We aim to acknowledge a report within a few business days and will keep you updated as we
-triage, fix, and coordinate a release. Please give us reasonable time to ship a fix before any
-public disclosure, and avoid accessing or modifying data that isn't yours while investigating.
+Please do not access or change data that is not yours, and do not disrupt
+any service while you investigate.
+
+## What we commit to
+
+- We acknowledge your report within 3 business days.
+- We aim to assess it within 7 business days and tell you the result.
+- We agree the disclosure date with you, at most 90 days after your
+  report. We publish a security advisory with the fix, and credit you if
+  you wish.
+
+## Supported versions
+
+| Version | Supported |
+|---|---|
+| `v0.5.0` and newer | Yes |
+| Older releases | No |
 
 ## Security model
 
@@ -57,6 +62,6 @@ In short:
 
 ## A note on operating a scanner
 
-This project drives an **active vulnerability scanner**. Only scan hosts you are authorized to
+Goodnight Check drives an **active vulnerability scanner**. Only scan hosts you are authorized to
 scan — the scope guardrail helps enforce that, but the responsibility is ultimately the
 operator's.

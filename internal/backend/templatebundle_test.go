@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/scanner"
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/scanner"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 func contentSHA(yaml string) string {

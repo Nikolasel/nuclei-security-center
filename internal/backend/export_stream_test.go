@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 func lifecycleRowStream(rows []store.LifecycleRow) lifecycleRowStreamFunc {

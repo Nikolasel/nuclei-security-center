@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 func sampleRows() []store.LifecycleRow {
@@ -176,8 +176,11 @@ func TestStreamFindingsSARIFContent(t *testing.T) {
 		t.Fatalf("bad sarif envelope: version=%q runs=%d", doc.Version, len(doc.Runs))
 	}
 	run := doc.Runs[0]
-	if run.Tool.Driver.Name != "nuclei-security-center" {
+	if run.Tool.Driver.Name != "gn-check" {
 		t.Errorf("driver name = %q", run.Tool.Driver.Name)
+	}
+	if run.Tool.Driver.InformationURI != "https://github.com/goodnightsec/gn-check" {
+		t.Errorf("driver informationUri = %q", run.Tool.Driver.InformationURI)
 	}
 	// Two findings share a template id → one rule, two results.
 	if len(run.Tool.Driver.Rules) != 1 {

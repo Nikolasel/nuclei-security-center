@@ -15,10 +15,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
-	"github.com/Nikolasel/nuclei-security-center/internal/version"
-	"github.com/Nikolasel/nuclei-security-center/web"
+	"github.com/goodnightsec/gn-check/internal/store"
+	"github.com/goodnightsec/gn-check/internal/types"
+	"github.com/goodnightsec/gn-check/internal/version"
+	"github.com/goodnightsec/gn-check/web"
 )
 
 // Server is the backend's HTTP API. Mutating and read endpoints are guarded by
@@ -236,7 +236,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/template-sets/{id}/exclusions", s.requireRole(RoleViewer, s.handleListTemplateSetExclusions))
 	mux.HandleFunc("PUT /api/template-sets/{id}/exclusions", s.mutation(eventConfigChanged, "template_set.exclusions_replace", "template_set", RoleOperator, s.handleReplaceTemplateSetExclusions))
 
-	// Service accounts (#70) — NSC-local API-token identities for headless
+	// Service accounts (#70) — Check-local API-token identities for headless
 	// automation. Managing these credentials is admin-only; create/rotate/revoke
 	// are audited under a dedicated security event id. The token itself is only
 	// ever returned in the create/rotate response body, never on list.

@@ -15,7 +15,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 // manifestName is the well-known manifest path at the bundle root.

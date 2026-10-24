@@ -1,0 +1,90 @@
+name: DCO
+
+# Copy unchanged to .github/workflows/dco.yml in each public product
+# repository (OSS-4, decision 0011). Checks that every commit of an outside
+# pull request carries a DCO 1.1 sign-off by its author. The required check
+# is "DCO sign-off".
+#
+# It reads the commits through the API only. It never checks out or runs
+# the pull request's code, and needs no write access (SVT-9).
+# Pull requests opened by members of the organization or by bots are
+# exempt: OSS-4 covers outside contributions.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  sign-off:
+    name: DCO sign-off
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the sign-off of every commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          AUTHOR_TYPE: ${{ github.event.pull_request.user.type }}
+        run: |
+          set -euo pipefail
+
+          case "${AUTHOR_ASSOCIATION}" in
+            OWNER|MEMBER)
+              echo "Opened by a member of the organization: no sign-off needed."
+              exit 0
+              ;;
+          esac
+          if [ "${AUTHOR_TYPE}" = "Bot" ]; then
+            echo "Opened by a bot: no sign-off needed."
+            exit 0
+          fi
+
+          # One line per commit without a matching sign-off. Merge commits
+          # are skipped: they only bring in commits that are checked
+          # themselves. A sign-off matches when its email equals the author's
+          # email (case-insensitive) or its name equals the author's name.
+          missing="$(
+            gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/commits" --jq '
+              .[]
+              | select((.parents | length) < 2)
+              | . as $c
+              | ($c.commit.author.name) as $name
+              | ($c.commit.author.email | ascii_downcase) as $email
+              | [ $c.commit.message
+                  | split("\n")[]
+                  | capture("^Signed-off-by: *(?<n>.*?) *<(?<e>[^>]+)> *$")? ]
+              | select(all(.[]; (.e | ascii_downcase) != $email and .n != $name))
+              | "\($c.sha[0:12]) \($c.commit.message | split("\n")[0])"
+            '
+          )"
+
+          if [ -z "${missing}" ]; then
+            echo "Every commit carries a sign-off by its author."
+            exit 0
+          fi
+
+          {
+            echo "## DCO sign-off missing"
+            echo
+            echo "These commits have no \`Signed-off-by\` line by their author:"
+            echo
+            echo '```'
+            echo "${missing}"
+            echo '```'
+            echo
+            echo "Every commit must be signed off: you certify the Developer Certificate of Origin 1.1 (https://developercertificate.org). To fix it, sign off all commits of this branch and push again:"
+            echo
+            echo '```'
+            echo "git rebase --signoff origin/main"
+            echo "git push --force-with-lease"
+            echo '```'
+            echo
+            echo "For new commits, use \`git commit -s\`."
+          } | tee -a "${GITHUB_STEP_SUMMARY}"
+          echo "::error::Commits without a DCO sign-off by their author. See the job summary."
+          exit 1

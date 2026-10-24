@@ -114,9 +114,10 @@ Both mails are `text/plain` + a styled `text/html` alternative rendered from emb
 `html/template` documents (`internal/backend/mailtemplates/`, rendered by
 `internal/backend/mailrender.go`) — designed, severity-colored, mobile-friendly, with the text
 part as the complete fallback. The HTML makes no external requests (no remote images, fonts, or
-tracking pixels): the brand logo is a PNG rendition of `web/public/nuclei-logo.svg` (Gmail and
+tracking pixels): the brand logo is the Goodnight Check lockup as a PNG (Gmail and
 Outlook don't render SVG) sent as an inline `image/png` MIME part referenced by CID
-(`<img src="cid:nuclei-logo.png">`), so clients that block images simply show the text wordmark.
+(`<img src="cid:goodnight-check-lockup-on-dark.png">`), so clients that block images simply show
+its alt text, "Goodnight Check".
 Links point at `APP_BASE_URL` and open behind a normal sign-in. The rendered
 documents are pinned by golden-file tests (`internal/backend/testdata/mail/`).
 

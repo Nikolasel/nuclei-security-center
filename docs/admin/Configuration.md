@@ -80,9 +80,9 @@ are insert-only by node name; PostgreSQL and subsequent API/UI edits are authori
 | `POST_LOGIN_REDIRECT` | `APP_BASE_URL/` | Browser destination after login. |
 | `OIDC_SCOPES` | `openid,profile,email` | Comma-separated scopes. |
 | `OIDC_ROLES_CLAIM` | `groups` | ID-token claim containing groups or roles. |
-| `OIDC_ADMIN_GROUP` | `admin` | Group mapped to NSC admin. |
-| `OIDC_OPERATOR_GROUP` | `operator` | Group mapped to NSC operator. |
-| `OIDC_VIEWER_GROUP` | `viewer` | Group mapped to NSC viewer. |
+| `OIDC_ADMIN_GROUP` | `admin` | Group mapped to the Goodnight Check admin role. |
+| `OIDC_OPERATOR_GROUP` | `operator` | Group mapped to the Goodnight Check operator role. |
+| `OIDC_VIEWER_GROUP` | `viewer` | Group mapped to the Goodnight Check viewer role. |
 | `SESSION_TTL` | `12h` | Server-side session lifetime, between 15m and 24h. Longer values are rejected. |
 | `SESSION_COOKIE_NAME` | `__Host-nsc_session` when `COOKIE_SECURE=true`; `nsc_session` otherwise | Session cookie name. Secure deployments use the Host- prefix. |
 | `COOKIE_SECURE` | `true` | Secure-cookie flag. Set false only for local plaintext HTTP. |
@@ -145,7 +145,7 @@ no `latest` tag, so the compose file keeps `v2.3.0` as the known-good default. S
 in `.env` to try a newer release or pin one tag for a test run. To change the default, bump the
 compose fallback after checking [garagehq.deuxfleurs.fr](https://garagehq.deuxfleurs.fr/) or the
 [Garage releases](https://git.deuxfleurs.fr/Deuxfleurs/garage/releases). Running that unmodified
-image is appropriate for development and for self-hosting. Revisit the choice if NSC ever patches
+image is appropriate for development and for self-hosting. Revisit the choice if Check ever patches
 Garage and ships that modified build: AGPL-3.0 would then require offering the corresponding Garage
 source. The application client stays `minio-go`; it
 speaks generic S3, and the same `S3_*` variables point at AWS S3 or another compatible API in
@@ -154,7 +154,7 @@ production. The Compose access key and secret are the development values in
 
 The backend archives byte-exact raw Nuclei output and execution logs best-effort. PostgreSQL remains
 the system of record: an archive upload failure is logged but does not discard successfully ingested
-findings. Downloads are proxied through the authenticated backend; NSC does not expose presigned
+findings. Downloads are proxied through the authenticated backend; Check does not expose presigned
 URLs.
 
 ## Scan email notifications

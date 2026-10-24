@@ -1,4 +1,4 @@
-module github.com/Nikolasel/nuclei-security-center
+module github.com/goodnightsec/gn-check
 
 go 1.26.0
 

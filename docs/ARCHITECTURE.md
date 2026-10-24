@@ -1,4 +1,4 @@
-# Nuclei Security Center — Architecture
+# Goodnight Check — Architecture
 
 **Scope:** internal tool for a small security/eng team. Multi-user, auth required, no
 formal regulatory framework driving design. Must be **easy to run on any cloud**.
@@ -89,7 +89,7 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
   switch from an ordinary upstream change. Failed runs record the unchanged active bundle state, so a
   node reporting an older digest can be matched to catalog history (a stray malformed file is
   skipped-and-counted, not fatal; the run fails closed only if nothing parses). Runs are retained
-  in PostgreSQL and exposed through a paginated history; NSC does not silently prune them.
+  in PostgreSQL and exposed through a paginated history; Check does not silently prune them.
 - **app_settings (template-sync source)** — the upstream source (repository + ref) is a runtime
   setting on the settings singleton (#343): the entrypoint seeds the NULL columns once from
   `TEMPLATE_SYNC_REPO`/`TEMPLATE_SYNC_REF`, and afterward the database wins — a differing
@@ -124,7 +124,7 @@ selects which zone can reach it, so a segmented scanner never sees out-of-zone h
 - **template_sets** — an explicit `mode`: `exact` uses curated membership in
   `template_set_members`, `all` resolves every active catalog template at scan time, and `exclude`
   resolves every active template except explicit rows in `template_set_exclusions`. The retired POC
-  filter columns and compatibility code are not part of the beta schema. Exact sets and selected
+  filter columns and compatibility code are not part of the current schema. Exact sets and selected
   templates are portable as either a lossless YAML tarball (verbatim files + manifest) or one JSON
   document retaining the verbatim YAML strings; catalog-derived sets export their mode and
   exclusions rather than freezing the current catalog. Import writes custom templates, set
@@ -543,7 +543,7 @@ Nothing open.
 
 ## 8. Future directions
 
-The beta delivers the full scan → lifecycle → triage → export loop with the security
+Goodnight Check delivers the full scan → lifecycle → triage → export loop with the security
 guardrails above, plus CI and container-image releases (see
 [Development](DEVELOPMENT.md#continuous-integration-and-releases)). Earlier we tracked larger
 follow-on work as GitHub issues — cloud IaC deploy (#25), an OpenSearch derived index

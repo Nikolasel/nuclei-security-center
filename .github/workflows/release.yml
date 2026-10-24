@@ -4,7 +4,7 @@ name: Release
 #   git tag v0.4.0 && git push origin v0.4.0
 # This builds and pushes the backend and scanner container images to GHCR.
 # Images are intended to be public (anonymous docker pull of
-# ghcr.io/<owner>/nuclei-security-center-{backend,scanner}:<version-tag> works).
+# ghcr.io/<owner>/gn-check-{backend,scanner}:<version-tag> works).
 # Visibility is a one-time GHCR package setting, not something this workflow
 # controls — GHCR creates a package private on first push, so flip it again if
 # a new package name ever appears (third image, repo rename). `packages: write`
@@ -22,8 +22,8 @@ jobs:
     name: Go test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -44,17 +44,17 @@ jobs:
           - name: scanner
             dockerfile: deploy/Dockerfile.scanner
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # QEMU covers any target-arch execution during the build. The Go/SPA/nuclei
       # stages are pinned to BUILDPLATFORM (no emulation), but keep this so the
       # arm64 leg still works if a future stage adds a target-arch RUN.
-      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -64,7 +64,7 @@ jobs:
       # Every tag: {{version}} + sha. Non-prereleases also get {{major}}.{{minor}}
       # and latest (flavor.latest=auto, the action default). Prereleases get neither.
       - id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}-${{ matrix.name }}
           tags: |
@@ -73,7 +73,7 @@ jobs:
             type=sha
 
       - name: Build and push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ${{ matrix.dockerfile }}

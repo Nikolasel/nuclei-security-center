@@ -12,7 +12,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/types"
+	"github.com/goodnightsec/gn-check/internal/types"
 )
 
 const (

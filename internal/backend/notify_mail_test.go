@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 // Golden files for the rendered mail documents live under
@@ -141,7 +141,7 @@ func TestDigestMailCapsFindingsAndLinksRemainder(t *testing.T) {
 		t.Errorf("digest HTML missing remainder link: %s", tail(msg.HTML, 300))
 	}
 	// The text fallback stays capped the same way.
-	if !strings.Contains(msg.Text, "… and 2 more (open the scan in NSC)") {
+	if !strings.Contains(msg.Text, "… and 2 more (open the scan in Goodnight Check)") {
 		t.Errorf("digest text missing remainder note: %s", tail(msg.Text, 200))
 	}
 }
@@ -226,7 +226,7 @@ func TestMailCarriesInlineLogo(t *testing.T) {
 			t.Fatalf("%s mail carries %d inline images, want 1", name, len(msg.InlineImages))
 		}
 		img := msg.InlineImages[0]
-		if img.Name != "nuclei-logo.png" {
+		if img.Name != "goodnight-check-lockup-on-dark.png" {
 			t.Errorf("%s mail inline image name = %q", name, img.Name)
 		}
 		if !bytes.HasPrefix(img.Data, pngMagic) {
@@ -235,7 +235,7 @@ func TestMailCarriesInlineLogo(t *testing.T) {
 		if !strings.Contains(msg.HTML, `src="`+mailLogoCID+`"`) {
 			t.Errorf("%s mail HTML does not reference %s", name, mailLogoCID)
 		}
-		if !strings.Contains(msg.HTML, `width="36" height="36"`) {
+		if !strings.Contains(msg.HTML, `alt="Goodnight Check" width="193" height="36"`) {
 			t.Errorf("%s mail logo lacks fixed dimensions", name)
 		}
 	}

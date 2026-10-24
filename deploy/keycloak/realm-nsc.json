@@ -1,12 +1,13 @@
 {
   "realm": "nsc",
+  "displayName": "Goodnight Check",
   "enabled": true,
   "sslRequired": "none",
   "loginTheme": "keycloak",
   "clients": [
     {
-      "clientId": "nuclei-backend",
-      "name": "Nuclei Security Center backend (BFF)",
+      "clientId": "gn-check-backend",
+      "name": "Goodnight Check backend (BFF)",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,

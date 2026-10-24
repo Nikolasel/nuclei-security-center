@@ -19,11 +19,11 @@ func TestFormatDisplayString(t *testing.T) {
 	}{
 		{
 			name:    "tagged release",
-			tag:     "v0.5.0-beta",
+			tag:     "v0.5.0",
 			commit:  fullSHA,
-			wantTag: "v0.5.0-beta",
+			wantTag: "v0.5.0",
 			wantSHA: fullSHA,
-			want:    "v0.5.0-beta (3beec52)",
+			want:    "v0.5.0 (3beec52)",
 		},
 		{
 			name:    "untagged keeps the commit and invents no tag",
@@ -75,11 +75,11 @@ func TestFormatDisplayString(t *testing.T) {
 		},
 		{
 			name:    "non-hex commit is unknown",
-			tag:     "v0.5.0-beta",
+			tag:     "v0.5.0",
 			commit:  "v0.0.0-20240924120000-" + fullSHA[:12],
-			wantTag: "v0.5.0-beta",
+			wantTag: "v0.5.0",
 			wantSHA: "",
-			want:    "v0.5.0-beta (unknown)",
+			want:    "v0.5.0 (unknown)",
 		},
 		{
 			name:    "too-short commit is unknown",
@@ -132,11 +132,11 @@ func TestCurrentPrefersLinkStamp(t *testing.T) {
 	t.Cleanup(func() {
 		versionTag, gitCommit = origTag, origCommit
 	})
-	versionTag = "v0.5.0-beta"
+	versionTag = "v0.5.0"
 	gitCommit = fullSHA
 
 	got := Current()
-	if got.Tag != "v0.5.0-beta" || got.Commit != fullSHA || got.Version != "v0.5.0-beta (3beec52)" {
+	if got.Tag != "v0.5.0" || got.Commit != fullSHA || got.Version != "v0.5.0 (3beec52)" {
 		t.Fatalf("Current() = %+v", got)
 	}
 }

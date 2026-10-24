@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -103,9 +103,9 @@ var backendEnvRegistry = []envSpec{
 	{Name: "POST_LOGIN_REDIRECT", Group: envGroupAuth, Default: "APP_BASE_URL/", Kind: envKindPostLogin, Description: "Browser destination after login."},
 	{Name: "OIDC_SCOPES", Group: envGroupAuth, Default: "openid,profile,email", Kind: envKindString, Description: "Comma-separated scopes."},
 	{Name: "OIDC_ROLES_CLAIM", Group: envGroupAuth, Default: "groups", Kind: envKindString, Description: "ID-token claim containing groups or roles."},
-	{Name: "OIDC_ADMIN_GROUP", Group: envGroupAuth, Default: "admin", Kind: envKindString, Description: "Group mapped to NSC admin."},
-	{Name: "OIDC_OPERATOR_GROUP", Group: envGroupAuth, Default: "operator", Kind: envKindString, Description: "Group mapped to NSC operator."},
-	{Name: "OIDC_VIEWER_GROUP", Group: envGroupAuth, Default: "viewer", Kind: envKindString, Description: "Group mapped to NSC viewer."},
+	{Name: "OIDC_ADMIN_GROUP", Group: envGroupAuth, Default: "admin", Kind: envKindString, Description: "Group mapped to the Goodnight Check admin role."},
+	{Name: "OIDC_OPERATOR_GROUP", Group: envGroupAuth, Default: "operator", Kind: envKindString, Description: "Group mapped to the Goodnight Check operator role."},
+	{Name: "OIDC_VIEWER_GROUP", Group: envGroupAuth, Default: "viewer", Kind: envKindString, Description: "Group mapped to the Goodnight Check viewer role."},
 	{Name: "SESSION_TTL", Group: envGroupAuth, Default: "12h", Kind: envKindDuration, Description: "Server-side session lifetime, between 15m and 24h. Longer values are rejected."},
 	{Name: "SESSION_COOKIE_NAME", Group: envGroupAuth, Kind: envKindCookieName, Description: "Session cookie name. Secure deployments use the Host- prefix."},
 	{Name: "COOKIE_SECURE", Group: envGroupAuth, Default: "true", Kind: envKindBoolNotFalse, Description: "Secure-cookie flag. Set false only for local plaintext HTTP."},
@@ -116,6 +116,9 @@ var backendEnvRegistry = []envSpec{
 	{Name: "AUTH_TRUSTED_PROXY_CIDRS", Group: envGroupAuth, Kind: envKindString, Description: "Comma-separated trusted proxy CIDRs (maximum 64). Only matching direct peers may supply sanitized X-Forwarded-For client addresses."},
 
 	{Name: "S3_ENDPOINT", Group: envGroupObjectStore, Kind: envKindString, Description: "S3-compatible endpoint as host:port, without a scheme. Unset disables archiving."},
+	// The default bucket keeps the name nuclei-raw on purpose: it names the
+	// Nuclei output it holds, and a new default would point existing
+	// installations at an empty bucket.
 	{Name: "S3_BUCKET", Group: envGroupObjectStore, Default: "nuclei-raw", Kind: envKindString, Description: "Archive bucket; created at startup when absent."},
 	{Name: "S3_ACCESS_KEY_ID", Group: envGroupObjectStore, Sensitive: true, Kind: envKindSecret, Description: "Static access key. Leave empty to use the ambient AWS credential chain."},
 	{Name: "S3_SECRET_ACCESS_KEY", Group: envGroupObjectStore, Sensitive: true, Kind: envKindSecret, Description: "Static secret key."},

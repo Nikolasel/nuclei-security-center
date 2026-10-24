@@ -18,11 +18,12 @@ handlers return plain-text errors plus an appropriate status.
 
 ### Database migrations
 
-`internal/store/migrations/0001_init.sql` is the consolidated fresh-deployment baseline, frozen at
-the first beta release. It is immutable; do not edit it. Unknown applied versions mean a newer
+`internal/store/migrations/0001_init.sql` is the consolidated fresh-deployment baseline, frozen
+since `v0.4.0-beta`. It is immutable; do not edit it, not even its first-line comment, which still
+names the product by its old name. Unknown applied versions mean a newer
 release already migrated the database; run that release or newer.
 
-From beta onward, each schema change goes in a new numbered SQL file. The runner serializes startup
+Since then, each schema change goes in a new numbered SQL file. The runner serializes startup
 migration work per database/schema, validates the complete recorded history, and applies unseen files
 plus their history records in one transaction. Files run in filename order and use SHA-256 checksums
 in `schema_migrations`. Applied files are immutable: never edit one after a database may have recorded
@@ -39,8 +40,13 @@ NSC_TEST_DATABASE_URL='postgres://nuclei:***@localhost:5432/nuclei?sslmode=disab
   go test ./internal/store -count=1 -v
 ```
 
-Install `pg_dump`, put it on `PATH`, or set `NSC_TEST_PG_DUMP=/path/to/pg_dump` when writing
-schema-upgrade tests that dump isolated schemas.
+The schema-upgrade tests need the PostgreSQL client. Install `pg_dump` and `psql`, put them on
+`PATH`, or set `NSC_TEST_PG_DUMP=/path/to/pg_dump` and `NSC_TEST_PSQL=/path/to/psql` (a `psql`
+next to `pg_dump` is found on its own). `TestUpgradeFromV047BetaPostgres` builds a v0.4.7-beta
+database from migrations 0001 to 0005 (release commit `2252888`), fills it with synthetic rows,
+dumps and restores it, runs `Migrate`, and checks the schema against a fresh install and every row
+against the seed. A migration that adds a column to a seeded table lists the value upgraded rows
+hold in `columnsAddedSinceV047Beta`.
 
 ## Full local stack
 

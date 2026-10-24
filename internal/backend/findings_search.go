@@ -3,7 +3,7 @@ package backend
 import (
 	"context"
 
-	"github.com/Nikolasel/nuclei-security-center/internal/store"
+	"github.com/goodnightsec/gn-check/internal/store"
 )
 
 // FindingsSearcher is the read/search seam for the deduplicated lifecycle

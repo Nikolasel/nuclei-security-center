@@ -1,6 +1,6 @@
 # Authentication
 
-NSC is a confidential OIDC client. Tokens stay in the backend; browser JavaScript receives only an
+Goodnight Check is a confidential OIDC client. Tokens stay in the backend; browser JavaScript receives only an
 httpOnly, SameSite session cookie. Map the configured claim to `admin`, `operator`, and `viewer`.
 Reads require viewer, scan/config mutations generally require operator, and destructive/fleet
 administration requires admin.
@@ -51,7 +51,7 @@ status codes.
 
 ## Headless automation
 
-Admins can create role-scoped, revocable NSC service-account tokens. Automation sends:
+Admins can create role-scoped, revocable Check service-account tokens. Automation sends:
 
 ```http
 Authorization: Bearer <token>
@@ -75,10 +75,10 @@ rotation remain deployment concerns; a service mesh may terminate mTLS instead.
 
 ## Session revocation and privilege-revocation latency
 
-NSC is a BFF: role membership is snapshotted from the IdP's groups claim at login and stored in
+Check is a BFF: role membership is snapshotted from the IdP's groups claim at login and stored in
 the `sessions` row for the life of that session. The backend discards the OAuth tokens after the
 callback, so there is no background IdP re-check. The worst-case window in which a demoted or
-offboarded user retains their previous NSC role is therefore bounded by `SESSION_TTL` — at most
+offboarded user retains their previous Check role is therefore bounded by `SESSION_TTL` — at most
 `24h` by configuration, `12h` by default.
 
 An administrator can cut that window short at any time (copy the `subject` value
